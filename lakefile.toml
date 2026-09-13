@@ -1,0 +1,18 @@
+name = "koit"
+version = "0.1.0"
+defaultTargets = ["koitc", "Tests"]
+
+[[require]]
+name = "batteries"
+git = "https://github.com/leanprover-community/batteries"
+rev = "v4.33.0"
+
+[[lean_lib]]
+name = "Koit"
+
+[[lean_lib]]
+name = "Tests"
+
+[[lean_exe]]
+name = "koitc"
+root = "Main"
