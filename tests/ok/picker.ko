@@ -1,0 +1,45 @@
+// From spec/language.md 23.2: the configuration-driven backend picker.
+
+const M = 16
+const ETH_P_VLAN = hton(0x8100)
+const ETH_P_IP   = hton(0x0800)
+
+type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
+type VlanHdr = { tci: be16, proto: be16 }
+type Backend = { ip: be32, ifindex: u32 }
+
+map policy   : array[1] of { cur: u32 where cur < M }
+map backends : array[1] of Backend[M]
+
+program pick : xdp
+  verdict in { PASS, DROP, ABORTED, REDIRECT }
+  preserve pkt
+  fail abort
+  on short_packet { drop }
+{
+  var off = 0
+  // short_packet: drop
+  let eth = pkt.view<EthHdr>(off)?
+  off += EthHdr.size
+  var proto = eth.proto
+  repeat 2 {
+    if proto != ETH_P_VLAN { break }
+    let tag = pkt.view<VlanHdr>(off)?
+    proto = tag.proto
+    off += VlanHdr.size
+  }
+  // an ordinary case, not a failure
+  if proto != ETH_P_IP { pass }
+  // invariant: abort; afterwards cur : {v | v < M}
+  let cur = policy[0].cur?
+  // demand cur < M: entailed
+  let be  = backends[0][cur]
+  // helper: abort; the result is REDIRECT, which the verdict set admits
+  let v   = redirect(be.ifindex)?
+  return v
+}
+
+program rotate : syscall {
+  // demand (x + 1) % M < M: entailed
+  policy[0].cur = (policy[0].cur + 1) % M
+}

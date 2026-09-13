@@ -1,0 +1,18 @@
+// expect: `sk` moved on one branch and held on the other
+// From spec/language.md 11.5, the second example. The socket tuple
+// and the lookup's signature are unsettled (ISSUES.md 4); `tuple` is
+// a placeholder place.
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+map tuples : array[1] of Tuple
+
+program lookup : xdp fail pass {
+  let tuple = tuples[0]
+  let keep = ctx.ingress_ifindex == 2
+  var count = 0
+  hold sk = sk_lookup_tcp(tuple)? {
+    if keep { sk_release(move sk) }
+    // error: sk moved on one branch and held on the other at this join
+    count = count + 1
+  }
+  pass
+}

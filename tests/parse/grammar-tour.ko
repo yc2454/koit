@@ -1,0 +1,133 @@
+// Parse-only coverage of the grammar of spec/language.md sections 5 to
+// 9, 14, and 15, in one unit. It is not meant to type-check: it mixes
+// program kinds, calls prelude names, and ignores effects.
+
+license "GPL"
+
+/* A block comment,
+   over two lines. */
+
+const A  = 0x1F_FF
+const B  = 0b1010_0101
+const C  = 1_000_000
+const NL = '\n'
+const SP = '\x20'
+const Q  = '\''
+const MAXLEN : u32 = 64
+config ENABLE_IPV6 : bool = false
+config SLOTS : u32 = 65536
+config DEBUG : bool
+
+type Hdr   = { a: u8, b: be16, c: u8[4], }
+type Flags = { v: u32 where v & 0x3 == 0 }
+type Event = { kind: u32, len: u32 where len <= MAXLEN }
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+type Small = { x: u8 | x < 10 }
+type Pair  = { lo: Small, hi: Small }
+
+map arr  : array[SLOTS] of Hdr
+map pc   : percpu_array[1] of { n: u64 }
+map tab  : hash[65536] of Tuple -> Flags
+map tup  : array[1] of Tuple
+map fl   : array[1] of Flags
+map ring : ringbuf[4096]
+
+fn pure(x: u32 where x < 10, y: u32) -> r: u32 where r <= x {
+  return x
+}
+
+fn opt(t: ref Tuple) -> u32? {
+  if let f = tab[t] { return f.v } else { return }
+}
+
+fn clamp(x: u32) -> u32 fails {
+  check x < 10 else { fail 7 }
+  let y = x as { v: u32 | v < 10 }?
+  return y
+}
+
+fn tail(h: view Hdr) -> u32 { ntoh(h.b) as u32 }
+
+contract Quiet : tc {
+  verdict in { OK, SHOT }
+  preserve pkt[0 .. 14), maps except pc, tab
+  preserve ctx.priority
+}
+
+program tour_tc : tc implements Quiet
+  verdict in { OK, SHOT }
+  preserve pkt
+  fail drop
+  on short_packet, missing { pc[0].n += 1; pass }
+  on _ { drop }
+{
+  let h = pkt.view<Hdr>(0)?
+  let n = ntoh(h.b) as u64 + pkt.len
+  var acc: u64 = 0
+  acc += n * 2 - 1 / 3 % 4 << 1 >> 2 & 0xff | 1 ^ 2
+  acc = -acc
+  let ok = !(acc == 0) && acc != 1 || acc < 2 && acc <= 3 || acc > 4
+  if ok { acc -= 1 } else if DEBUG { acc *= 2 } else { acc &= 3 }
+  acc |= 1; acc ^= 2; acc <<= 1; acc >>= 1
+  let long = acc +
+    1 +
+    2
+  ctx.mark = long as u32
+  if ENABLE_IPV6 { drop }
+  for i in 0..4 {
+    if i == 1 { continue }
+    let c = pkt[i]?
+    h.c[i] = c
+  }
+  repeat 2 { break }
+  let s = hton(0x0800)
+  let sz = Hdr.size
+  let d = pkt.view<u8>(3)?
+  *d = 1
+  let z = *d + 1
+  hold rcu { acc += 1 }
+  hold ev = ring.reserve<Event>() else drop {
+    ev.kind = 1
+    ev.len = 0
+  }
+  hold sk = sk_lookup_tcp(tup[0])? { sk_release(move sk) }
+  let t = arr[0]
+  copy(t, h)
+  fill(t, 0)
+  printk("acc = {}", acc, z)
+  let old = atomic_add(pc[0].n, 1)
+  let prev = atomic_cmpxchg(pc[0].n, old, 0)
+  tab.insert(tup[0], fl[0])?
+  tab.delete(tup[0])?
+  let g = tab[tup[0]] else return SHOT
+  let f2 = tab[tup[0]] else fail 3
+  if let f = tab[tup[0]] { acc += f.v as u64 } else { acc += 1 }
+  for (k, v) in tab bounded 16 { acc += v.v as u64 }
+  for x in items bounded 8? { acc += x }
+  let lit = { lo: 1, hi: 2 }
+  pkt.adjust_tail(-4)?
+  let vv = clamp(3)
+  let o = opt(tup[0])?
+  let p = pure(vv, 1)
+  let w = tail(h)
+  if w == 0 { fail }
+  return SHOT
+}
+
+program tour_xdp : xdp
+  fail abort
+  on bound, helper, program { abort }
+  on invariant { tx }
+{
+  let h = pkt.view<Hdr>(0)?
+  if h.a == 0 { tx }
+  if h.a == 1 { abort }
+  let v = redirect(ctx.ingress_ifindex)?
+  return v
+}
+
+program tour_sys : syscall {
+  let q = arr[0]
+  q.a = 1
+  return 0
+}

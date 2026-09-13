@@ -1,0 +1,50 @@
+// From spec/language.md 23.4: the proposal's monitor and packet filter
+// as contracts, with the `observe` program of 14.2. Declarations marked
+// "not in 23.4" are what the section relies on; see spec/ISSUES.md,
+// entries 3 and 5.
+
+// not in 23.4: from 23.2 and 23.3
+const ETH_P_IP = hton(0x0800)
+type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
+type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
+                 ttl: u8, proto: u8, csum: be16,
+                 saddr: be32, daddr: be32 }
+// not in 23.4: the flow key, named there but never declared
+type Flow = { saddr: be32, daddr: be32 }
+// not in 23.4: for observe's body, elided in 14.2
+map stats : percpu_array[1] of { seen: u64 }
+
+contract Monitor : xdp {
+  verdict in { PASS }
+  preserve pkt
+  preserve maps except stats
+}
+
+// from 14.2, where the body is elided
+program observe : xdp implements Monitor fail pass {
+  stats[0].seen += 1
+  pass
+}
+
+map verdicts : hash[65536] of Flow -> { v: u32 where 1 <= v && v <= 2 }
+
+program filter : xdp
+  verdict in { PASS, DROP }
+  preserve pkt[0 .. 14)
+  fail drop
+{
+  let eth = pkt.view<EthHdr>(0)?
+  let ip  = pkt.view<Ipv4Hdr>(EthHdr.size)?
+  // ... parse, build the flow key ...
+  // not in 23.4: the two lines below; the local struct literal is
+  // what Q2 leaves out of stage 1 (ISSUES.md 3)
+  if eth.proto != ETH_P_IP { pass }
+  let key = { saddr: ip.saddr, daddr: ip.daddr }
+  // write(pkt[22..23)): disjoint from [0, 14)
+  ip.ttl = ip.ttl - 1
+  let f = verdicts[key] else { pass }
+  // v : {v | 1 <= v && v <= 2}
+  let v = f.v?
+  // demand v in {PASS, DROP}: entailed, DROP = 1, PASS = 2
+  return v
+}

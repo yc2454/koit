@@ -1,0 +1,12 @@
+// expect: not marked `fails`
+// From spec/language.md 10.8: a function not marked `fails` may not
+// contain a marker, `check`, or `fail`.
+fn clamp(x: u32) -> u32 {
+  check x < 10
+  return x
+}
+
+program p : syscall {
+  let y = clamp(3)
+  return y as i32
+}

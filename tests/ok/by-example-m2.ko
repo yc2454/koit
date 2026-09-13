@@ -1,0 +1,25 @@
+// From spec/mechanisms-by-example.md, M2: parsing headers.
+// Declarations marked "not in M2" come from 23.2 and the prelude.
+
+// not in M2
+const ETH_P_IP = hton(0x0800)
+const IPPROTO_UDP = 17
+
+type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
+type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
+                 ttl: u8, protocol: u8, csum: be16,
+                 saddr: be32, daddr: be32 }
+
+// A view is a typed window into the packet, tested once when carved.
+// A field of a view is a place inside the window: no further test.
+fn is_udp(eth: view EthHdr, ip: view Ipv4Hdr) -> bool {
+  eth.proto == ETH_P_IP && ip.protocol == IPPROTO_UDP
+}
+
+program prog : xdp fail pass {
+  let eth = pkt.view<EthHdr>(0)?
+  let ip  = pkt.view<Ipv4Hdr>(EthHdr.size)?
+  if !is_udp(eth, ip) { pass }
+  // ... (the rest is elided in M2; the exit is not in M2)
+  pass
+}

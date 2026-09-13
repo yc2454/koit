@@ -1,0 +1,33 @@
+// From spec/mechanisms-by-example.md, M4: a delimited token. The
+// example is a fragment; the record `r`, the offset `off`, the bound
+// MAXLEN, and the program around it are marked "not in M4".
+
+// not in M4
+const MAXLEN = 32
+
+type Rec = { len: u32 where len <= MAXLEN, buf: u8[MAXLEN] }
+
+// not in M4
+map recs : array[1] of Rec
+
+program token : xdp fail pass {
+  // not in M4
+  let r = recs[0]
+  let off = 0
+
+  // The bound is the loop's declaration and the type of i.
+  var n: u64 where n <= MAXLEN = 0
+  for i in 0..MAXLEN {
+    // A byte read is a one-byte view; the packet test is its own
+    // failure, separate from the loop's bound.
+    let c = pkt[off + i]?
+    if c == ' ' { break }
+    // The store demands i < MAXLEN. It is entailed by i's type.
+    r.buf[i] = c
+    // The store demands i + 1 <= MAXLEN. Entailed as well.
+    n = i + 1
+  }
+  r.len = n as u32
+  // not in M4
+  pass
+}

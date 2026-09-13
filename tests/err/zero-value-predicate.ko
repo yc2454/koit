@@ -1,0 +1,9 @@
+// expect: must hold of the all-zero value
+// From spec/language.md 17: array maps are zero-filled at creation, so
+// a predicate on an array map's value must hold of the all-zero value.
+map m : array[1] of { v: u32 where v > 0 }
+
+program p : syscall {
+  m[0].v = 1
+  return 0
+}

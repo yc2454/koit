@@ -1,0 +1,102 @@
+// From spec/examples/bmc-request-path.md: BMC's request path as one
+// program. Declarations marked "not in the example" are what it relies
+// on from the prelude or from language.md 23; see spec/ISSUES.md,
+// entries 4 and 5. Field names follow the example (`protocol`, `dest`).
+
+// not in the example
+const IPPROTO_UDP = 17
+type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
+type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
+                 ttl: u8, protocol: u8, csum: be16,
+                 saddr: be32, daddr: be32 }
+type UdpHdr  = { source: be16, dest: be16, len: be16, csum: be16 }
+
+const MAX_KEY   = 250
+const MAX_KEYS  = 30
+const MAX_PKT   = 1500
+const SLOTS     = 3250000
+const DATA_SIZE = MAX_KEY + 1000 + 53
+const MC_PORT   = hton(11211)
+const HDRS      = EthHdr.size + Ipv4Hdr.size + UdpHdr.size + McUdpHdr.size
+
+type McUdpHdr = { request_id: be16, seq_num: be16,
+                  num_dgram: be16, unused: be16 }
+type Entry    = { lk: spinlock, valid: u8, hash: u32,
+                  len: u32 where len <= DATA_SIZE,
+                  data: u8[DATA_SIZE] }
+type Key      = { hash: u32, len: u32 where len <= MAX_KEY,
+                  data: u8[MAX_KEY] }
+type Stats    = { get_recv: u64, hits: u64, misses: u64, short: u64 }
+
+map cache : array[SLOTS] of Entry
+map keys  : percpu_array[MAX_KEYS] of Key
+map stats : percpu_array[1] of Stats
+
+fn fnv(h: u32, c: u8) -> u32 { (h ^ (c as u32)) * 16777619 }
+
+// not served here: hand it to the stack
+program bmc_rx : xdp fail pass
+  on short_packet { stats[0].short += 1; pass }
+{
+  let ip = pkt.view<Ipv4Hdr>(EthHdr.size)?
+  // SETs arrive over TCP: the invalidation program
+  if ip.protocol != IPPROTO_UDP { pass }
+  let udp = pkt.view<UdpHdr>(EthHdr.size + Ipv4Hdr.size)?
+  if udp.dest != MC_PORT { pass }
+  let cmd = pkt.view<u8[4]>(HDRS)?
+  if cmd[0] != 'g' || cmd[1] != 'e' || cmd[2] != 't' || cmd[3] != ' ' { pass }
+  stats[0].get_recv += 1
+
+  var off = HDRS + 4
+  // skip the spaces before the first key
+  repeat MAX_PKT {
+    let c = pkt[off]?
+    if c != ' ' { break }
+    off += 1
+  }
+
+  var nkeys = 0
+  var done = false
+  // C: one tail call into bmc_hash_keys per key
+  for k in 0..MAX_KEYS {
+    var h: u32 = 2166136261
+    var n: u64 where n <= MAX_KEY + 1 = 0
+    for i in 0..MAX_KEY + 1 {
+      let c = pkt[off + i]?
+      if c == '\r' { done = true; break }
+      if c == ' ' { break }
+      h = fnv(h, c)
+      n = i + 1
+    }
+    // unexpected key: let the stack handle it
+    if n == 0 || n > MAX_KEY { pass }
+
+    // index demand entailed: h % SLOTS < SLOTS
+    let e = cache[h % SLOTS]
+    var hit = false
+    hold lock(e.lk) { if e.valid == 1 && e.hash == h { hit = true } }
+    if hit {
+      // C: if (!key) return XDP_PASS
+      check nkeys < MAX_KEYS
+      let key = keys[nkeys]
+      key.hash = h
+      // demand n <= MAX_KEY: from the branch above
+      key.len  = n as u32
+      // bound from n's refinement
+      for i in 0..n {
+        let c = pkt[off + i]?
+        // demand i < MAX_KEY: i < n <= MAX_KEY
+        key.data[i] = c
+      }
+      nkeys += 1
+    } else {
+      stats[0].misses += 1
+    }
+    if done { break }
+    // past the key and its separator
+    off += n + 1
+  }
+  if nkeys == 0 { pass }
+  // ... build the reply: BMC's bmc_prepare_packet and bmc_write_reply ...
+  tx
+}

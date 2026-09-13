@@ -1,0 +1,11 @@
+// expect: view `eth` was invalidated by `adjust_head` at line 8
+// From spec/language.md 23.5, the rejected program; also the second
+// M3 example of mechanisms-by-example.md.
+type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
+
+program bad : xdp {
+  let eth = pkt.view<EthHdr>(0)?
+  pkt.adjust_head(-8)?
+  // error: view `eth` was invalidated by `adjust_head` at line 8
+  let p = eth.proto
+}

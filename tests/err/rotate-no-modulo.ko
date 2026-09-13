@@ -1,0 +1,10 @@
+// expect: demand `cur + 1 < M`
+// From spec/mechanisms-by-example.md, M1, "What to notice": a writer
+// that stores cur + 1 without the modulo is rejected with the demand
+// named.
+const M = 16
+map policy : array[1] of { cur: u32 where cur < M }
+
+program rotate : syscall {
+  policy[0].cur = policy[0].cur + 1
+}

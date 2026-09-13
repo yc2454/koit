@@ -1,0 +1,16 @@
+// expect: call effect is forbidden while a spin lock is held
+// From spec/mechanisms-by-example.md, M3: the call the comment in the
+// lock block says is an error.
+const LIMIT = 1000
+map counters : array[1] of { lk: spinlock, n: u64 }
+
+program count : xdp fail drop {
+  let c = counters[0]
+  hold lock(c.lk) {
+    if c.n >= LIMIT { drop }
+    c.n += 1
+    // error: the call effect is forbidden while a spin lock is held
+    printk("n = {}", c.n)
+  }
+  pass
+}

@@ -1,0 +1,10 @@
+// expect: REDIRECT is not in the verdict set
+// From spec/language.md 14.1: a redirect call yields {v | v == REDIRECT},
+// so a contract without REDIRECT rejects the call.
+program filter : xdp
+  verdict in { PASS, DROP }
+  fail drop
+{
+  let v = redirect(ctx.ingress_ifindex)?
+  return v
+}

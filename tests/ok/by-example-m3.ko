@@ -1,0 +1,19 @@
+// From spec/mechanisms-by-example.md, M3: a lock. The second M3
+// example, the stale view, is tests/err/view-invalidated.ko.
+
+// not in M3
+const LIMIT = 1000
+
+map counters : array[1] of { lk: spinlock, n: u64 }
+
+program count : xdp fail drop {
+  let c = counters[0]
+  // The lock is released on every exit of the block, including drop.
+  hold lock(c.lk) {
+    if c.n >= LIMIT { drop }
+    c.n += 1
+    // printk("n = {}", c.n) here is a compile-time error: the call
+    // effect is forbidden while a spin lock is held.
+  }
+  pass
+}

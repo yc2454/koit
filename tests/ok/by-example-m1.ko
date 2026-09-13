@@ -1,0 +1,27 @@
+// From spec/mechanisms-by-example.md, M1: an index stored in a map.
+// Declarations marked "not in M1" come from language.md 23.2.
+
+// not in M1
+const M = 16
+type Backend = { ip: be32, ifindex: u32 }
+
+// The invariant is written once, on the map's value type.
+map policy   : array[1] of { cur: u32 where cur < M }
+map backends : array[1] of Backend[M]
+
+program pick : xdp fail drop {
+  // A marked load re-tests the invariant and gives cur the type
+  // {v: u32 | v < M}. It is marked because userspace may have
+  // written the map.
+  let cur = policy[0].cur?
+
+  // The index demands cur < M. It is entailed by cur's type.
+  let be = backends[0][cur]
+  let v = redirect(be.ifindex)?
+  return v
+}
+
+program rotate : syscall {
+  // The store demands (cur + 1) % M < M. The checker entails it.
+  policy[0].cur = (policy[0].cur + 1) % M
+}
