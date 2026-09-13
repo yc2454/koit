@@ -1,6 +1,6 @@
 name = "koit"
 version = "0.1.0"
-defaultTargets = ["koitc", "Tests"]
+defaultTargets = ["koitc", "KoitTests"]
 
 [[require]]
 name = "batteries"
@@ -11,7 +11,7 @@ rev = "v4.33.0"
 name = "Koit"
 
 [[lean_lib]]
-name = "Tests"
+name = "KoitTests"
 
 [[lean_exe]]
 name = "koitc"
