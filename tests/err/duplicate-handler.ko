@@ -1,0 +1,8 @@
+// expect: has two handlers
+// From spec/language.md 10.6: at most one handler per kind.
+program p : xdp
+  on short_packet { pass }
+  on short_packet { drop }
+{
+  drop
+}

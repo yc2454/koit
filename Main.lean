@@ -1,9 +1,10 @@
 import Koit
 
 /-!
-`koitc`, the koit command line: `lex`, `parse`, `print`, `check`,
-`run`. Session 1 delivers the first three; the others report that
-they are not implemented yet.
+`koitc`, the koit command line: `lex`, `parse`, `print`, `desugar`,
+`check`, `run`. Session 1 delivered the first three, session 2
+`desugar` and the base `check`; `run` reports that it is not
+implemented yet.
 -/
 
 open Koit Koit.Syntax
@@ -13,7 +14,8 @@ def usage : String := String.intercalate "\n"
    "  lex     print the tokens of FILE, one per line",
    "  parse   parse FILE and list its declarations",
    "  print   parse FILE and print it back as source",
-   "  check   type-check FILE (from session 2)",
+   "  desugar parse FILE and print its Core (spec section 18.1)",
+   "  check   type-check FILE against the stage-1 prelude",
    "  run     interpret FILE (from session 3)"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
@@ -73,9 +75,23 @@ def run (args : List String) : IO UInt32 := do
       IO.print u.print
       return 0
     | none => return 1
+  | ["desugar", file] => do
+    match ← parseFile file with
+    | some u =>
+      IO.print (Core.desugar Check.prelude u).print
+      return 0
+    | none => return 1
   | ["check", file] => do
-    let _ ← readSource file
-    notYet "check" "session 2"
+    match ← parseFile file with
+    | some u =>
+      match Check.checkUnit Check.prelude (Core.desugar Check.prelude u) with
+      | .ok () =>
+        IO.println s!"{file}: ok"
+        return 0
+      | .error d =>
+        IO.eprintln s!"{file}:{d}"
+        return 1
+    | none => return 1
   | ["run", file] => do
     let _ ← readSource file
     notYet "run" "session 3"

@@ -1,0 +1,7 @@
+// expect: field `h` may not have type
+// From spec/language.md 7: a struct holds data; a view is the name of
+// a place, and places are never stored.
+type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
+type Slot = { h: view EthHdr }
+
+program p : syscall { return 0 }

@@ -1,0 +1,9 @@
+// expect: no declared struct type has the fields
+// From spec/language.md 8.2 and spec/ISSUES.md 11 (k): a struct
+// literal has the declared struct type whose fields it lists.
+type Flow = { saddr: be32, daddr: be32 }
+
+program p : syscall {
+  let k = { a: 1, b: 2 }
+  return 0
+}

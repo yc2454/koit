@@ -1,0 +1,6 @@
+// expect: ISSUES.md, entry 9
+// From spec/ISSUES.md 9: returning absence from a `T?` function is
+// not decided; bare `return` is the proposal.
+fn none() -> u32? { return }
+
+program p : syscall { return 0 }

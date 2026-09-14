@@ -1,0 +1,8 @@
+// expect: must end in `return` or an expression
+// From spec/language.md 16 and spec/ISSUES.md 11 (j): a function with
+// a result type ends in `return` or an expression.
+fn f() -> u32 {
+  let x = 1
+}
+
+program p : syscall { return 0 }

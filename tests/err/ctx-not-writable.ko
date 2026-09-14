@@ -1,0 +1,7 @@
+// expect: is not writable
+// From spec/language.md 13: the context table says which fields are
+// writable; for `xdp`, none.
+program p : xdp fail drop {
+  ctx.ingress_ifindex = 1
+  drop
+}

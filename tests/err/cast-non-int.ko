@@ -1,0 +1,7 @@
+// expect: converts between integer types
+// From spec/language.md 8.1: `e as T` converts between integer types;
+// only `bool as uN` goes the other way.
+program p : syscall {
+  let b = 1 as bool
+  return 0
+}

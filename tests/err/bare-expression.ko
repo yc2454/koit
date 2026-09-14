@@ -1,0 +1,7 @@
+// expect: must be a call
+// From spec/language.md 9: a bare expression statement must be a call.
+program p : syscall {
+  var x = 1
+  x + 1
+  return 0
+}

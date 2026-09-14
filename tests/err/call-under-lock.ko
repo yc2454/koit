@@ -1,6 +1,9 @@
 // expect: call effect is forbidden while a spin lock is held
 // From spec/mechanisms-by-example.md, M3: the call the comment in the
-// lock block says is an error.
+// lock block says is an error. `printk` is GPL-only (section 6), so
+// the unit declares its license; the error is the lock, not the license.
+license "GPL"
+
 const LIMIT = 1000
 map counters : array[1] of { lk: spinlock, n: u64 }
 

@@ -1,0 +1,5 @@
+// expect: at most one field of type `spinlock`
+// From spec/language.md 7: at most one field has type `spinlock`.
+map m : array[1] of { a: spinlock, b: spinlock, n: u64 }
+
+program p : syscall { return 0 }

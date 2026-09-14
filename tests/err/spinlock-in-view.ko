@@ -1,0 +1,9 @@
+// expect: not packet-representable
+// From spec/language.md 7: the type of a view is packet-representable,
+// without `spinlock`.
+type Entry = { lk: spinlock, n: u64 }
+
+program p : xdp fail drop {
+  let e = pkt.view<Entry>(0)?
+  drop
+}

@@ -1,0 +1,14 @@
+// expect: only in a failing context
+// From spec/language.md 10.8 and 16: a call to a function marked
+// `fails` is allowed only in a failing context.
+fn clamp(x: u32) -> u32 fails {
+  check x < 10
+  return x
+}
+
+fn twice(x: u32) -> u32 {
+  let y = clamp(x)
+  return y * 2
+}
+
+program p : syscall { return 0 }

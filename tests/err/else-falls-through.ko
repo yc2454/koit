@@ -1,0 +1,13 @@
+// expect: must end in an exit
+// From spec/language.md 10.3: the block after `else` must end in an
+// exit; a block that can fall through is a type error.
+type Flow = { saddr: be32, daddr: be32 }
+map verdicts : hash[64] of Flow -> { v: u32 }
+map keys : array[1] of Flow
+map stats : array[1] of { n: u64 }
+
+program p : xdp fail drop {
+  let key = keys[0]
+  let f = verdicts[key] else { stats[0].n += 1 }
+  drop
+}

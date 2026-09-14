@@ -1,0 +1,7 @@
+// expect: the byte read `pkt[off]` can fail
+// From spec/language.md 10.2: one fallible operation per statement; a
+// nested one is written as two bindings.
+program p : xdp fail drop {
+  let c = pkt[pkt[0]]?
+  drop
+}

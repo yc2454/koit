@@ -1,0 +1,5 @@
+// expect: not a verdict of an `xdp` program
+// From spec/language.md 13: the verdict names are the kind's own.
+program p : xdp fail drop {
+  return SHOT
+}

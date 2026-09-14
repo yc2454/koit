@@ -1,0 +1,8 @@
+// expect: body of an `xdp` program must end in an exit
+// From spec/language.md 13: the body of a packet kind must end in an
+// exit; only a `syscall` body may fall off its end.
+map stats : array[1] of { n: u64 }
+
+program p : xdp fail drop {
+  stats[0].n += 1
+}

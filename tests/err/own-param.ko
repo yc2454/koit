@@ -1,0 +1,6 @@
+// expect: never `own`
+// From spec/language.md 16: user functions take `ref` and `view`
+// parameters and never `own`.
+fn release(s: own Sock) { sk_release(move s) }
+
+program p : syscall { return 0 }

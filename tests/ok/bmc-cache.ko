@@ -123,16 +123,60 @@ program bmc_rx : xdp fail pass
   tx
 }
 
+// The server's reply on the egress path: `VALUE <key> <flags>
+// <bytes>\r\n<data>\r\nEND\r\n`. As BMC does, the cache stores the reply
+// text from `VALUE` to the end of the datagram, so that a hit can be
+// answered by copying it back. The spec's 23.3 leaves this program as
+// a sketch; the parsing below completes it (spec/ISSUES.md, entry 2):
+// the same header views as `bmc_rx`, the key hashed the same way, and
+// the value length taken through the one runtime coercion, since the
+// length of the rest of the datagram is the difference of two
+// positions, which the entailment fragment does not track (10.4).
 program bmc_tx : tc fail pass
   on short_packet { pass }
 {
-  // parse the server's reply, hash its key as above, then:
-  // (h, n, and voff are unbound in the spec's sketch; ISSUES.md 2)
+  var off = 0
+  let eth = pkt.view<EthHdr>(off)?
+  if eth.proto != ETH_P_IP { pass }
+  off += EthHdr.size
+  let ip = pkt.view<Ipv4Hdr>(off)?
+  if ip.proto != IPPROTO_UDP { pass }
+  off += ((ip.vihl & 0xf) as u64) * 4
+  let udp = pkt.view<UdpHdr>(off)?
+  // a reply comes from the server's port
+  if udp.sport != MC_PORT { pass }
+  off += UdpHdr.size + McHdr.size
+  // the reply text starts here
+  let voff = off
+  let cmd = pkt.view<u8[6]>(off)?
+  let is_value = cmd[0] == 'V' && cmd[1] == 'A' && cmd[2] == 'L' &&
+    cmd[3] == 'U' && cmd[4] == 'E' && cmd[5] == ' '
+  if !is_value { pass }
+  off += 6
+  let koff = off
+
+  // hash the key as bmc_rx does; a key too long to cache is skipped
+  var h: u32 = 2166136261
+  var klen: u64 where klen <= MAX_KEY = 0
+  for i in 0..MAX_KEY {
+    let c = pkt[koff + i]?
+    if c == ' ' { break }
+    h = fnv_step(h, c)
+    klen = i + 1
+  }
+  if klen == 0 || klen == MAX_KEY { pass }
+
+  // bound: pass. A reply longer than an entry is not cached.
+  let n = (pkt.len - voff) as {v: u64 | v <= DATA_SIZE}?
+
+  // demand h % SLOTS < SLOTS: entailed
   let e = cache[h % SLOTS]
+  // no calls inside; released on every exit below
   hold lock(e.lk) {
     e.hash = h
     // demand n <= DATA_SIZE: entailed from n's refinement
     e.len  = n as u32
+    // demand i < DATA_SIZE: i < n <= DATA_SIZE
     for i in 0..n { let c = pkt[voff + i]?; e.data[i] = c }
     e.valid = 1
   }

@@ -1,0 +1,4 @@
+// expect: unknown program kind
+// From spec/language.md 13: the kinds of this draft are `xdp`, `tc`,
+// and `syscall`.
+program p : lsm { return 0 }

@@ -1,8 +1,11 @@
 # koit
 
 An eBPF source language whose types are the conditions the kernel
-verifier checks. Status, 2026-09-12: the language is defined (draft 3);
-implementation begins with the checker.
+verifier checks. Status, 2026-09-14: the language is defined (draft 3
+plus the folded revisions of 2026-09-13); the front end, the
+desugaring to Core, and the base half of the checker are implemented
+(`koitc parse | print | desugar | check`); facts and entailment are
+next.
 
 ## Thesis
 
@@ -40,9 +43,15 @@ The plan is `PLAN.md`: near sessions planned to the task, later ones to
 the phase. The language itself is written in Lean 4, one Lake project,
 because everything from the AST to the lowered IR carries a theorem;
 kernel-facing tooling is Rust or Python. Source files end in `.ko`.
-Stage 1 is the front end and the checker, `koitc parse` and `koitc
-check`; the Core interpreter follows; the C backend and the kernel
-table generator are the phase after.
+Stage 1 is the front end and the checker: `koitc parse`, `koitc
+desugar` (the Core of `spec/language.md` 18.1), and `koitc check`,
+whose base half (declarations, names, base types, places against
+values, the positions of fallible operations, exits) is done and whose
+facts, entailment, effects, and resources are sessions 3 and 4; the
+Core interpreter follows; the C backend and the kernel table generator
+are the phase after. `tests/run.sh` runs the corpus; `KOIT_STAGE=check`
+runs the checker over it. The stage-1 prelude, the tables of section
+13 for `xdp`, `tc`, and `syscall`, is `Koit/Check/Prelude.lean`.
 
 Rule while implementing: gaps or contradictions found in the spec are
 logged in `spec/ISSUES.md` with a proposed resolution, not silently

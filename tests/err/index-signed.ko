@@ -1,0 +1,12 @@
+// expect: an index must be unsigned
+// From spec/language.md 7 and 18.3 (PIndex): indexing demands `i < n`
+// of an unsigned index.
+const M = 16
+type Backend = { ip: be32, ifindex: u32 }
+map backends : array[1] of Backend[M]
+
+program p : syscall {
+  let i: i32 = 0
+  let be = backends[0][i]
+  return 0
+}

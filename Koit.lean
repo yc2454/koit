@@ -4,3 +4,12 @@ import Koit.Syntax.Lexer
 import Koit.Syntax.AST
 import Koit.Syntax.Parser
 import Koit.Syntax.Print
+import Koit.Core.Syntax
+import Koit.Core.Print
+import Koit.Core.Desugar
+import Koit.Check.Prelude
+import Koit.Check.Diag
+import Koit.Check.Env
+import Koit.Check.Typing
+import Koit.Check.Checker
+import Koit.Check.Rules

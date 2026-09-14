@@ -1,0 +1,7 @@
+// expect: must be a constant expression
+// From spec/language.md 8.4 and 9: `repeat n` takes a constant `n`.
+program p : xdp fail drop {
+  let n = ctx.rx_queue_index
+  repeat n { }
+  drop
+}

@@ -1,0 +1,7 @@
+// expect: places are never returned
+// From spec/language.md 7: places are second class, never returned.
+type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
+
+fn first(h: view EthHdr) -> view EthHdr { h }
+
+program p : syscall { return 0 }

@@ -1,0 +1,9 @@
+// expect: handler for `short_packet` must end in an exit
+// From spec/language.md 10.6: a handler block must exit.
+map stats : array[1] of { n: u64 }
+
+program p : xdp fail drop
+  on short_packet { stats[0].n += 1 }
+{
+  drop
+}

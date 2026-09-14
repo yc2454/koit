@@ -1,0 +1,8 @@
+// expect: takes 2 arguments
+// From spec/language.md 16: a call supplies every parameter.
+fn fnv_step(h: u32, c: u8) -> u32 { (h ^ (c as u32)) * 16777619 }
+
+program p : syscall {
+  let h = fnv_step(1)
+  return 0
+}

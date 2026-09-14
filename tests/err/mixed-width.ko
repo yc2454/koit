@@ -1,0 +1,9 @@
+// expect: no implicit conversions
+// From spec/language.md 3 (P4) and 8.1: width changes only through
+// `as`.
+program p : syscall {
+  let x: u32 = 1
+  let y: u64 = 2
+  let z = x + y
+  return 0
+}

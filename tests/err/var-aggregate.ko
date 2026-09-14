@@ -1,0 +1,9 @@
+// expect: binds a scalar
+// From spec/language.md 8.2: binding an aggregate place names it; a
+// `var` is a mutable scalar.
+map counters : array[1] of { n: u64 }
+
+program p : syscall {
+  var c = counters[0]
+  return 0
+}

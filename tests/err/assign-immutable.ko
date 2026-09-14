@@ -1,0 +1,8 @@
+// expect: is immutable
+// From spec/language.md 9 and 18.3 (PVar): `let` binds an immutable
+// name; a place is mutable only if declared with `var`.
+program p : syscall {
+  let x = 1
+  x = 2
+  return 0
+}

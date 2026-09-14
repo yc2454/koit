@@ -1,0 +1,11 @@
+// expect: not in this draft's resource table
+// From spec/ISSUES.md 12: section 9 allows `for x in it bounded N`
+// over a map, but the resource table of 11.2 has no iterator row yet.
+type Flow = { saddr: be32, daddr: be32 }
+map tab : hash[64] of Flow -> { v: u32 }
+
+program p : syscall {
+  var acc: u32 = 0
+  for (k, v) in tab bounded 4 { acc += v.v }
+  return 0
+}

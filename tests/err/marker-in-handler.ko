@@ -1,0 +1,11 @@
+// expect: non-failing context
+// From spec/language.md 10.6: a handler is a non-failing context; no
+// marker and no `fail` may appear in it.
+const M = 16
+map policy : array[1] of { cur: u32 where cur < M }
+
+program p : xdp fail drop
+  on invariant { let cur = policy[0].cur?; drop }
+{
+  drop
+}

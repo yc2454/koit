@@ -1,0 +1,7 @@
+// expect: is GPL-only
+// From spec/language.md 6: kernel functions marked GPL-only are
+// available only under a GPL-compatible license.
+program p : syscall {
+  let t = ktime()
+  return 0
+}
