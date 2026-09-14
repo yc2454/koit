@@ -4,18 +4,18 @@ import Koit.Check.Prelude
 import Koit.Check.Diag
 
 /-!
-The environments of spec/language.md section 18.2 and the operations
-on types the rules need: `G` as `Env`, with the unit's declarations,
-the prelude, the program kind, and the locals in scope; `K` as `Ctx`,
-with what the rules of 18.4 read from it in the base half (whether the
-context may fail, whether inside a loop, what `return` returns to).
-Facts `F`, the held set, and effects `E` are sessions 3 and 4.
+The typing environments and the operations on types the rules need:
+`G` as `Env`, with the unit's declarations, the prelude, the program
+kind, and the locals in scope; `K` as `Ctx`, with what the statement
+rules read from it in the base half (whether the context may fail,
+whether inside a loop, what `return` returns to). Facts `F`, the held
+set, and effects `E` come with entailment and effects, later.
 
 Type operations: resolution of named types, base-type equality
 (refinements ignored, since their comparison is entailment), the
-padded size and alignment of section 7, packet representability,
-scalars against aggregates, constant expressions (section 8.4) and
-their evaluation for sizes and counts.
+padded size and alignment at natural alignment, packet
+representability, scalars against aggregates, constant expressions
+and their evaluation for sizes and counts.
 -/
 
 namespace Koit.Check
@@ -23,7 +23,7 @@ namespace Koit.Check
 open Koit (Span)
 open Koit.Core
 
-/-- Where a place lives (section 7): the stack, a map value, the
+/-- Where a place lives: the stack, a map value, the
 context, the packet, a `ref` parameter of unknown origin, or a kernel
 object bound by `hold`. -/
 inductive Origin where
@@ -39,7 +39,7 @@ structure Local where
   origin  : Origin
   deriving Repr, Inhabited
 
-/-- `G` of section 18.2. Lookup order for a name is locals, the unit's
+/-- The typing environment `G`. Lookup order for a name is locals, the unit's
 declarations, the verdicts of the program kind, then the prelude. -/
 structure Env where
   prelude   : Prelude
@@ -107,7 +107,7 @@ inductive RetCtx where
   | fn (name : String) (ret : Option Ty)
   deriving Inhabited
 
-/-- `K` of section 18.2, the base half. -/
+/-- The context `K` of the statement rules, the base half. -/
 structure Ctx where
   mayFail   : Bool
   inLoop    : Bool := false
@@ -118,7 +118,7 @@ structure Ctx where
   /-- Inside the `else` of a `try` on a helper call, where `errno` is
   the reason. -/
   errnoOk   : Bool := false
-  /-- The program's verdict set `S`, when it has one (section 14.1). -/
+  /-- The program's verdict set `S`, when it has one. -/
   verdictSet : Option (List String) := none
   deriving Inhabited
 
@@ -145,7 +145,7 @@ def _root_.Koit.Core.Ty.isIntTy : Ty → Bool
   | .int .. => true
   | _ => false
 
-/-- The scalars of section 7: integers, byte-order integers, booleans.
+/-- The scalars: integers, byte-order integers, booleans.
 `t` is head-normal. -/
 def _root_.Koit.Core.Ty.isScalar : Ty → Bool
   | .int .. | .be .. | .bool .. => true
@@ -194,7 +194,7 @@ partial def Env.evalConst (env : Env) (e : Expr) (fuel : Nat := 64) :
   | _ => none
 
 /-- The padded size and alignment of a data type, with fields at
-natural alignment in declaration order (section 7). -/
+natural alignment in declaration order. -/
 partial def Env.layout (env : Env) (t : Ty) (fuel : Nat := 64) :
     M (Nat × Nat) := do
   if fuel == 0 then err t.span "type nesting too deep"
@@ -216,12 +216,12 @@ partial def Env.layout (env : Env) (t : Ty) (fuel : Nat := 64) :
     match env.evalConst n with
     | some k => return (sz * k.toNat, al)
     | none => err s s!"the array length `{n.print}` must be a constant \
-        expression (section 8.4)"
+        expression"
   | t' => err t'.span s!"`{t.print}` has no size: it names a place, not data"
 
 end
 
-/-- Why a type is not packet-representable (section 7), if it is not:
+/-- Why a type is not packet-representable, if it is not:
 a `spinlock`, a `ref`, a `view`, an `own`, or an optional inside it.
 With `allowLock`, one `spinlock` is admitted, as in a map value. -/
 partial def Env.notRepresentable (env : Env) (t : Ty) (allowLock : Bool)
@@ -287,7 +287,7 @@ partial def Env.eqv (env : Env) (a b : Ty) (fuel : Nat := 64) : M Bool := do
   | .opt _ t, .opt _ t' => env.eqv t t' (fuel - 1)
   | _, _ => return false
 
-/-- Whether `e` is a constant expression of section 8.4: literals,
+/-- Whether `e` is a constant expression: literals,
 constants, configuration constants, `size`, `hton` of a constant, and
 arithmetic, comparison, and logic over these. -/
 partial def Env.isConstExpr (env : Env) : Expr → Bool
@@ -299,8 +299,9 @@ partial def Env.isConstExpr (env : Env) : Expr → Bool
   | .not _ e | .cast _ e _ | .hton _ e => env.isConstExpr e
   | _ => false
 
-/-- The name the rules of section 17 allow in a predicate: no calls,
-no map or packet access, no byte-order casts. -/
+/-- The form a predicate may take: literals, names, arithmetic,
+comparisons, and logic; no calls, no map or packet access, no
+byte-order casts. -/
 partial def isPredicateForm : Expr → Bool
   | .lit .. | .char .. | .bool .. | .var .. | .size .. => true
   | .arith _ _ l r | .cmp _ _ l r | .and _ l r | .or _ l r =>

@@ -1,7 +1,7 @@
 import Koit.Syntax.Token
 
 /-!
-The lexer, per spec/language.md section 5.
+The lexer.
 
 Identifiers `[A-Za-z_][A-Za-z0-9_]*`; integer literals in decimal,
 `0x`, and `0b` with `_` separators; character literals denoting one
@@ -11,7 +11,7 @@ previous token can end a statement (`Token.continuesLine` is false)
 and it is not itself a newline, so blank lines and continuation lines
 produce nothing. A block comment that spans lines counts as a newline.
 Which newlines the parser treats as whitespace (inside brackets, in a
-program header) is the parser's decision; see spec/ISSUES.md, entry 6.
+program header) is the parser's decision.
 
 The lexer works on the UTF-8 bytes of the source. Every token is
 ASCII; non-ASCII bytes are legal only inside comments and string

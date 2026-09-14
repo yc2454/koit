@@ -2,14 +2,15 @@ import Koit.Check.Typing
 
 /-!
 The checker: statements, declarations, functions, contracts, and
-programs, the base half of spec/language.md section 18.4 and the shape
-rules of sections 7 to 10, 13, 14, 16, and 17. No facts, held sets,
-or effects yet; those premises are sessions 3 and 4, and the
-comments name each rule they will complete.
+programs; the base half of the statement rules and the shape rules of
+types, expressions, failure handling, programs, contracts, functions,
+and predicates. No facts, held sets, or effects yet; those premises
+come with entailment and effects, and the comments name each rule
+they will complete.
 
 `checkUnit` is the entry point: it checks the declarations in the
-order of section 23.1 and stops at the first error, whose span is the
-surface construct's.
+order of a unit's template and stops at the first error, whose span is
+the surface construct's.
 -/
 
 namespace Koit.Check
@@ -17,7 +18,7 @@ namespace Koit.Check
 open Koit (Span)
 open Koit.Core
 
-/-- Whether a block ends in an exit (sections 10.3, 10.6, 13): its
+/-- Whether a block ends in an exit: its
 last statement exits on every path through it. -/
 partial def exits : List Stmt → Bool
   | [] => false
@@ -31,7 +32,7 @@ partial def exits : List Stmt → Bool
 
 def exitForms : String := "a verdict, `fail`, `return`, `break`, or `continue`"
 
-/-- The struct type a literal has (section 8.2; spec/ISSUES.md 11 k):
+/-- The struct type a literal has:
 the binding's declared type, or the one declared type with exactly
 its field names in its order. -/
 def structForLiteral (env : Env) (span : Span) (declared : Option Ty)
@@ -43,7 +44,7 @@ def structForLiteral (env : Env) (span : Span) (declared : Option Ty)
     | .struct .. => return t
     | _ =>
       err span s!"a struct literal has a struct type; `{t.print}` is not one \
-        (section 8.2)"
+       "
   | none =>
     let mut found : List TypeDecl := []
     for d in env.types ++ env.prelude.types do
@@ -56,13 +57,13 @@ def structForLiteral (env : Env) (span : Span) (declared : Option Ty)
     | [] =>
       err span s!"no declared struct type has the fields \
         `{", ".intercalate names}`; annotate the binding with the type \
-        (section 8.2)"
+       "
     | ds =>
       err span s!"the fields `{", ".intercalate names}` belong to several \
         declared types ({", ".intercalate (ds.map (·.name))}); annotate the \
-        binding with the type (section 8.2)"
+        binding with the type"
 
-/-- A binding: the local it introduces (sections 8.2, 9, 18.4). -/
+/-- A binding: the local it introduces. -/
 def bindInit (env : Env) (K : Ctx) (span : Span) (mutable : Bool) (x : String)
     (ty : Option Ty) (init : Init) : M Local := do
   match init with
@@ -90,12 +91,12 @@ def bindInit (env : Env) (K : Ctx) (span : Span) (mutable : Bool) (x : String)
     match tn with
     | .spinlock _ =>
       err span "a `spinlock` is not bound; it is held with `hold lock(p)` \
-        (section 11)"
+       "
     | _ => pure ()
     -- (P3): an aggregate place is named
     if mutable then
       err span "`var` binds a scalar; an aggregate place is named with `let` \
-        (section 8.2)"
+       "
     if let some t := ty then
       unless ← env.eqv t info.ty do mismatch env p.span t info.ty
     let pty := if info.origin == .pkt then Ty.view span info.ty
@@ -104,43 +105,43 @@ def bindInit (env : Env) (K : Ctx) (span : Span) (mutable : Bool) (x : String)
   | .lit ls fields =>
     if mutable then
       err span "`var` binds a scalar; a struct literal is a place, named with \
-        `let` (section 8.2)"
+        `let`"
     let st ← structForLiteral env ls ty fields
     let fs ← match ← env.norm st with
       | .struct _ fs => pure fs
-      | _ => err ls "a struct literal has a struct type (section 8.2)"
+      | _ => err ls "a struct literal has a struct type"
     unless fs.map (·.name) == fields.map (·.name) do
       err ls s!"a struct literal gives every field of `{st.print}` in order: \
-        {", ".intercalate (fs.map (·.name))} (section 8.2)"
+        {", ".intercalate (fs.map (·.name))}"
     for (fd, fi) in fs.zip fields do
       let ftn ← env.norm fd.ty
       unless ftn.isScalar do
         err fi.span s!"field `{fd.name}` of `{st.print}` is a `{fd.ty.print}`; \
-          struct literals have scalar fields only (section 8.2)"
+          struct literals have scalar fields only"
       -- the predicate of the field is a demand of session 3
       check env K fi.value fd.ty
     return { name := x, ty := .ref span st, mutable := false, origin := .stack }
 
-/-- `return` against what the context returns to (sections 13, 16). -/
+/-- `return` against what the context returns to. -/
 def checkRet (env : Env) (K : Ctx) (span : Span) (v : Option Expr) :
     M Unit := do
   match K.ret, v with
   | .program ty, some e | .handler ty, some e =>
     check env K e ty
-    -- a verdict constant against the verdict set (section 14.1); a
+    -- a verdict constant against the verdict set; a
     -- computed verdict is a demand of session 4
     match e, K.verdictSet with
     | .var vs n, some vset =>
       if (env.verdict? n).isSome && !vset.contains n then
-        err vs s!"`{n}` is not in the verdict set (section 14.1)"
+        err vs s!"`{n}` is not in the verdict set"
     | _, _ => pure ()
   | .program _, none | .handler _, none =>
-    err span "a program returns a verdict (section 13)"
+    err span "a program returns a verdict"
   | .fn _ none, none => pure ()
   | .fn f none, some _ => err span s!"`{f}` returns nothing"
   | .fn _ (some (.opt _ t)), none =>
     err span s!"a bare `return` in a function returning `{t.print}?` is not \
-      decided (spec/ISSUES.md, entry 9)"
+      yet defined by the language (an open design point)"
   | .fn _ (some (.opt _ t)), some e => check env K e t
   | .fn f (some t), none =>
     err span s!"`return` needs a value: `{f}` returns `{t.print}`"
@@ -157,12 +158,12 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
     match s with
     | .«let» span mutable x ty init =>
       if x == "_" then
-        -- section 9: a bare expression statement is a call
+        -- a bare expression statement is a call
         match init with
         | .expr (.call s' f args) =>
           let _ ← synthCall env K s' f args false
         | .expr (.invalid s' m) => err s' m
-        | _ => err span "a bare expression statement must be a call (section 9)"
+        | _ => err span "a bare expression statement must be a call"
         checkStmts env K rest
       else
         let l ← bindInit env K span mutable x ty init
@@ -175,13 +176,13 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
         | .field _ _ f, .ctx =>
           err span s!"the context field `{f}` is not writable in \
             {article (env.kind.map (·.name)).get!} \
-            `{(env.kind.map (·.name)).get!}` program (section 13)"
+            `{(env.kind.map (·.name)).get!}` program"
         | _, _ =>
           err span s!"`{p.print}` is immutable; declare it with `var` to \
-            assign to it (section 9)"
+            assign to it"
       let tn ← env.norm info.ty
       match tn with
-      | .spinlock _ => err span "a `spinlock` is not assigned (section 11)"
+      | .spinlock _ => err span "a `spinlock` is not assigned"
       | _ => pure ()
       unless tn.isScalar do
         err span s!"`{p.print}` is an aggregate of type `{info.ty.print}`; \
@@ -190,7 +191,7 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
       checkStmts env K rest
     | .ite _ c t e =>
       -- (IfConst): a constant condition is folded after both branches
-      -- are checked (section 15)
+      -- are checked
       check env K c (.bool c.span)
       checkStmts env K t
       checkStmts env K e
@@ -210,10 +211,10 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
       checkStmts (env.bind l) { K with inLoop := true } body
       checkStmts env K rest
     | .brk span =>
-      unless K.inLoop do err span "`break` outside a loop (section 9)"
+      unless K.inLoop do err span "`break` outside a loop"
       checkStmts env K rest
     | .cont span =>
-      unless K.inLoop do err span "`continue` outside a loop (section 9)"
+      unless K.inLoop do err span "`continue` outside a loop"
       checkStmts env K rest
     | .ret span v =>
       checkRet env K span v
@@ -223,9 +224,9 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
       unless K.mayFail do
         if K.inHandler then
           err span "a handler is a non-failing context: no marker and no \
-            `fail` may appear in it (section 10.6)"
+            `fail` may appear in it"
         err span s!"`{K.fnName.getD "?"}` is not marked `fails`, so it may not \
-          contain a marker, `check`, or `fail` (section 10.8)"
+          contain a marker, `check`, or `fail`"
       check env K r tU32
       checkStmts env K rest
     | .«try» span x f thn els elseExits =>
@@ -242,7 +243,7 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
       checkStmts env { K with errnoOk := fallibleKind env f == .helper } els
       if elseExits && !exits els then
         err span s!"the `else` block must end in an exit: {exitForms} \
-          (section 10.3)"
+         "
       checkStmts env K rest
     | .hold span r x acq body els =>
       -- (Hold); the held set, forbidden effects, nesting, and `move`
@@ -254,7 +255,7 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
       match row.fails, els with
       | some k, none =>
         err span s!"`{acqName acq}` can fail (kind `{k}`); the acquisition \
-          needs `?` or `else` (section 11.1)"
+          needs `?` or `else`"
       | none, some _ =>
         err span s!"`{acqName acq}` cannot fail, so it takes no `?` or `else`"
       | _, _ => pure ()
@@ -265,16 +266,16 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
         | none, none => pure env
         | some _, none =>
           err span s!"`{acqName acq}` binds nothing: it is a scope-only \
-            resource, `hold {acqName acq} \{ ... }` (section 11.1)"
+            resource, `hold {acqName acq} \{ ... }`"
         | none, some _ =>
           err span s!"`{acqName acq}` yields a value; bind it with \
-            `hold x = ...` (section 11.1)"
+            `hold x = ...`"
       checkStmts env' K body
       if let some e := els then
         checkStmts env { K with errnoOk := row.fails == some .helper } e
         unless exits e do
           err span s!"the `else` block must end in an exit: {exitForms} \
-            (section 10.3)"
+           "
       checkStmts env K rest
     | .atomic span x op p args =>
       let info ← placeTy env K p
@@ -282,16 +283,16 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
       let tn ← env.norm info.ty
       unless tn.isIntTy do
         err span s!"atomic updates apply to an integer place; `{p.print}` is a \
-          `{info.ty.print}` (section 8.5)"
+          `{info.ty.print}`"
       match info.origin with
       | .stack | .map _ => pure ()
       | _ =>
         err span "atomic updates apply to a place in a map value or on the \
-          stack (section 8.5)"
+          stack"
       let n := if op == .cmpxchg then 2 else 1
       unless args.length == n do
         err span s!"`{op.spelling}` takes a place and {n} value(s) \
-          (section 8.5)"
+         "
       for a in args do
         check env K a tn
       let env' := match x with
@@ -307,7 +308,7 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
 no return. -/
 def K0 : Ctx := { mayFail := false, ret := .fn "" none }
 
-/-- A data type (section 7): what a `type` declaration, a map, a view,
+/-- A data type: what a `type` declaration, a map, a view,
 and a struct field may have. -/
 partial def checkDataTy (env : Env) (t : Ty) (fuel : Nat := 64) : M Unit := do
   if fuel == 0 then err t.span "type nesting too deep"
@@ -327,33 +328,33 @@ partial def checkDataTy (env : Env) (t : Ty) (fuel : Nat := 64) : M Unit := do
       match f.ty with
       | .ref .. | .view .. | .own .. | .opt .. =>
         err f.span s!"field `{f.name}` may not have type `{f.ty.print}`: a \
-          struct holds data, and places are never stored (section 7)"
+          struct holds data, and places are never stored"
       | _ => checkDataTy env f.ty (fuel - 1)
       if let some p := f.pred then
         let tn ← env.norm f.ty
         unless tn.isScalar do
           err p.span s!"a `where` clause refines a scalar field; `{f.name}` is \
-            a `{f.ty.print}` (section 17)"
+            a `{f.ty.print}`"
         let sibs : List Local := fields.map fun g =>
           { name := g.name, ty := g.ty, mutable := false, origin := .stack }
         checkPred env sibs p
     if (← env.spinlocks t) > 1 then
-      err s "at most one field of type `spinlock` (section 7)"
+      err s "at most one field of type `spinlock`"
   | .array _ elem n =>
     checkDataTy env elem (fuel - 1)
     checkCount env.top K0 "an array length" n
   | .refined s v base pred =>
     let bn ← env.norm base
-    unless bn.isScalar do err s "a refinement type refines a scalar (section 7)"
+    unless bn.isScalar do err s "a refinement type refines a scalar"
     checkPred env
       [{ name := v, ty := base, mutable := false, origin := .stack }] pred
   | .ref .. | .view .. | .own .. | .opt .. =>
     err t.span s!"`{t.print}` is not a data type: it names a place, and a \
-      declaration names data (section 7)"
+      declaration names data"
 
 def checkTypeDecl (env : Env) (d : TypeDecl) : M Unit := checkDataTy env d.ty
 
-/-- The names a constant's value may use (sections 6, 8.4), followed
+/-- The names a constant's value may use, followed
 through the constants it names, so that a cycle is an error at the
 declaration. `visiting` is the chain of constants being expanded. -/
 partial def constNamesOk (env : Env) (visiting : List String) : Expr → M Unit
@@ -364,34 +365,34 @@ partial def constNamesOk (env : Env) (visiting : List String) : Expr → M Unit
     if let some d := env.const? n then
       constNamesOk env (n :: visiting) d.value
     else if (env.config? n).isSome then pure ()
-    else err s s!"unknown name `{n}` in a constant expression (section 8.4)"
+    else err s s!"unknown name `{n}` in a constant expression"
   | .arith _ _ l r | .cmp _ _ l r | .and _ l r | .or _ l r => do
     constNamesOk env visiting l
     constNamesOk env visiting r
   | .not _ e | .hton _ e => constNamesOk env visiting e
   | .cast s e t => do
     unless (← env.norm t).isIntTy do
-      err s "`as` converts between integer types (section 8.1)"
+      err s "`as` converts between integer types"
     constNamesOk env visiting e
   | .size _ t => do let _ ← env.layout t
   | e => err e.span "the value of a constant is a constant expression: \
-      literals, constants, `size`, `hton`, and arithmetic (section 8.4)"
+      literals, constants, `size`, `hton`, and arithmetic"
 
 def checkConst (env : Env) (d : ConstDecl) : M Unit := do
   match d.ty with
   | some t =>
     let tn ← env.norm t
     unless tn.isScalar do
-      err t.span s!"a constant is a scalar; `{t.print}` is not one (section 6)"
+      err t.span s!"a constant is a scalar; `{t.print}` is not one"
     unless env.isConstExpr d.value do
       err d.value.span "the value of a constant is a constant expression \
-        (section 8.4)"
+       "
     constNamesOk env [d.name] d.value
     check env.top K0 d.value t
   | none =>
     unless env.isConstExpr d.value do
       err d.value.span "the value of a constant is a constant expression \
-        (section 8.4)"
+       "
     constNamesOk env [d.name] d.value
 
 def checkConfig (env : Env) (d : ConfigDecl) : M Unit := do
@@ -399,14 +400,14 @@ def checkConfig (env : Env) (d : ConfigDecl) : M Unit := do
   | .int .. | .bool _ => pure ()
   | _ =>
     err d.ty.span s!"a configuration constant is an integer or a `bool`; \
-      `{d.ty.print}` is neither (section 15)"
+      `{d.ty.print}` is neither"
   if let some i := d.init then
     unless env.isConstExpr i do
       err i.span "the default of a configuration constant is a constant \
-        expression (section 15)"
+        expression"
     check env.top K0 i d.ty
 
-/-- A map's capacity and its key and value types (section 7). -/
+/-- A map's capacity and its key and value types. -/
 def checkMap (env : Env) (d : MapDecl) : M Unit := do
   let capacity (n : Expr) : M Unit :=
     checkCount env.top K0 "a map capacity" n
@@ -414,12 +415,12 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
     let locks ← env.spinlocks v
     if locks > 1 then
       err v.span s!"the value type of map `{d.name}` has {locks} fields of \
-        type `spinlock`; at most one field of type `spinlock` (section 7)"
+        type `spinlock`; at most one field of type `spinlock`"
     checkDataTy env v
     if let some why ← env.notRepresentable v true then
       err v.span s!"the value type of map `{d.name}` may not contain {why}: \
         map keys and values are packet-representable, and a value may hold \
-        one `spinlock` (section 7)"
+        one `spinlock`"
     let _ ← env.layout v
   match d.kind with
   | .array n v | .percpu n v =>
@@ -430,12 +431,12 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
     checkDataTy env k
     if let some why ← env.notRepresentable k false then
       err k.span s!"the key type of map `{d.name}` may not contain {why}: map \
-        keys and values are packet-representable (section 7)"
+        keys and values are packet-representable"
     let _ ← env.layout k
     value v
   | .ringbuf n => capacity n
 
-/-- A function against its signature (section 16). -/
+/-- A function against its signature. -/
 def checkFn (env : Env) (f : Fn) : M Unit := do
   let mut locals : List Local := []
   let mut seen : List String := []
@@ -446,8 +447,8 @@ def checkFn (env : Env) (f : Fn) : M Unit := do
     match p.ty with
     | .own .. =>
       err p.span s!"parameter `{p.name}` of `{f.name}`: user functions take \
-        `ref` and `view` parameters and never `own` (section 16)"
-    | .opt .. => err p.span "an optional is not a parameter type (section 16)"
+        `ref` and `view` parameters and never `own`"
+    | .opt .. => err p.span "an optional is not a parameter type"
     | .ref _ t =>
       checkDataTy env t
       locals := { name := p.name, ty := p.ty, mutable := false,
@@ -456,7 +457,7 @@ def checkFn (env : Env) (f : Fn) : M Unit := do
       checkDataTy env t
       if let some why ← env.notRepresentable t false then
         err p.span s!"`{t.print}` is not packet-representable: it contains \
-          {why} (section 7)"
+          {why}"
       locals := { name := p.name, ty := p.ty, mutable := false,
                   origin := .pkt } :: locals
     | t =>
@@ -464,7 +465,7 @@ def checkFn (env : Env) (f : Fn) : M Unit := do
       let tn ← env.norm t
       unless tn.isScalar do
         err p.span s!"aggregates are passed by reference: declare \
-          `{p.name}: ref {t.print}` (section 16)"
+          `{p.name}: ref {t.print}`"
       let ty := match p.pred with
         | some q => Ty.refined p.span p.name t q
         | none => t
@@ -479,7 +480,7 @@ def checkFn (env : Env) (f : Fn) : M Unit := do
     match t with
     | .ref .. | .view .. | .own .. =>
       err t.span s!"the result type of `{f.name}` must be a scalar: places \
-        are never returned (section 7)"
+        are never returned"
     | _ => pure ()
     checkDataTy env t
     unless (← env.norm t).isScalar do
@@ -499,7 +500,7 @@ def checkFn (env : Env) (f : Fn) : M Unit := do
   checkStmts { env.top with locals } K f.body
   if f.ret.isSome && !exits f.body then
     err f.span s!"`{f.name}` has a result type, so its body must end in \
-      `return` or an expression (section 16)"
+      `return` or an expression"
 
 /-! ### The call graph -/
 
@@ -563,19 +564,18 @@ partial def visitCalls (fns : List Fn) (edges : List (String × List String))
     let d := (fns.find? (·.name == f)).get!
     err d.span s!"`{f}` calls itself, through \
       {" -> ".intercalate (path ++ [g])}; the call graph must be acyclic \
-      (section 16)"
+     "
   for h in (edges.lookup g).getD [] do
     visitCalls fns edges (path ++ [g]) h
 
-/-- The call graph must be acyclic (section 16). -/
+/-- The call graph must be acyclic. -/
 def checkCallGraph (env : Env) (fns : List Fn) : M Unit := do
   let edges : List (String × List String) := fns.map fun f =>
     (f.name, (calleesStmts f.body).filter fun g => (env.fn? g).isSome)
   for f in fns do
     visitCalls fns edges [] f.name
 
-/-- The verdict names and regions of a contract or a program header
-(section 14). -/
+/-- The verdict names and regions of a contract or a program header. -/
 def checkClauses (env : Env) (row : KindRow)
     (verdicts : Option (List (Span × String))) (preserved : List Region) :
     M Unit := do
@@ -583,18 +583,18 @@ def checkClauses (env : Env) (row : KindRow)
     for (s, n) in vs do
       unless row.verdicts.any (·.1 == n) do
         err s s!"`{n}` is not a verdict of {article row.name} `{row.name}` \
-          program (section 13)"
+          program"
   for r in preserved do
     match r with
     | .pkt s range =>
       unless row.hasPkt do
         err s s!"{article row.name} `{row.name}` program has no packet \
-          (section 13)"
+         "
       if let some (lo, hi) := range then
         for e in [lo, hi] do
           unless env.isConstExpr e do
             err e.span "the bounds of `pkt[a .. b)` are constant expressions \
-              (section 14.1)"
+             "
           check env.top K0 e tU64
     | .map s m =>
       unless (env.map? m).isSome do err s s!"unknown map `{m}` in `preserve`"
@@ -605,14 +605,14 @@ def checkClauses (env : Env) (row : KindRow)
     | .ctx s f =>
       unless row.ctx.any (·.name == f) do
         err s s!"the context of {article row.name} `{row.name}` program has no \
-          field `{f}` (section 13)"
+          field `{f}`"
 
 def kindRow (env : Env) (span : Span) (kind : String) : M KindRow := do
   match env.prelude.kind? kind with
   | some row => return row
   | none =>
     err span s!"unknown program kind `{kind}`; the kinds are \
-      {", ".intercalate (env.prelude.kinds.map (·.name))} (section 13)"
+      {", ".intercalate (env.prelude.kinds.map (·.name))}"
 
 def checkContract (env : Env) (c : Contract) : M Unit := do
   let row ← kindRow env c.span c.kind
@@ -629,7 +629,7 @@ def checkProgram (env : Env) (p : Program) : M Unit := do
     | some k =>
       unless k.kind == p.kind do
         err s s!"contract `{c}` is for `{k.kind}` programs; `{p.name}` is \
-          {article p.kind} `{p.kind}` program (section 14.2)"
+          {article p.kind} `{p.kind}` program"
     | none => err s s!"unknown contract `{c}`"
   checkClauses env row p.verdicts p.preserved
   let env := { env with kind := some row }
@@ -642,13 +642,13 @@ def checkProgram (env : Env) (p : Program) : M Unit := do
     checkStmts hEnv K h.body
     unless exits h.body do
       err h.span s!"the handler for `{h.kind}` must end in an exit \
-        (section 10.6)"
+       "
   let K : Ctx := { mayFail := true, ret := .program row.verdictTy,
                    verdictSet := vset }
   checkStmts env K p.body
   if row.hasPkt && !exits p.body then
     err p.span s!"the body of {article row.name} `{row.name}` program must end \
-      in an exit (section 13)"
+      in an exit"
 
 /-- Unit-level names: types in one namespace, values in another,
 programs and contracts in a third. -/
@@ -667,7 +667,7 @@ def checkNames (u : CompUnit) : M Unit := do
     u.programs.map fun p => (p.span, p.name))
 
 /-- The checker's entry point: every declaration of the unit, in the
-order of section 23.1. -/
+order of a unit's template. -/
 def checkUnit (pre : Prelude) (u : CompUnit) : M Unit := do
   checkNames u
   let env : Env := { prelude := pre, license := u.license.map (·.2),

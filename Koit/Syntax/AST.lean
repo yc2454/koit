@@ -1,8 +1,9 @@
 import Koit.Syntax.Span
 
 /-!
-The surface abstract syntax, per spec/language.md sections 6 to 9, 14,
-and 15. Every node carries the span of the source text it came from,
+The surface abstract syntax: declarations, types, expressions,
+statements, contracts, and configuration. Every node carries the span
+of the source text it came from,
 as its first field; the typing rules never read it, diagnostics and
 printing do.
 
@@ -27,13 +28,13 @@ inductive BinOp where
   | eq | ne | lt | le | gt | ge | land | lor
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- `=` and the compound assignments of section 9. -/
+/-- `=` and the compound assignments. -/
 inductive AssignOp where
   | set | add | sub | mul | band | bor | bxor | shl | shr
   deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- The verdict statements. `abort` is a contextual name in statement
-position (spec/ISSUES.md, entry 6). -/
+position, not a keyword. -/
 inductive Verdict where
   | pass | drop | tx | abort
   deriving Repr, BEq, DecidableEq, Inhabited
@@ -46,7 +47,7 @@ inductive Pattern where
 
 mutual
 
-/-- Types, section 7. -/
+/-- Types. -/
 inductive Ty where
   | int (span : Span) (signed : Bool) (width : Nat)
   | be (span : Span) (width : Nat)
@@ -66,7 +67,7 @@ inductive Ty where
 inductive Field where
   | mk (span : Span) (name : String) (ty : Ty) (pred : Option Expr)
 
-/-- Expressions, section 8. -/
+/-- Expressions. -/
 inductive Expr where
   | int (span : Span) (value : Nat) (text : String)
   | char (span : Span) (value : UInt8)
@@ -117,7 +118,7 @@ def Pattern.span : Pattern → Span
 
 mutual
 
-/-- Statements, section 9. -/
+/-- Statements. -/
 inductive Stmt where
   /-- `let` and `var`. -/
   | decl (span : Span) (mutable : Bool) (name : String) (ty : Option Ty)
@@ -171,13 +172,13 @@ def Block.span : Block → Span
 def Block.stmts : Block → List Stmt
   | .mk _ ss => ss
 
-/-- The exit forms of section 9, which an `else` tail, a handler, and
+/-- The exit forms, which an `else` tail, a handler, and
 the header's `fail` take. -/
 def Stmt.isExit : Stmt → Bool
   | .fail .. | .verdict .. | .ret .. | .brk .. | .cont .. => true
   | _ => false
 
-/-- The place forms of section 8: a variable, a field or element of a
+/-- The place forms: a variable, a field or element of a
 place, or `*x`. -/
 partial def Expr.isPlace : Expr → Bool
   | .var .. => true
@@ -186,7 +187,7 @@ partial def Expr.isPlace : Expr → Bool
   | .unary _ .deref (.var ..) => true
   | _ => false
 
-/-! ### Declarations, sections 6, 14, 15 -/
+/-! ### Declarations -/
 
 structure Param where
   span : Span

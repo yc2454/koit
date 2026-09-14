@@ -1,22 +1,19 @@
 import Koit.Core.Syntax
 
 /-!
-The prelude, per spec/language.md sections 6 and 13 and spec/ISSUES.md
-entry 5: the five tables a kernel version supplies to the core, as a
-Lean value, hand-written for `xdp`, `tc`, and `syscall` and for the
-helpers the corpus calls. The generator of sessions 5 to 8 emits a
-value of the same type from the kernel's own sources; until then every
-row cites the kernel object it transcribes, keyed by the upstream tag
-recorded in spec/verifier-checks.md.
+The prelude: the five tables a kernel version supplies to the core,
+as a Lean value, hand-written for `xdp`, `tc`, and `syscall` and for
+the helpers the corpus calls. A generator will later emit a value of
+the same type from the kernel's own sources; until then every row
+cites the kernel object it transcribes, keyed by the upstream tag.
 
-The five tables (mechanisms-draft3.md, E): program kinds; context
-fields per kind; calls with signatures, effects, availability, and
-license; resources (section 11.2); region kinds (section 7). The
-constants section 6 names as prelude constants and the two socket
-types of section 11.2 follow.
+The five tables: program kinds; context fields per kind; calls with
+signatures, effects, availability, and license; resources; region
+kinds. The protocol and ethertype constants and the two socket types
+follow.
 
 A unit's own declarations shadow prelude names; the prelude is the
-outer scope (spec/ISSUES.md, entry 11).
+outer scope.
 -/
 
 namespace Koit.Check
@@ -43,16 +40,16 @@ def field (name : String) (ty : Ty) : Field := .mk noSpan name ty none
 def param (name : String) (ty : Ty) (pred : Option Expr := none) : Param :=
   { span := noSpan, name, ty, pred }
 
-/-! ### Table 1, program kinds (section 13) -/
+/-! ### Table 1, program kinds -/
 
 /-- What a program returns on a failure of a kind it has no handler
-for (section 10.7). -/
+for. -/
 inductive DefaultExit where
   | verdict (name : String)
   | value (v : Int)
   deriving Repr, Inhabited
 
-/-- Table 2, one context field (section 13). -/
+/-- Table 2, one context field. -/
 structure CtxField where
   name     : String
   ty       : Ty
@@ -110,10 +107,10 @@ def syscallRow : KindRow :=
     verdictTy := tI32, verdicts := [], sugar := [],
     defaultExit := .value (-1), sleep := true, ctx := [] }
 
-/-! ### Table 3, calls (sections 8.3, 8.5, 16) -/
+/-! ### Table 3, calls -/
 
 /-- How a call is typed: by a signature, or by a rule of the checker
-keyed by the name, for the generic builtins of section 8.5 whose
+keyed by the name, for the generic builtins whose
 types depend on their arguments. -/
 inductive Sig where
   | fn (params : List Param) (ret : Option Ty)
@@ -123,17 +120,17 @@ inductive Sig where
 structure CallRow where
   name : String
   sig  : Sig
-  /-- The effects of section 12; the write effects of `copy`, `fill`,
+  /-- The effects; the write effects of `copy`, `fill`,
   `insert`, `delete`, and the atomics are those of their place or map
   argument and are computed at the call. -/
   effects : List Effect
-  /-- The failure kind when the call is fallible (section 8.3). -/
+  /-- The failure kind when the call is fallible. -/
   fails : Option Kind
   /-- The resource the result must be bound to with `hold`. -/
   acquires : Option Resource
   /-- The program kinds where the call is available; empty means all. -/
   kinds : List String
-  /-- `gpl_only` in the helper's `bpf_func_proto` (section 6). -/
+  /-- `gpl_only` in the helper's `bpf_func_proto`. -/
   gplOnly : Bool
   /-- The kernel helper, kfunc, or instruction behind the call. -/
   kernel : String
@@ -145,7 +142,7 @@ def callRow (name : String) (sig : Sig) (effects : List Effect)
     (gplOnly : Bool := false) : CallRow :=
   { name, sig, effects, fails, acquires, kinds, gplOnly, kernel }
 
-/-- `redirect(ifindex)` yields `{v | v == REDIRECT}` (section 14.1). -/
+/-- `redirect(ifindex)` yields `{v | v == REDIRECT}`. -/
 def redirectRet : Ty :=
   .refined noSpan "v" tU32
     (.cmp noSpan .eq (.var noSpan "v") (.var noSpan "REDIRECT"))
@@ -181,7 +178,7 @@ def calls : List CallRow := [
       (some (.own noSpan (.named noSpan "Sock"))))
     [.call, .fail] "bpf_sk_lookup_udp" (fails := some .missing)
     (acquires := some .sockref) (kinds := ["xdp", "tc"]),
-  -- a consuming call: its parameter is a `move` sink (section 11.5)
+  -- a consuming call: its parameter is a `move` sink
   callRow "sk_release" (.fn [param "sk" (.own noSpan (.named noSpan "Sock"))]
     none) [.call] "bpf_sk_release" (kinds := ["xdp", "tc"]),
   -- a format string and at most three scalar arguments
@@ -206,7 +203,7 @@ def calls : List CallRow := [
   callRow "atomic_cmpxchg" .builtin [] "BPF_ATOMIC BPF_CMPXCHG"
 ]
 
-/-! ### Table 4, resources (section 11.2) -/
+/-! ### Table 4, resources -/
 
 inductive Nesting where
   | no | counted | lifo | yes
@@ -222,7 +219,7 @@ structure ResourceRow where
   normalExit : String
   abnormalExit : String
   /-- Effects forbidden while held; `sleep` is forbidden under every
-  row (section 11.4). -/
+  row. -/
   forbidden : List Effect
   /-- Whether another instance of the same resource may be held. -/
   nesting : Nesting
@@ -256,7 +253,7 @@ def resources : List ResourceRow := [
     nesting := .yes, guards := "" }
 ]
 
-/-! ### Table 5, region kinds (sections 7 and 12) -/
+/-! ### Table 5, region kinds -/
 
 structure RegionRow where
   name : String
@@ -277,7 +274,7 @@ def regions : List RegionRow := [
     note := "views; the layout token is dropped by `resize`" }
 ]
 
-/-! ### Constants and types (sections 6, 11.2) -/
+/-! ### Constants and types -/
 
 def constRow (name : String) (value : Expr) : ConstDecl :=
   { span := noSpan, name, ty := none, value }
@@ -301,8 +298,7 @@ def consts : List ConstDecl := [
 ]
 
 /-- `Sock` is opaque; `SockTuple` is `struct bpf_sock_tuple`'s IPv4
-member, the argument of the socket lookups (spec/ISSUES.md, entry 4
-proposes it as the tuple's type). -/
+member, the argument of the socket lookups. -/
 def types : List TypeDecl := [
   { span := noSpan, name := "Sock", ty := .struct noSpan [] },
   { span := noSpan, name := "SockTuple",

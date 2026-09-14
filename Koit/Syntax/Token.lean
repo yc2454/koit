@@ -1,19 +1,19 @@
 import Koit.Syntax.Span
 
 /-!
-The tokens of koit, per spec/language.md section 5, draft 3.
+The tokens of koit.
 
 The lexer produces a list of `Lexeme`, a token with its span. Newlines
-are tokens, because section 5 makes a newline a statement terminator
+are tokens, because a newline is a statement terminator
 unless the previous token cannot end a statement; `Token.continuesLine`
 is that predicate. Where a newline is a terminator and where it is
 whitespace (inside brackets, inside a program header) is the parser's
-decision, by context; see spec/ISSUES.md, entry 6.
+decision, by context.
 -/
 
 namespace Koit.Syntax
 
-/-- The reserved keywords of section 5. Spellings that are also Lean
+/-- The reserved keywords. Spellings that are also Lean
 keywords are quoted; the constructor is still named by the koit
 spelling. -/
 inductive Keyword where

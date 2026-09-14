@@ -1,29 +1,32 @@
 import Koit.Syntax.Span
 
 /-!
-Core, the one typed language, per spec/language.md section 18.1 and
-the decision of spec/ISSUES.md entry 8.
+Core, the one typed language: the surface desugars to it
+syntactically, and the typing judgment and the theorems are stated on
+it. Every demand the source marked is an explicit `raise`, every
+optional is consumed by an explicit branch, every governed load goes
+through a temporary, and every handler table is total. Every node
+carries the span of the surface construct it came from, as its first
+field, so a diagnostic about a Core node names the source line the
+programmer wrote.
 
-The surface desugars to Core syntactically; the typing judgment and
-the theorems are stated on Core. Every node carries the span of the
-surface construct it came from, as its first field, so a diagnostic
-about a Core node names the source line the programmer wrote.
-
-Three surface forms stay in Core because handling them needs types:
-functions with their signatures, `if` on a constant condition, and
-`for i in a..b`. Four representation points that 18.1 leaves open are
-decided here and recorded in spec/ISSUES.md, entry 11: a binding's
-declared type, the argument forms of a call, `try` remembering whether
-its `else` came from a tail or from `if let`, and the `invalid` node,
-which keeps desugaring total on ill-formed surface programs by
-carrying the diagnostic the checker will report.
+Four surface forms stay in Core because handling them needs types:
+functions with their signatures, `if` on a constant condition,
+`for i in a..b`, and a binding whose right side is a place. Four
+further points are representation decisions of this file: a binding
+keeps its declared type; a call's arguments are values, places, or a
+map; `try` remembers whether its `else` came from a tail or from
+`if let`; and the `invalid` node keeps desugaring total on ill-formed
+surface programs by carrying the diagnostic the checker will report.
 -/
 
 namespace Koit.Core
 
 open Koit (Span)
 
-/-- The six failure kinds of section 10.1. -/
+/-- The six failure kinds, one per party to blame: the input, the
+environment, whoever wrote the map, the program's assumptions, the
+kernel, and the program's own logic. -/
 inductive Kind where
   | short_packet | missing | invariant | bound | helper | program
   deriving Repr, BEq, DecidableEq, Inhabited
@@ -35,7 +38,7 @@ def spelling : Kind → String
   | .invariant => "invariant"       | .bound => "bound"
   | .helper => "helper"             | .program => "program"
 
-/-- Every kind, in the order of the table of section 10.1. -/
+/-- Every kind, in the order of the failure table. -/
 def all : List Kind :=
   [.short_packet, .missing, .invariant, .bound, .helper, .program]
 
@@ -45,9 +48,12 @@ instance : ToString Kind := ⟨spelling⟩
 
 end Kind
 
-/-- The resources `R` of section 18.1, one per row of the table of
-section 11.2, plus `iter` for the iterator loops of section 9, whose
-row this draft does not define (spec/ISSUES.md, entry 12). -/
+/-- The resources a `hold` block can hold, one per row of the resource
+table: spin locks, RCU sections, preempt-off and IRQ-off sections,
+ring-buffer records, and socket references; plus `iter` for the
+iterator loops `for x in it bounded N`, whose row this draft of the
+language does not define, so that desugaring stays total and the
+checker rejects the form. -/
 inductive Resource where
   | spinlock | rcu | preempt | irq | ringbuf | sockref | iter
   deriving Repr, BEq, DecidableEq, Inhabited
@@ -63,14 +69,15 @@ instance : ToString Resource := ⟨spelling⟩
 
 end Resource
 
-/-- The guards `g` of section 12: the packet's layout token, or a held
-resource. -/
+/-- The guards a place may carry: the packet's layout token, dropped by
+any statement with the `resize` effect, or a held resource. -/
 inductive Guard where
   | layout
   | held (r : Resource)
   deriving Repr, BEq, Inhabited
 
-/-- The arithmetic and bitwise operators, `op` of section 18.1. -/
+/-- The arithmetic and bitwise operators; every one is total, with the
+kernel's semantics for division, modulo, and shifts. -/
 inductive ArithOp where
   | add | sub | mul | div | mod | band | bor | bxor | shl | shr
   deriving Repr, BEq, DecidableEq, Inhabited
@@ -79,7 +86,7 @@ def ArithOp.spelling : ArithOp → String
   | .add => "+" | .sub => "-" | .mul => "*" | .div => "/" | .mod => "%"
   | .band => "&" | .bor => "|" | .bxor => "^" | .shl => "<<" | .shr => ">>"
 
-/-- The comparisons, `cmp` of section 18.1. -/
+/-- The comparisons; a byte-order value takes only `==` and `!=`. -/
 inductive CmpOp where
   | eq | ne | lt | le | gt | ge
   deriving Repr, BEq, DecidableEq, Inhabited
@@ -88,7 +95,8 @@ def CmpOp.spelling : CmpOp → String
   | .eq => "==" | .ne => "!=" | .lt => "<" | .le => "<=" | .gt => ">"
   | .ge => ">="
 
-/-- The atomic updates of section 8.5. -/
+/-- The atomic updates on an integer place in a map value or on the
+stack; each yields the previous value. -/
 inductive AtomicOp where
   | add | band | bor | bxor | xchg | cmpxchg
   deriving Repr, BEq, DecidableEq, Inhabited
@@ -106,8 +114,8 @@ def AtomicOp.ofString? : String → Option AtomicOp
 
 mutual
 
-/-- Types `T` of section 18.1, with the refinement and optional forms
-of section 7 that declarations, coercions, and signatures use. A
+/-- Types, with the refinement form `{v: T | P}` that declarations and
+coercions use and the optional form `T?` of a fallible function. A
 `named` type is resolved through the unit's declarations by the
 checker; `struct` is an inline struct type, as a map value or a
 literal has. -/
@@ -130,7 +138,7 @@ inductive Ty where
 inductive Field where
   | mk (span : Span) (name : String) (ty : Ty) (pred : Option Expr)
 
-/-- Expressions `e` of section 18.1. Literals keep their text so that
+/-- Expressions. Literals keep their text so that
 printed Core shows `0x10` as written. -/
 inductive Expr where
   | lit (span : Span) (value : Nat) (text : String)
@@ -157,14 +165,16 @@ inductive Expr where
   | move (span : Span) (name : String)
   | call (span : Span) (f : String) (args : List Arg)
   /-- The negative return of the helper whose `try` failed; the
-  default reason of the `helper` kind (section 10.5). -/
+  default reason of the `helper` kind. -/
   | errno (span : Span)
   /-- A surface form with no meaning where it stands, such as a
-  fallible operation outside the positions of section 10.2. The
+  fallible operation outside the positions that consume one (the
+  initializer of `let`, `var`, `if let`, or `hold`, or a statement,
+  with `?` or `else`). The
   message is the diagnostic; typing has no rule for this node. -/
   | invalid (span : Span) (msg : String)
 
-/-- Places `p` of section 18.1. -/
+/-- Places: a variable, a field, an element, a map slot, or `*x`. -/
 inductive Place where
   | var (span : Span) (name : String)
   | field (span : Span) (p : Place) (name : String)
@@ -185,9 +195,11 @@ inductive Arg where
   | place (p : Place)
   | map (span : Span) (name : String)
 
-/-- The fallible operations `F` of section 18.1. Each has the failure
-kind section 8.3 fixes for it; `acquire` takes its kind from the
-resource table. -/
+/-- The fallible operations. Each has a fixed failure kind: a view or
+a byte read `short_packet`, a hash lookup or a function returning
+`T?` `missing`, a marked load of a `where` field `invariant`, a
+coercion `bound`, a helper `helper`; `acquire` takes its kind from
+the resource table. -/
 inductive Fallible where
   | view (span : Span) (off : Expr) (ty : Ty)
   | lookup (span : Span) (map : String) (key : Place)
@@ -241,7 +253,7 @@ def Fallible.span : Fallible → Span
   | .callopt s .. | .coerce s .. => s
 
 /-- The failure kind of a fallible operation other than `acquire`,
-whose kind is a column of the resource table (section 11.2). -/
+whose kind is a column of the resource table. -/
 def Fallible.kind? : Fallible → Option Kind
   | .view .. => some .short_packet
   | .lookup .. => some .missing
@@ -260,8 +272,7 @@ structure FieldInit where
 
 /-- The right side of a binding. Whether a place is read into the name
 or named by it depends on its type, so the desugaring keeps the place
-(spec/ISSUES.md, entry 11). A struct literal names a new stack place
-(section 8.2). -/
+and the checker decides. A struct literal names a new stack place. -/
 inductive Init where
   | expr (e : Expr)
   | place (p : Place)
@@ -273,7 +284,7 @@ def Init.span : Init → Span
   | .place p => p.span
   | .lit s _ => s
 
-/-- Statements `s` of section 18.1. A block is a list; `skip` is the
+/-- Statements. A block is a list; `skip` is the
 empty list and `s ; s` is concatenation. -/
 inductive Stmt where
   /-- `let x = e` and `var x = e`, with the declared type when the
@@ -289,7 +300,7 @@ inductive Stmt where
   | ret (span : Span) (value : Option Expr)
   | raise (span : Span) (kind : Kind) (reason : Expr)
   /-- `try x = F then s else s`. `elseExits` records that the `else`
-  came from a tail, which must exit (section 10.3), and not from
+  came from a tail, which must exit, and not from
   `if let`, which need not. -/
   | «try» (span : Span) (name : String) (op : Fallible) (thn els : List Stmt)
       (elseExits : Bool)
@@ -297,7 +308,8 @@ inductive Stmt where
   an acquisition that cannot fail. -/
   | hold (span : Span) (res : Resource) (name : Option String)
       (acq : Fallible) (body : List Stmt) (els : Option (List Stmt))
-  /-- `x = atomic op p (e...)`, the atomic updates of section 8.5. -/
+  /-- `x = atomic op p (e...)`, an atomic update yielding the previous
+  value. -/
   | atomic (span : Span) (name : Option String) (op : AtomicOp)
       (target : Place) (args : List Expr)
   | invalid (span : Span) (msg : String)
@@ -310,7 +322,8 @@ def Stmt.span : Stmt → Span
 
 /-! ### Declarations -/
 
-/-- A region `r` of section 18.1, as a preserved region `W` names it;
+/-- A region as a `preserve` clause names it: a packet range, a map,
+or a context field;
 `maps except ...` is kept so that the checker can resolve the names. -/
 inductive Region where
   | pkt (span : Span) (range : Option (Expr × Expr))
@@ -322,7 +335,8 @@ inductive Region where
 def Region.span : Region → Span
   | .pkt s .. | .map s .. | .mapsExcept s .. | .ctx s .. => s
 
-/-- The effects of section 12. -/
+/-- The effects: a kernel call, a packet resize, sleeping, failing,
+and writes to a region. -/
 inductive Effect where
   | call | resize | sleep | fail
   | write (r : Region)
@@ -335,7 +349,8 @@ structure Param where
   pred : Option Expr
   deriving Repr, Inhabited
 
-/-- A function, kept in Core with its signature (section 16). The
+/-- A function, kept in Core with its signature, since it is checked
+once against it. The
 result is `refined` for `-> r: T where P` and `opt` for `-> T?`. -/
 structure Fn where
   span   : Span
@@ -359,8 +374,8 @@ structure MapDecl where
   kind : MapKind
   deriving Repr, Inhabited
 
-/-- `const x = e` takes its type from each use when `ty` is absent
-(section 6). -/
+/-- `const x = e` takes its type from each use when `ty` is absent,
+like a literal. -/
 structure ConstDecl where
   span  : Span
   name  : String
@@ -381,7 +396,7 @@ structure TypeDecl where
   ty   : Ty
   deriving Repr, Inhabited
 
-/-- A named contract (section 14.2). -/
+/-- A named contract. -/
 structure Contract where
   span      : Span
   name      : String
@@ -397,7 +412,8 @@ structure Handler where
   body : List Stmt
   deriving Repr, Inhabited
 
-/-- `program(S, W, H, s)` of section 18.1. `verdicts` is `S` after the
+/-- A program: its verdict set `S`, preserved regions `W`, handler
+table `H`, and body. `verdicts` is `S` after the
 implemented contract's clause is merged in, or `none` for no clause;
 `preserved` is `W`; `handlers` is `H`, total over the six kinds. -/
 structure Program where

@@ -14,7 +14,7 @@ def usage : String := String.intercalate "\n"
    "  lex     print the tokens of FILE, one per line",
    "  parse   parse FILE and list its declarations",
    "  print   parse FILE and print it back as source",
-   "  desugar parse FILE and print its Core (spec section 18.1)",
+   "  desugar parse FILE and print its Core",
    "  check   type-check FILE against the stage-1 prelude",
    "  run     interpret FILE (from session 3)"] ++ "\n"
 

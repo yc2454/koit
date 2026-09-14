@@ -2,14 +2,14 @@ import Koit.Syntax.Lexer
 import Koit.Syntax.AST
 
 /-!
-A recursive-descent parser for the grammar of spec/language.md
-sections 6 to 9, 14, and 15, with the precedence table of section 5.
+A recursive-descent parser for the grammar of declarations, types,
+expressions, statements, contracts, and programs, with the operator
+precedence table.
 
 Newlines are tokens (see `Lexer`). Here they are statement
 terminators inside blocks and between top-level items, and whitespace
-inside brackets, in a program header, and in a contract, per
-spec/ISSUES.md entry 6. A block may end in a bare expression (entry
-7); `abort` in statement position is a verdict.
+inside brackets, in a program header, and in a contract. A block may
+end in a bare expression; `abort` in statement position is a verdict.
 
 Every error carries the span of the token that could not be used and
 names what was expected there.

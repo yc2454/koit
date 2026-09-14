@@ -2,8 +2,8 @@ import Koit.Syntax.Parser
 import Koit.Core.Desugar
 
 /-!
-Checks on the desugaring over small units, one guard per rewrite of
-spec/language.md section 18.4: the printed Core of a program body or
+Checks on the desugaring over small units, one guard per rewrite:
+the printed Core of a program body or
 a function is compared with the expected text. Multi-line texts are
 lists of lines, as in the parser checks.
 -/
@@ -175,7 +175,7 @@ private def block (ls : List String) : Option String :=
 #guard bodyOf "program p : tc { pass }" == block ["  return OK"]
 #guard bodyOf "program p : tc { tx }" ==
   block ["  return invalid \"`tx` is not a verdict statement of a `tc` \
-    program (section 13)\""]
+    program\""]
 
 -- handler tables: `fail`, a listed kind, `on _`, and the defaults
 #guard handlersOf

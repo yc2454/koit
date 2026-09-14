@@ -1,4 +1,4 @@
-// expect: ISSUES.md, entry 9
+// expect: not yet defined by the language
 // From spec/ISSUES.md 9: returning absence from a `T?` function is
 // not decided; bare `return` is the proposal.
 fn none() -> u32? { return }

@@ -1,10 +1,10 @@
 import Koit.Check.Checker
 
 /-!
-The typing judgment of Core as a proposition: the rules of
-spec/language.md section 18.3 and the base premises of 18.4, without
-the demands `F |= P`, the held set, and the effects, which sessions 3
-and 4 add as further premises of the same constructors.
+The typing judgment of Core as a proposition: the expression and
+place rules and the base premises of the statement rules, without the
+demands `F |= P`, the held set, and the effects, which entailment and
+effects add as further premises of the same constructors.
 
 `checkUnit` (Checker.lean) is the decision procedure for this
 judgment; `check_sound` states that a unit it accepts is well-typed.
@@ -13,10 +13,9 @@ here takes any integer type both operands check against, and the
 checker picks the operand with a type of its own; (Sub) here is
 refinement weakening through base-type equality, which is what the
 checker decides until entailment arrives. T1, safety, will be stated
-on `UnitOk` once the Core semantics of section 19 is defined.
+on `UnitOk` once the Core semantics is defined.
 
-The proofs are deferred, per PLAN.md: definitions, then corpus, then
-proofs.
+The proofs are deferred: definitions, then corpus, then proofs.
 -/
 
 namespace Koit.Check
@@ -24,14 +23,14 @@ namespace Koit.Check
 open Koit (Span)
 open Koit.Core
 
-/-- The operations of section 8.1 that (Arith) types. -/
+/-- The comparisons a byte-order value admits. -/
 def isCmpBe : CmpOp → Bool
   | .eq | .ne => true
   | _ => false
 
 mutual
 
-/-- `G;K |- e => T` (18.3). -/
+/-- `G;K |- e => T`, synthesis. -/
 inductive Synth : Env → Ctx → Expr → Ty → Prop
   /-- (Var), a local. -/
   | var {env K s x l} :
@@ -43,12 +42,12 @@ inductive Synth : Env → Ctx → Expr → Ty → Prop
   | config {env K s x d} :
       env.local? x = none → env.const? x = none → env.config? x = some d →
       Synth env K (.var s x) d.ty
-  /-- An untyped constant takes its type from each use (section 6). -/
+  /-- An untyped constant takes its type from each use. -/
   | constUntyped {env K s x d t env'} :
       env.local? x = none → env.const? x = some d → d.ty = none →
       constEnv env x s = .ok env' → Synth env' K d.value t →
       Synth env K (.var s x) t
-  /-- The verdict names of the program's kind (section 13). -/
+  /-- The verdict names of the program's kind. -/
   | verdict {env K s x t} :
       env.local? x = none → env.const? x = none → env.config? x = none →
       env.verdict? x = some t → Synth env K (.var s x) t
@@ -81,7 +80,7 @@ inductive Synth : Env → Ctx → Expr → Ty → Prop
   | cast {env K s e t tn src sn} :
       env.norm t = .ok tn → tn.isIntTy → Synth env K e src →
       env.norm src = .ok sn → sn.isIntTy → Synth env K (.cast s e t) t
-  /-- `bool as uN` (section 8.1). -/
+  /-- `bool as uN`. -/
   | castBool {env K s e t s' w src s''} :
       env.norm t = .ok (.int s' false w) → Synth env K e src →
       env.norm src = .ok (.bool s'') → Synth env K (.cast s e t) t
@@ -97,31 +96,31 @@ inductive Synth : Env → Ctx → Expr → Ty → Prop
   | read {env K s p info tn} :
       PlaceOf env K p info → env.norm info.ty = .ok tn → tn.isScalar →
       Synth env K (.read s p) tn
-  /-- `size T` of a sized type, typed as a literal (section 8.4). -/
+  /-- `size T` of a sized type, typed as a literal. -/
   | size {env K s t sz} : env.layout t = .ok sz → Synth env K (.size s t) tU64
-  /-- The call rule of section 16 for a function of the unit. -/
+  /-- The call rule for a function of the unit. -/
   | callFn {env K s f args d t} :
       env.fn? f = some d → ArgsOk env K f d.params args →
       (d.fails → K.mayFail) → d.ret = some t →
       (∀ s' t', t ≠ .opt s' t') →
       Synth env K (.call s f args) t
-  /-- A prelude call with a signature (sections 6, 13, 16). -/
+  /-- A prelude call with a signature. -/
   | callPrelude {env K s f args row params t} :
       env.fn? f = none → env.prelude.call? f = some row →
       row.acquires = none →
       row.fails = none → row.sig = .fn params (some t) →
       PreludeOk env K s row → ArgsOk env K f params args →
       Synth env K (.call s f args) t
-  /-- `errno` in the `else` of a helper call (section 10.5). -/
+  /-- `errno` in the `else` of a helper call. -/
   | errno {env K s} : K.errnoOk → Synth env K (.errno s) tU32
 
-/-- `G;K |- e <= T` (18.3). -/
+/-- `G;K |- e <= T`, checking. -/
 inductive Check : Env → Ctx → Expr → Ty → Prop
   /-- (Lit). -/
   | lit {env K s v text t s' signed w} :
       env.norm t = .ok (.int s' signed w) → representable v signed w →
       Check env K (.lit s v text) t
-  /-- An untyped constant checked at its use (section 6). -/
+  /-- An untyped constant checked at its use. -/
   | constUntyped {env K s x d t env'} :
       env.local? x = none → env.const? x = some d → d.ty = none →
       constEnv env x s = .ok env' → Check env' K d.value t →
@@ -140,7 +139,7 @@ inductive Check : Env → Ctx → Expr → Ty → Prop
   | sub {env K e t t'} :
       Synth env K e t' → env.eqv t' t = .ok true → Check env K e t
 
-/-- `G;K |- p : T place [mut]` (18.3), with the origin of the place. -/
+/-- `G;K |- p : T place [mut]`, with the origin of the place. -/
 inductive PlaceOf : Env → Ctx → Place → PlaceInfo → Prop
   /-- (PVar): a scalar local. -/
   | var {env K s x l} :
@@ -148,7 +147,7 @@ inductive PlaceOf : Env → Ctx → Place → PlaceInfo → Prop
       PlaceOf env K (.var s x)
         { ty := l.ty, mutable := l.mutable, origin := l.origin }
   /-- (PDeref) for a reference named by a binding: `x.f` reads
-  through `x` (section 8.2). The guard premise is session 4. -/
+  through `x`. The guard premise is session 4. -/
   | refVar {env K s x l s' t} :
       env.local? x = some l → l.ty = .ref s' t →
       PlaceOf env K (.var s x) { ty := t, mutable := true, origin := l.origin }
@@ -158,7 +157,7 @@ inductive PlaceOf : Env → Ctx → Place → PlaceInfo → Prop
   | ownVar {env K s x l s' s'' t} :
       env.local? x = some l → l.ty = .own s' (.ref s'' t) →
       PlaceOf env K (.var s x) { ty := t, mutable := true, origin := .kernel }
-  /-- A context field, per the kind's table (section 13). -/
+  /-- A context field, per the kind's table. -/
   | ctx {env K s s' f row cf} :
       env.kind = some row → row.ctx.find? (·.name == f) = some cf →
       PlaceOf env K (.field s (.var s' "ctx") f)
@@ -182,7 +181,7 @@ inductive PlaceOf : Env → Ctx → Place → PlaceInfo → Prop
   | slotPercpu {env K s m i d n v} :
       env.map? m = some d → d.kind = .percpu n v → IndexOk env K i →
       PlaceOf env K (.slot s m i) { ty := v, mutable := true, origin := .map m }
-  /-- (PDeref), explicit, for a scalar pointee (section 8.2). -/
+  /-- (PDeref), explicit, for a scalar pointee. -/
   | derefRef {env K s s' x l s'' t tn} :
       env.local? x = some l → l.ty = .ref s'' t → env.norm t = .ok tn →
       tn.isScalar →
@@ -194,7 +193,7 @@ inductive PlaceOf : Env → Ctx → Place → PlaceInfo → Prop
       PlaceOf env K (.deref s (.var s' x))
         { ty := t, mutable := true, origin := .pkt }
 
-/-- An index is an unsigned integer (section 7). -/
+/-- An index is an unsigned integer. -/
 inductive IndexOk : Env → Ctx → Expr → Prop
   | poly {env K i} : env.isPoly i → Check env K i tU64 → IndexOk env K i
   | typed {env K i t s w} :
@@ -202,7 +201,7 @@ inductive IndexOk : Env → Ctx → Expr → Prop
       env.norm t = .ok (.int s false w) →
       IndexOk env K i
 
-/-- Arguments against parameters (section 16). -/
+/-- Arguments against parameters. -/
 inductive ArgsOk : Env → Ctx → String → List Param → List Arg → Prop
   | nil {env K f} : ArgsOk env K f [] []
   /-- A scalar parameter takes a value. -/
@@ -235,7 +234,7 @@ inductive ArgsOk : Env → Ctx → String → List Param → List Arg → Prop
       env.eqv t t' = .ok true → ArgsOk env K f ps as →
       ArgsOk env K f (p :: ps) (.val (.move s x) :: as)
 
-/-- A prelude call's availability and license (sections 6, 13). -/
+/-- A prelude call's availability and license. -/
 inductive PreludeOk : Env → Ctx → Span → CallRow → Prop
   | mk {env K s row} :
       (row.name.startsWith "pkt." → ∃ r, env.kind = some r ∧ r.hasPkt) →
@@ -245,7 +244,7 @@ inductive PreludeOk : Env → Ctx → Span → CallRow → Prop
 
 end
 
-/-- What a fallible operation binds (section 8.3), the base premises. -/
+/-- What a fallible operation binds, the base premises. -/
 inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
   /-- (View): the offset is a `u64`, the type packet-representable. -/
   | view {env K s off t row sz} :
@@ -266,7 +265,7 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
       fields.find? (·.name == f) = some fd → fd.pred = some pred →
       FallibleOk env K (.loadw s (.field s' q f))
         { ty := some (.refined s f fd.ty pred), origin := .stack }
-  /-- A fallible helper (section 8.3). -/
+  /-- A fallible helper. -/
   | call {env K s f args row params ret} :
       env.fn? f = none → env.prelude.call? f = some row →
       row.acquires = none →
@@ -274,7 +273,7 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
       PreludeOk env K s row →
       ArgsOk env K f params args →
       FallibleOk env K (.call s f args) { ty := ret, origin := .stack }
-  /-- A function returning `T?` (section 10.8). -/
+  /-- A function returning `T?`. -/
   | callopt {env K s f args d s' t} :
       env.fn? f = some d → ArgsOk env K f d.params args →
       (d.fails → K.mayFail) → d.ret = some (.opt s' t) →
@@ -287,7 +286,7 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
         pred = .ok () →
       FallibleOk env K (.coerce s e (.refined s' v base pred))
         { ty := some (.refined s' v base pred), origin := .stack }
-  /-- A spin lock in a map value (section 11.2). -/
+  /-- A spin lock in a map value. -/
   | lock {env K s f t p info s' m} :
       PlaceOf env K p info → env.norm info.ty = .ok (.spinlock s') →
       info.origin = .map m →
@@ -296,7 +295,7 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
   | preempt {env K s f t} :
       FallibleOk env K (.acquire s .preempt f t []) { ty := none }
   | irq {env K s f t} : FallibleOk env K (.acquire s .irq f t []) { ty := none }
-  /-- A ring-buffer record (section 11.2). -/
+  /-- A ring-buffer record. -/
   | ringbuf {env K s f s' m t d n sz} :
       env.map? m = some d → d.kind = .ringbuf n →
       env.notRepresentable t false = .ok none → env.layout t = .ok sz →
@@ -313,10 +312,10 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
 def boundLocal (x : String) (t : Ty) (b : Bound) : Local :=
   { name := x, ty := t, mutable := false, origin := b.origin }
 
-/-- `G;K |- s` (18.4), the base premises, over blocks. -/
+/-- `G;K |- s`, the base premises, over blocks. -/
 inductive StmtsOk : Env → Ctx → List Stmt → Prop
   | nil {env K} : StmtsOk env K []
-  /-- A call for its effect (section 9). -/
+  /-- A call for its effect. -/
   | callStmt {env K s s' f args r rest} :
       synthCall env K s' f args false = .ok r → StmtsOk env K rest →
       StmtsOk env K
@@ -326,12 +325,12 @@ inductive StmtsOk : Env → Ctx → List Stmt → Prop
       x ≠ "_" → bindInit env K s m x ty (.expr e) = .ok l →
       StmtsOk (env.bind l) K rest →
       StmtsOk env K (.«let» s m x ty (.expr e) :: rest)
-  /-- `let x = p`: a scalar read, or an aggregate named (section 8.2). -/
+  /-- `let x = p`: a scalar read, or an aggregate named. -/
   | letPlace {env K s m x ty p l rest} :
       x ≠ "_" → bindInit env K s m x ty (.place p) = .ok l →
       StmtsOk (env.bind l) K rest →
       StmtsOk env K (.«let» s m x ty (.place p) :: rest)
-  /-- A struct literal names a stack place (section 8.2). -/
+  /-- A struct literal names a stack place. -/
   | letLit {env K s x ty ls fields l rest} :
       x ≠ "_" → bindInit env K s false x ty (.lit ls fields) = .ok l →
       StmtsOk (env.bind l) K rest →
@@ -341,7 +340,7 @@ inductive StmtsOk : Env → Ctx → List Stmt → Prop
       PlaceOf env K p info → info.mutable → env.norm info.ty = .ok tn →
       tn.isScalar → Check env K e tn → StmtsOk env K rest →
       StmtsOk env K (.assign s p e :: rest)
-  /-- Both branches, also of a constant condition (section 15). -/
+  /-- Both branches, also of a constant condition. -/
   | ite {env K s c t e rest} :
       Check env K c (.bool c.span) → StmtsOk env K t → StmtsOk env K e →
       StmtsOk env K rest → StmtsOk env K (.ite s c t e :: rest)
@@ -408,7 +407,7 @@ inductive StmtsOk : Env → Ctx → List Stmt → Prop
                | none => env) K rest →
       StmtsOk env K (.atomic s x op p args :: rest)
 
-/-- A function against its signature (section 16): the signature's
+/-- A function against its signature: the signature's
 well-formedness is `checkFn`'s, the body is `StmtsOk`. -/
 inductive FnOk : Env → Fn → Prop
   | mk {env f} :
@@ -422,7 +421,7 @@ def programEnv (env : Env) (row : KindRow) : Env :=
 def verdictNames (p : Program) : Option (List String) :=
   p.verdicts.map (·.map (·.2))
 
-/-- The environment of a handler: the kind, and `reason` (10.6). -/
+/-- The environment of a handler: the kind, and `reason`. -/
 def handlerEnv (env : Env) (row : KindRow) : Env :=
   (programEnv env row).bind
     { name := "reason", ty := tU32, mutable := false, origin := .stack }
@@ -466,7 +465,7 @@ inductive UnitOk : Prelude → CompUnit → Prop
       UnitOk pre u
 
 /-- Soundness of the checker: a unit `checkUnit` accepts is well-typed.
-Stated now, proved after the design settles (PLAN.md, "Later"). -/
+Stated now, proved after the design settles. -/
 theorem check_sound (pre : Prelude) (u : CompUnit) :
     checkUnit pre u = .ok () → UnitOk pre u := by
   sorry

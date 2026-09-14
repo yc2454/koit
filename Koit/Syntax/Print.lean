@@ -245,7 +245,7 @@ def Contract.print (c : Contract) : String :=
 
 /-- The header on one line when it has no clauses, handlers, or
 `fail`; otherwise one header part per line and the body's `{` on its
-own line, as section 23 writes it. -/
+own line, as the examples write it. -/
 def Program.print (p : Program) : String :=
   let head := "program " ++ p.name ++ " : " ++ p.kind ++
     (match p.implements with | some c => " implements " ++ c | none => "")

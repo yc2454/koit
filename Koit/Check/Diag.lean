@@ -4,7 +4,7 @@ import Koit.Syntax.Span
 Diagnostics. A `Diag` is a span and a message; `koitc` prints it as
 `file:line:col: message`. The span is the Core node's, which is the
 span of the surface construct it came from, so the line named is the
-one the programmer wrote (spec/language.md 18.1, PLAN.md session 2).
+one the programmer wrote.
 
 The checker stops at the first error: its monad is `Except Diag`.
 -/

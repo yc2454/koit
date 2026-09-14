@@ -1,7 +1,7 @@
 import Koit.Core.Syntax
 
 /-!
-Printing Core in the notation of spec/language.md section 18.1, for
+Printing Core in its own notation, for
 `koitc desugar`. The output is for reading, not for parsing back:
 `try x = F then { ... } else { ... }`, `rd p`, `raise k e`, `hold R x
 = acquire R f(a...)`, `loop n { ... }`, with one statement per line.
@@ -248,7 +248,8 @@ def ConfigDecl.print (d : ConfigDecl) : String :=
 def MapDecl.print (d : MapDecl) : String :=
   "map " ++ d.name ++ " : " ++ d.kind.print
 
-/-- Declarations in the order of section 23.1, separated by blank
+/-- Declarations in the order of a unit's template (constants and
+types, maps, functions, entry points), separated by blank
 lines, ending in a newline. -/
 def CompUnit.print (u : CompUnit) : String :=
   let items :=

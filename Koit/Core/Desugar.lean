@@ -5,15 +5,15 @@ import Koit.Core.Print
 import Koit.Check.Prelude
 
 /-!
-Desugaring, surface to Core, per spec/language.md section 18.4 (the
-`~>` parts of its rules) and spec/ISSUES.md entry 8. It is a total
+Desugaring, surface to Core: the syntactic rewrite of each surface
+construct into its Core form. It is a total
 function over the unit's declarations and the prelude tables, and it
 uses no types: what needs a type stays in Core (functions, constant
 conditionals, `for`, and a binding whose right side is a place).
 
 What it does: markers and `else` tails become `try` with an explicit
-`raise` of the operation's kind (sections 8.3, 10.5); `check P` is the
-coercion of section 10.4; `if let` is a `try` whose `else` need not
+`raise` of the operation's kind; `check P` is the
+coercion `P as {b: bool | b}`; `if let` is a `try` whose `else` need not
 exit; `hold` takes its resource from the resource table and its tail
 becomes the `else` of the acquisition; `for x in it bounded N` is the
 `hold` plus `loop` plus `try next` of (ForIter); verdict statements
@@ -21,13 +21,13 @@ are `return` of the kind's verdict constant; `fail` is `raise` with the
 enclosing `else` block's kind or `program`; `-e` is `0 - e`; `p op= e`
 is `p := rd p op e`; a function body's tail expression is its
 `return`; and every program's handler table is made total from its
-handlers, its `fail` exit, and the kind's default (section 10.7).
+handlers, its `fail` exit, and the kind's default.
 
 Surface forms with no meaning where they stand, a fallible operation
-outside the positions of section 10.2 for instance, become `invalid`
+outside the positions that consume one for instance, become `invalid`
 nodes carrying the diagnostic, so that the function is total and the
-checker reports the error at the source line (spec/ISSUES.md, entry
-11). Fresh names contain `$`, which no surface identifier can.
+checker reports the error at the source line. Fresh names contain
+`$`, which no surface identifier can.
 -/
 
 namespace Koit.Core
@@ -102,7 +102,7 @@ def primTy? (span : Span) : String → Option Ty
 def lit0 (span : Span) : Expr := .lit span 0 "0"
 
 /-- The default reason of a `raise` of kind `k`: the helper's negative
-return for `helper`, 0 otherwise (section 10.5). -/
+return for `helper`, 0 otherwise. -/
 def defaultReason (span : Span) : Kind → Expr
   | .helper => .errno span
   | _ => lit0 span
@@ -110,7 +110,7 @@ def defaultReason (span : Span) : Kind → Expr
 def unmarkedMsg (what : String) (k : Kind) : String :=
   s!"{what} can fail (kind `{k}`): a fallible operation appears only \
     as the initializer of `let`, `var`, `if let`, or `hold`, or as a \
-    statement, marked with `?` or followed by `else` (section 10.2)"
+    statement, marked with `?` or followed by `else`"
 
 def BinOp.arith? : Syntax.BinOp → Option ArithOp
   | .mul => some .mul | .div => some .div | .mod => some .mod
@@ -241,7 +241,7 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
   | _ => return none
 
 /-- An expression in value position. A fallible operation here is an
-error the checker reports (section 10.2). -/
+error the checker reports. -/
 partial def dExpr (c : Ctx) (e : Syntax.Expr) : M Expr := do
   if let some op ← fallible? c false e then
     match op with
@@ -283,7 +283,7 @@ partial def dExpr (c : Ctx) (e : Syntax.Expr) : M Expr := do
   | .call s (.var _ f) _ =>
     if (AtomicOp.ofString? f).isSome then
       return .invalid s s!"`{f}` appears only as the initializer of a \
-        binding or as a statement (section 8.5)"
+        binding or as a statement"
     else
       return .call s f (← callArgs c e)
   | .call s f _ => return .call s (← calleeName c f) (← callArgs c e)
@@ -292,7 +292,7 @@ partial def dExpr (c : Ctx) (e : Syntax.Expr) : M Expr := do
       forms are `pkt.view<T>(off)` and `rb.reserve<T>()`"
   | .structLit s _ =>
     return .invalid s "a struct literal appears only as the initializer \
-      of `let` or `var` (section 8.2)"
+      of `let` or `var`"
 
 /-- The name a call's callee denotes: a function, a prelude call, or
 a method on `pkt` or a map spelled with its receiver. -/
@@ -348,7 +348,7 @@ partial def dPlace (c : Ctx) (e : Syntax.Expr) : M Place := do
   | .unary s .deref e => return .deref s (← dExpr c e)
   | _ =>
     return .invalid e.span s!"`{e.print}` is not a place: a place is a \
-      variable, a map slot, a field, an element, or `*x` (section 8.2)"
+      variable, a map slot, a field, an element, or `*x`"
 
 end
 
@@ -421,7 +421,7 @@ partial def dInit (c : Ctx) (span : Span) (mutable : Bool) (x : String)
     return .«let» span mutable x ty (.expr (← dExpr c init))
 
 /-- The verdict statement of a kind, as `return` of the verdict's
-name (section 13). -/
+name. -/
 partial def dVerdict (c : Ctx) (span : Span) (v : Syntax.Verdict) : Stmt :=
   let word := v.spelling
   match c.kind with
@@ -431,7 +431,7 @@ partial def dVerdict (c : Ctx) (span : Span) (v : Syntax.Verdict) : Stmt :=
     match row.sugar.lookup word with
     | some name => .ret span (some (.var span name))
     | none => .ret span (some (.invalid span s!"`{word}` is not a verdict \
-        statement of a `{row.name}` program (section 13)"))
+        statement of a `{row.name}` program"))
 
 /-- The acquisition of a `hold`, with its resource. -/
 partial def acquisition (c : Ctx) (acq : Syntax.Expr) :
@@ -518,7 +518,7 @@ partial def dStmts (c : Ctx) : List Syntax.Stmt → M (List Stmt)
         let s' : Stmt := .invalid acq.span s!"`{acq.print}` is not a \
           resource acquisition: the rows of the resource table are \
           `lock(p)`, `rcu`, `preempt_off`, `irq_off`, `rb.reserve<T>()`, \
-          `sk_lookup_tcp(t)`, and `sk_lookup_udp(t)` (section 11.2)"
+          `sk_lookup_tcp(t)`, and `sk_lookup_udp(t)`"
         return s' :: (← dStmts c rest)
     | .check span cond tail =>
       let p ← dExpr c cond
@@ -650,14 +650,14 @@ def dContract (info : Info) (k : Syntax.Contract) : M Contract := do
            preserved }
 
 /-- The intersection of two verdict sets, or the one given; the
-demands of a contract and inline clauses are their union (14.2). -/
+demands of a contract and inline clauses are their union. -/
 def meetVerdicts : Option (List (Span × String)) →
     Option (List (Span × String)) → Option (List (Span × String))
   | some a, some b => some (a.filter fun (_, n) => b.any (·.2 == n))
   | some a, none => some a
   | none, b => b
 
-/-- A program's total handler table (section 10.7), and the problems
+/-- A program's total handler table, and the problems
 found while building it, as `invalid` statements for the body. -/
 def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
     M (List Handler × List Stmt) := do
@@ -669,10 +669,10 @@ def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
       if (Kind.ofString? k).isNone then
         problems := problems ++ [.invalid h.span s!"`{k}` is not a failure \
           kind; the kinds are short_packet, missing, invariant, bound, \
-          helper, and program (section 10.1)"]
+          helper, and program"]
       else if seen.contains k then
         problems := problems ++ [.invalid h.span s!"the kind `{k}` has two \
-          handlers; at most one handler per kind (section 10.6)"]
+          handlers; at most one handler per kind"]
       seen := seen ++ [k]
   if (p.handlers.filter (·.kinds.isNone)).length > 1 then
     problems := problems ++ [.invalid p.span "two `on _` handlers"]
