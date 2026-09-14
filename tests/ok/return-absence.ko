@@ -1,0 +1,16 @@
+// A function returning `T?` produces absence with a bare `return`;
+// the caller consumes the optional with `?`, `else`, or `if let`.
+type Flow = { saddr: be32, daddr: be32 }
+map verdicts : hash[64] of Flow -> { v: u32 }
+map keys : array[1] of Flow
+
+fn lookup(k: ref Flow) -> u32? {
+  if let f = verdicts[k] { return f.v } else { return }
+}
+
+program p : xdp fail drop {
+  let key = keys[0]
+  let v = lookup(key) else { pass }
+  if v == 1 { drop }
+  pass
+}

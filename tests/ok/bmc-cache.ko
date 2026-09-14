@@ -19,9 +19,9 @@ const REASON_LONG_KEY = 2
 type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
 
 type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
-                 ttl: u8, proto: u8, csum: be16,
+                 ttl: u8, protocol: u8, csum: be16,
                  saddr: be32, daddr: be32 }
-type UdpHdr  = { sport: be16, dport: be16, len: be16, csum: be16 }
+type UdpHdr  = { source: be16, dest: be16, len: be16, csum: be16 }
 type McHdr   = { req_id: be16, seq: be16, n: be16, reserved: be16 }
 
 type Entry = {
@@ -61,10 +61,10 @@ program bmc_rx : xdp fail pass
   if eth.proto != ETH_P_IP { pass }
   off += EthHdr.size
   let ip = pkt.view<Ipv4Hdr>(off)?
-  if ip.proto != IPPROTO_UDP { pass }
+  if ip.protocol != IPPROTO_UDP { pass }
   off += ((ip.vihl & 0xf) as u64) * 4
   let udp = pkt.view<UdpHdr>(off)?
-  if udp.dport != MC_PORT { pass }
+  if udp.dest != MC_PORT { pass }
   off += UdpHdr.size + McHdr.size
   let cmd = pkt.view<u8[4]>(off)?
   let is_get = cmd[0] == 'g' && cmd[1] == 'e' && cmd[2] == 't' && cmd[3] == ' '
@@ -140,11 +140,11 @@ program bmc_tx : tc fail pass
   if eth.proto != ETH_P_IP { pass }
   off += EthHdr.size
   let ip = pkt.view<Ipv4Hdr>(off)?
-  if ip.proto != IPPROTO_UDP { pass }
+  if ip.protocol != IPPROTO_UDP { pass }
   off += ((ip.vihl & 0xf) as u64) * 4
   let udp = pkt.view<UdpHdr>(off)?
   // a reply comes from the server's port
-  if udp.sport != MC_PORT { pass }
+  if udp.source != MC_PORT { pass }
   off += UdpHdr.size + McHdr.size
   // the reply text starts here
   let voff = off

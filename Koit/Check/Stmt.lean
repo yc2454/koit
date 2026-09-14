@@ -136,9 +136,8 @@ def checkRet (env : Env) (K : Ctx) (span : Span) (v : Option Expr) :
     err span "a program returns a verdict"
   | .fn _ none, none => pure ()
   | .fn f none, some _ => err span s!"`{f}` returns nothing"
-  | .fn _ (some (.opt _ t)), none =>
-    err span s!"a bare `return` in a function returning `{t.print}?` is not \
-      yet defined by the language (an open design point)"
+  -- absence from a function returning `T?`
+  | .fn _ (some (.opt ..)), none => pure ()
   | .fn _ (some (.opt _ t)), some e => check env K e t
   | .fn f (some t), none =>
     err span s!"`return` needs a value: `{f}` returns `{t.print}`"

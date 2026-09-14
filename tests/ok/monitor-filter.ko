@@ -7,7 +7,7 @@
 const ETH_P_IP = hton(0x0800)
 type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
 type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
-                 ttl: u8, proto: u8, csum: be16,
+                 ttl: u8, protocol: u8, csum: be16,
                  saddr: be32, daddr: be32 }
 // not in 23.4: the flow key, named there but never declared
 type Flow = { saddr: be32, daddr: be32 }
