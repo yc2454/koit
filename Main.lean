@@ -78,13 +78,13 @@ def run (args : List String) : IO UInt32 := do
   | ["desugar", file] => do
     match ← parseFile file with
     | some u =>
-      IO.print (Core.desugar Check.prelude u).print
+      IO.print (Core.desugar Prelude.stage1 u).print
       return 0
     | none => return 1
   | ["check", file] => do
     match ← parseFile file with
     | some u =>
-      match Check.checkUnit Check.prelude (Core.desugar Check.prelude u) with
+      match Check.checkUnit Prelude.stage1 (Core.desugar Prelude.stage1 u) with
       | .ok () =>
         IO.println s!"{file}: ok"
         return 0

@@ -1,4 +1,4 @@
-import Koit.Check.Env
+import Koit.Check.Types
 
 /-!
 Expression, place, call, and fallible-operation typing: the executable
@@ -21,6 +21,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
+open Koit.Prelude (CallRow tU32 tU64)
 
 /-- The type of a place, whether it may be written, and where it
 lives. -/

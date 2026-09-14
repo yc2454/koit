@@ -2,7 +2,7 @@ import Koit.Syntax.AST
 import Koit.Syntax.Print
 import Koit.Core.Syntax
 import Koit.Core.Print
-import Koit.Check.Prelude
+import Koit.Prelude.Tables
 
 /-!
 Desugaring, surface to Core: the syntactic rewrite of each surface
@@ -33,7 +33,7 @@ checker reports the error at the source line. Fresh names contain
 namespace Koit.Core
 
 open Koit (Span)
-open Koit.Check (Prelude KindRow)
+open Koit.Prelude (KindRow)
 
 namespace Desugar
 

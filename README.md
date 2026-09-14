@@ -51,7 +51,12 @@ facts, entailment, effects, and resources are sessions 3 and 4; the
 Core interpreter follows; the C backend and the kernel table generator
 are the phase after. `tests/run.sh` runs the corpus; `KOIT_STAGE=check`
 runs the checker over it. The stage-1 prelude, the tables of section
-13 for `xdp`, `tc`, and `syscall`, is `Koit/Check/Prelude.lean`.
+13 for `xdp`, `tc`, and `syscall`, is `Koit/Prelude/Stage1.lean` over
+the row types of `Koit/Prelude/Tables.lean`. The checker is
+`Koit/Check/` (one judgment: `Env`, `Types`, `Expr`, `Stmt`, `Decl`,
+and `Rules` for the judgment as a proposition); the refinement layer
+(`Koit/Facts/`) and the effect layer (`Koit/Effects/`) are its next
+two inputs.
 
 Rule while implementing: gaps or contradictions found in the spec are
 logged in `spec/ISSUES.md` with a proposed resolution, not silently

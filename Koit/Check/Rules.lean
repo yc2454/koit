@@ -1,4 +1,4 @@
-import Koit.Check.Checker
+import Koit.Check.Decl
 
 /-!
 The typing judgment of Core as a proposition: the expression and
@@ -22,6 +22,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
+open Koit.Prelude (KindRow CallRow tU32 tU64)
 
 /-- The comparisons a byte-order value admits. -/
 def isCmpBe : CmpOp → Bool

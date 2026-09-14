@@ -7,9 +7,12 @@ import Koit.Syntax.Print
 import Koit.Core.Syntax
 import Koit.Core.Print
 import Koit.Core.Desugar
-import Koit.Check.Prelude
+import Koit.Prelude.Tables
+import Koit.Prelude.Stage1
 import Koit.Check.Diag
 import Koit.Check.Env
-import Koit.Check.Typing
-import Koit.Check.Checker
+import Koit.Check.Types
+import Koit.Check.Expr
+import Koit.Check.Stmt
+import Koit.Check.Decl
 import Koit.Check.Rules

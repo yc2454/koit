@@ -1,6 +1,7 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
-import Koit.Check.Checker
+import Koit.Check.Decl
+import Koit.Prelude.Stage1
 
 /-!
 Checks on the base checker over small units: `ok` accepts, `has`
@@ -15,7 +16,7 @@ open Koit Koit.Syntax Koit.Core Koit.Check
 private def chk (s : String) : Except Diag Unit :=
   match parse s with
   | .error e => .error { span := e.span, msg := s!"parse: {e.msg}" }
-  | .ok u => checkUnit prelude (desugar prelude u)
+  | .ok u => checkUnit Prelude.stage1 (desugar Prelude.stage1 u)
 
 private def ok (s : String) : Bool := (chk s).toOption.isSome
 
