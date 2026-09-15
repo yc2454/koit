@@ -168,11 +168,135 @@ partial def placeArgs (calls : List (String × List Arg)) : List Place :=
 
 end
 
+/-! ### What a statement mentions -/
+
+/-- The arguments of a call as expressions, a place read. -/
+def argExprs (args : List Arg) : List Expr :=
+  args.filterMap fun
+    | .val e => some e
+    | .place p => some (.read p.span p)
+    | .map .. => none
+
+/-- The operands of a fallible operation. -/
+def fallibleExprs : Fallible → List Expr
+  | .view _ off _ => [off]
+  | .lookup _ _ k => [.read k.span k]
+  | .loadw _ p => [.read p.span p]
+  | .coerce _ e _ => [e]
+  | .call _ _ args | .callopt _ _ args | .acquire _ _ _ _ args => argExprs args
+
+/-- The expressions a statement evaluates itself, apart from its
+blocks. -/
+def ownExprs : Stmt → List Expr
+  | .«let» _ _ _ _ (.expr e) => [e]
+  | .«let» _ _ _ _ (.place p) => [.read p.span p]
+  | .«let» _ _ _ _ (.lit _ fs) => fs.map (·.value)
+  | .assign _ p e => [.read p.span p, e]
+  | .ite _ c .. => [c]
+  | .loop _ n _ => [n]
+  | .«for» _ _ lo hi _ => [lo, hi]
+  | .ret _ (some e) => [e]
+  | .raise _ _ r => [r]
+  | .«try» _ _ f .. => fallibleExprs f
+  | .hold _ _ _ f .. => fallibleExprs f
+  | .atomic _ _ _ p args => .read p.span p :: args
+  | _ => []
+
+mutual
+
+/-- The names an expression mentions, with their positions, through
+calls; with `movesOnly`, the names it moves. -/
+partial def namesInExpr (movesOnly : Bool) : Expr → List (Span × String)
+  | .var s x => if movesOnly then [] else [(s, x)]
+  | .move s x => [(s, x)]
+  | .arith _ _ l r | .cmp _ _ l r | .and _ l r | .or _ l r =>
+    namesInExpr movesOnly l ++ namesInExpr movesOnly r
+  | .not _ e | .cast _ e _ | .hton _ e | .ntoh _ e => namesInExpr movesOnly e
+  | .read _ p => namesInPlace movesOnly p
+  | .call _ _ args => args.flatMap fun
+    | .val e => namesInExpr movesOnly e
+    | .place p => namesInPlace movesOnly p
+    | .map .. => []
+  | _ => []
+
+partial def namesInPlace (movesOnly : Bool) : Place → List (Span × String)
+  | .var s x => if movesOnly then [] else [(s, x)]
+  | .field _ p _ => namesInPlace movesOnly p
+  | .index _ p i => namesInPlace movesOnly p ++ namesInExpr movesOnly i
+  | .slot _ _ i => namesInExpr movesOnly i
+  | .deref _ e => namesInExpr movesOnly e
+  | .invalid .. => []
+
+end
+
+/-! ### Guards -/
+
+/-- Whether a call has the `resize` effect: a prelude row that says
+so, or a function of the unit whose summary has it. -/
+def resizes (env : Env) (f : String) : Bool :=
+  match env.prelude.call? f with
+  | some row => (Effs.ofCore row.effects).has .resize
+  | none => ((env.fnEffects.lookup f).map (·.has .resize)).getD false
+
+/-- The call as the programmer names it: `adjust_head` for the
+prelude's `pkt.adjust_head`. -/
+def callSpelling (f : String) : String :=
+  if f.startsWith "pkt." then (f.drop 4).toString else f
+
+/-- The calls a statement makes itself, apart from its blocks: the
+fallible operation of a `try` or `hold`, and the calls in its
+expressions. -/
+def ownCalls : Stmt → List (String × List Arg)
+  | .«try» _ _ f .. | .hold _ _ _ f .. => callsInFallible f
+  | s => (ownExprs s).flatMap callsInExpr
+
+/-- The first resizing call among a statement's own calls, with where
+it is. -/
+def resizerOf (env : Env) (s : Stmt) : Option (Span × String) :=
+  (ownCalls s).findSome? fun (f, _) =>
+    if resizes env f then some (s.span, callSpelling f) else none
+
+/-- The first resizing call in a block, at any depth. -/
+partial def resizeIn (env : Env) (ss : List Stmt) : Option (Span × String) :=
+  ss.findSome? fun s =>
+    resizerOf env s <|>
+    match s with
+    | .ite _ _ t e => resizeIn env t <|> resizeIn env e
+    | .loop _ _ b | .«for» _ _ _ _ b => resizeIn env b
+    | .«try» _ _ _ t e _ => resizeIn env t <|> resizeIn env e
+    | .hold _ _ _ _ b e => resizeIn env b <|> (e.bind (resizeIn env))
+    | _ => none
+
+/-- The views in scope: the locals of a `view` type. -/
+def viewsInScope (env : Env) : List String :=
+  env.locals.filterMap fun l => match l.ty with
+    | .view .. => some l.name
+    | _ => none
+
+/-- The context a statement is checked in, for its guards: a mention
+of a view whose token was dropped is an error at the use, naming the
+statement that dropped it; then, if the statement itself resizes the
+packet, every view in scope is dead for its blocks and after it. -/
+def guardCtx (env : Env) (K : Ctx) (s : Stmt) : M Ctx := do
+  for (sp, x) in (ownExprs s).flatMap (namesInExpr false) do
+    if let some (at_, f) := K.facts.dead? x then
+      err sp s!"view `{x}` was invalidated by `{f}` at line {at_.start.line}; \
+        carve it again after the resize"
+  match resizerOf env s with
+  | some (sp, f) =>
+    return { K with facts := K.facts.killViews (viewsInScope env) sp f }
+  | none => return K
+
+
 /-- The facts at a loop head: what the body may write is dropped,
-with every shared place, and the refinements in scope hold again. -/
+with every shared place, and the refinements in scope hold again; if
+the body resizes the packet, every view in scope is dead. -/
 def loopHead (env : Env) (sc : Scope) (F : Facts) (body : List Stmt) :
     Facts :=
-  (refinementFacts env).foldl Facts.add (F.inv sc (assignedIn body))
+  let F := (refinementFacts env).foldl Facts.add (F.inv sc (assignedIn body))
+  match resizeIn env body with
+  | some (sp, f) => F.killViews (viewsInScope env) sp f
+  | none => F
 
 /-! ### Bindings -/
 
@@ -403,65 +527,6 @@ def meetK (env : Env) (K : Ctx) (F1 F2 : Facts) : Facts :=
 
 
 /-! ### Ownership -/
-
-/-- The arguments of a call as expressions, a place read. -/
-def argExprs (args : List Arg) : List Expr :=
-  args.filterMap fun
-    | .val e => some e
-    | .place p => some (.read p.span p)
-    | .map .. => none
-
-/-- The operands of a fallible operation. -/
-def fallibleExprs : Fallible → List Expr
-  | .view _ off _ => [off]
-  | .lookup _ _ k => [.read k.span k]
-  | .loadw _ p => [.read p.span p]
-  | .coerce _ e _ => [e]
-  | .call _ _ args | .callopt _ _ args | .acquire _ _ _ _ args => argExprs args
-
-/-- The expressions a statement evaluates itself, apart from its
-blocks. -/
-def ownExprs : Stmt → List Expr
-  | .«let» _ _ _ _ (.expr e) => [e]
-  | .«let» _ _ _ _ (.place p) => [.read p.span p]
-  | .«let» _ _ _ _ (.lit _ fs) => fs.map (·.value)
-  | .assign _ p e => [.read p.span p, e]
-  | .ite _ c .. => [c]
-  | .loop _ n _ => [n]
-  | .«for» _ _ lo hi _ => [lo, hi]
-  | .ret _ (some e) => [e]
-  | .raise _ _ r => [r]
-  | .«try» _ _ f .. => fallibleExprs f
-  | .hold _ _ _ f .. => fallibleExprs f
-  | .atomic _ _ _ p args => .read p.span p :: args
-  | _ => []
-
-mutual
-
-/-- The names an expression mentions, with their positions, through
-calls; with `movesOnly`, the names it moves. -/
-partial def namesInExpr (movesOnly : Bool) : Expr → List (Span × String)
-  | .var s x => if movesOnly then [] else [(s, x)]
-  | .move s x => [(s, x)]
-  | .arith _ _ l r | .cmp _ _ l r | .and _ l r | .or _ l r =>
-    namesInExpr movesOnly l ++ namesInExpr movesOnly r
-  | .not _ e | .cast _ e _ | .hton _ e | .ntoh _ e => namesInExpr movesOnly e
-  | .read _ p => namesInPlace movesOnly p
-  | .call _ _ args => args.flatMap fun
-    | .val e => namesInExpr movesOnly e
-    | .place p => namesInPlace movesOnly p
-    | .map .. => []
-  | _ => []
-
-partial def namesInPlace (movesOnly : Bool) : Place → List (Span × String)
-  | .var s x => if movesOnly then [] else [(s, x)]
-  | .field _ p _ => namesInPlace movesOnly p
-  | .index _ p i => namesInPlace movesOnly p ++ namesInExpr movesOnly i
-  | .slot _ _ i => namesInExpr movesOnly i
-  | .deref _ e => namesInExpr movesOnly e
-  | .invalid .. => []
-
-end
 
 /-- The context a statement is checked in: a mention of a name moved
 on this path is an error, since the name is dead after its `move`;
@@ -873,6 +938,7 @@ names it declared, and its effects, its own checked against the
 preserved regions and joined with those of the blocks inside it. -/
 partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
     M (Env × Facts × List String × Effs) := do
+  let K ← guardCtx env K s
   let K ← moveCtx K s
   let (env', F', names, Esub) ← checkStmtBody env K s
   let E ← stmtEffects env K s

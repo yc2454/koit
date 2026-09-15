@@ -7,8 +7,9 @@ semantic entailment of `Facts.lean`, and the statement rules carrying
 the facts from one statement to the next, each with its effect set
 `E`: the statement's own effects, checked against the preserved
 regions and the held set, joined with those of its blocks. `StmtOkPath`
-wraps a statement with its ownership premises: no moved name is
-mentioned, and its own moves are on the path before its blocks.
+wraps a statement with its guard and ownership premises: no killed
+view and no moved name is mentioned, and its own resize and moves are
+on the path before its blocks.
 
 `checkUnit` (Decl.lean) is the decision procedure for this judgment;
 `check_sound` states that a unit it accepts is well-typed, and rests
@@ -553,13 +554,15 @@ inductive StmtOk :
          | none => [])
         E
 
-/-- A statement on its path: no name moved on the path is mentioned,
-its own moves are recorded before its blocks, and it is well-typed
-under that context. -/
+/-- A statement on its path: no view whose token was dropped and no
+name moved on the path is mentioned, its own resize and moves are
+recorded before its blocks, and it is well-typed under that
+context. -/
 inductive StmtOkPath :
     Env → Ctx → Stmt → Env → Facts → List String → Effs → Prop
-  | mk {env K K' s env' F' ns E} :
-      moveCtx K s = .ok K' → StmtOk env K' s env' F' ns E →
+  | mk {env K K1 K' s env' F' ns E} :
+      guardCtx env K s = .ok K1 → moveCtx K1 s = .ok K' →
+      StmtOk env K' s env' F' ns E →
       StmtOkPath env K s env' F' ns E
 
 /-- `G;F;K |- s* -| F' ; E`: a sequence, each statement under the

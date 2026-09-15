@@ -230,6 +230,11 @@ structure Facts where
   state carried with the facts because it joins where they join, and
   the two sides of a join must agree on it. -/
   moved   : List (String × Span) := []
+  /-- The views whose guard, the packet's layout token, was dropped on
+  this path, each with the resizing statement and its call: path
+  state like `moved`, joined by union, since a view dead on either
+  side is dead after. -/
+  dead    : List (String × Span × String) := []
   deriving Inhabited
 
 namespace Facts
@@ -246,6 +251,17 @@ def addMoved (F : Facts) (x : String) (s : Span) : Facts :=
 /-- Whether `x` is moved on this path, with the `move`. -/
 def moved? (F : Facts) (x : String) : Option Span :=
   (F.moved.find? (·.1 == x)).map (·.2)
+
+/-- After a statement with the `resize` effect at `s`, through the
+call `f`: every view in scope is dead. -/
+def killViews (F : Facts) (views : List String) (s : Span) (f : String) :
+    Facts :=
+  let fresh := views.filter fun h => !F.dead.any (·.1 == h)
+  { F with dead := F.dead ++ fresh.map fun h => (h, s, f) }
+
+/-- Whether the view `h` is dead on this path, with what killed it. -/
+def dead? (F : Facts) (h : String) : Option (Span × String) :=
+  (F.dead.find? (·.1 == h)).map (·.2)
 
 /-- A reference bound to a place: `let r = m[0]`. -/
 def alias (F : Facts) (x : String) (p : Place) : Facts :=
@@ -398,7 +414,8 @@ def dropNames (F : Facts) (names : List String) : Facts :=
     | some x => names.contains x
     | none => false
   { F with aliases := F.aliases.filter fun (x, _) => !names.contains x,
-           moved := F.moved.filter fun (x, _) => !names.contains x }
+           moved := F.moved.filter fun (x, _) => !names.contains x,
+           dead := F.dead.filter fun (x, _) => !names.contains x }
 
 /-- At a loop head: the facts about what the body assigns and about
 shared places go; the body's own facts are added by the loop rule. -/
@@ -679,7 +696,8 @@ def meet (sc : Scope) (F1 F2 : Facts) : Facts :=
     -- the two sides agree on what is moved, or the join is an error
     -- the checker reports before it meets them
     { facts := common ++ hull, aliases := F1.aliases, bottom := false, caps,
-      moved := F1.moved }
+      moved := F1.moved,
+      dead := F1.dead ++ F2.dead.filter fun (h, _) => !F1.dead.any (·.1 == h) }
 
 /-- The facts printed one per line, for messages and tests. -/
 def print (F : Facts) : List String :=
