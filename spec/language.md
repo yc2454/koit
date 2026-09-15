@@ -1346,6 +1346,34 @@ a store, `inv(F, s)` keeping facts about variables not assigned in `s`
 at a loop head, and `meet` intersecting the facts of two branches.
 Effects are unioned along the way.
 
+The three operations, precisely. A fact is about the places it
+mentions, with a reference bound by `let r = p` read as the place `p`
+it names. `kill(F, p)` removes every fact mentioning a place that is
+`p`, lies inside `p`, or contains `p`, two indexes being taken as
+possibly equal unless both are literals that differ; and, since the
+checker does not compute aliasing between them, a store through a
+`ref` parameter removes every fact about every `ref` parameter of the
+function, and a store through a view every fact about every view. Any
+`call` removes every fact about a place off the stack: a map value,
+the context, the packet, a `ref` parameter, a kernel object. `inv(F,
+s)` removes the facts about what `s` may assign, including every place
+passed to a call in `s`, and every fact about a place off the stack,
+then restores the refinements of the locals in scope, which every
+store re-establishes. `meet(F1, F2)` keeps the facts present in both
+and, for each variable, the hull of what each side knew about it as
+new facts, so that `x < 5` on one path and `x < 7` on the other leave
+`x <= 6`; a path that has exited contributes nothing. Facts about a
+block's locals end with the block.
+
+A branch condition and a `check` establish facts about stack places
+only: a conjunct that reads a place in a map, the context, the packet,
+a `ref` parameter, or a kernel object yields nothing, since the place
+may change between the test and the use and the fragment of section
+17 excludes such reads from predicates. A value read from a shared
+place is given a fact by reading it into a name and testing the name,
+or by a marked load. The fact sources that mention shared places are
+the record `p = e` of (Assign) and the view offset `off(h) = e`.
+
 ```
 (Mark)
     e fallible of kind k with result type T
@@ -1516,7 +1544,16 @@ same variables, with equal names substituted for each other; and
 abstract interpretation of `P` over a state computed forward from `F`
 in the reduced product of intervals and known bits, with exact
 treatment of `%` and `/` by constants and `&` with a constant mask. No
-solver. The restriction is not provisional: it is principle P9. The
+solver. The state gives each variable one interval, read in the
+signedness of its type, and its known bits, kept consistent with each
+other; a cast between widths is exact, as the verifier tracks it. It
+is computed from the facts in the order they entered, each narrowing
+with what was known when it arrived and no iteration to a fixpoint,
+which is what a verifier re-derives at the branches in that order;
+the join of two paths is the hull, written back as facts by `meet`.
+`F` itself is the list of facts, not the state: the state is built
+when a demand is checked and discarded after, so that membership,
+`kill`, `meet`, and the soundness statement all speak of predicates. The restriction is not provisional: it is principle P9. The
 procedure decides exactly the facts the verifier's own domain
 re-derives from the branches the lowering emits, so a fact it proves
 can be elided without loss of acceptance, and a fact it cannot prove
@@ -1541,8 +1578,9 @@ used in testing; and the mechanization of the procedure's soundness
 Inferred: types of `let` and `var` from initializers; literal and
 untyped-constant types from context; effect sets of functions; the
 facts `F`, by forward abstract interpretation with path facts from
-branches, marked loads, and checks, with loops handled by iterating to a
-fixpoint under the declared trip count. Never inferred: map types,
+branches, marked loads, and checks, with loops handled at the head by
+`inv`, which drops what the body may change and so stabilizes in one
+step. Never inferred: map types,
 field types, signatures, contracts, loop bounds, program kinds, failure
 policy, `fails`. Refinements are checked, not searched for.
 
@@ -1787,6 +1825,26 @@ Revisions of 2026-09-14, second pass, from `ISSUES.md` entries 13 to 17:
     stated non-claim; `own T` uniformly (entry 15).
 37. The callback-loop rules recorded with the deferral (entry 16).
 38. Lemma L's two lowering obligations (entry 17).
+Revisions of 2026-09-15, settled before the entailment code was
+written:
+39. `F` is the list of facts as they entered, with view offsets and
+    name equalities; the abstract state is built from it at a demand,
+    in entry order without a fixpoint, and written back only at a
+    join as the hull (18.5).
+40. Facts are about places, read through the references `let` binds;
+    `kill`, the alias groups of `ref` parameters and of views, the
+    kill of every shared fact at a call, and `inv` and `meet` as 18.4
+    now states them.
+41. A branch or a `check` yields facts about stack places only; shared
+    places carry the store record and the view offset (18.4). Entry
+    19 questions the store record.
+42. One interval per variable, in its type's signedness, with known
+    bits; not the verifier's paired ranges. P9 is one-directional, so
+    the smaller domain is safe, and the corpus demands are unsigned
+    (18.5).
+43. The cap of a `for` loop is an output of the checker to the
+    lowering, by loop, not a Core annotation; the postcondition of a
+    function is a fact at the binding of its call (16).
 
 Open questions, with the default the checker implements until decided:
 
