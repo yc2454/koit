@@ -119,11 +119,16 @@ def checkConfig (env : Env) (d : ConfigDecl) : M Unit := do
   | _ =>
     err d.ty.span s!"a configuration constant is an integer or a `bool`; \
       `{d.ty.print}` is neither"
-  if let some i := d.init then
+  match d.init with
+  | some i =>
     unless env.isConstExpr i do
       err i.span "the default of a configuration constant is a constant \
         expression"
     check env.top K0 i d.ty
+  | none =>
+    -- the facts use the build's value, and no build supplies one yet
+    err d.span s!"`{d.name}` has no value for this build: give it a default \
+      "
 
 /-- Every field predicate in a data type must hold of the all-zero
 value: the value of an array map starts as zeros. -/

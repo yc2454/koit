@@ -588,7 +588,8 @@ predicate taken from the declaration. There is no `assume`.
 
 Literals, constants, configuration constants, `T.size`, `hton` of a
 constant, and arithmetic over these, evaluated at compile time in the
-type of the context. Loop bounds, array sizes, and map capacities are
+type of the context; a configuration constant evaluates to its value
+for the build (section 15). Loop bounds, array sizes, and map capacities are
 constant expressions. A map capacity, an array length, and a `repeat`
 count have no type of their own: there, a constant expression of any
 unsigned integer type is accepted and evaluated in that type.
@@ -1057,10 +1058,18 @@ optional default. It is usable wherever a constant expression is: map
 capacities, array sizes, loop bounds, conditions. A conditional whose
 condition is a constant expression is folded by the compiler and the
 dead branch is not emitted, which preserves meaning because the branch
-could not run. Both branches are type-checked, so every variant of a
-program is checked by checking it once. This draft does not allow
-declarations, maps or functions, to be conditional; every item exists in
-every variant.
+could not run. Both branches are type-checked, so a program is checked
+with the dead branch of every constant conditional included. Entailment
+(section 18.5), by contrast, uses the value of each configuration
+constant for the build being checked, the default where the build
+supplies none: the checker runs per build, as the compiler does, and
+the facts it uses are the ones the lowering folds to immediates. So
+`cache[h % SLOTS]` is accepted for every build whose `SLOTS` is
+nonzero and rejected, at that index, by a build that sets it to zero.
+A configuration constant with neither a default nor a build value has
+no value to check with, and the declaration is an error. This draft
+does not allow declarations, maps or functions, to be conditional;
+every item exists in every variant.
 
 ## 16. Functions
 
@@ -1371,8 +1380,9 @@ a `ref` parameter, or a kernel object yields nothing, since the place
 may change between the test and the use and the fragment of section
 17 excludes such reads from predicates. A value read from a shared
 place is given a fact by reading it into a name and testing the name,
-or by a marked load. The fact sources that mention shared places are
-the record `p = e` of (Assign) and the view offset `off(h) = e`.
+or by a marked load. The one fact source that mentions a shared place
+is the view offset `off(h) = e`, which is about where the view is,
+not what it holds.
 
 ```
 (Mark)
@@ -1532,9 +1542,13 @@ the record `p = e` of (Assign) and the view offset `off(h) = e`.
 Note on (For): the exit fact `i = b` holds only on the fall-through
 path; the two paths are met. `writes(p)` is `write(m)` when `p` lies in
 a map value of `m`, `write(ctx.f)` for a context field, and nothing for
-the stack. The fact `p = e` after a store records what this program
-observed, which is all a predicate on shared state can promise (P8); it
-is killed by a store through an alias, by any `call`, and at loop heads.
+the stack. The fact `p = e` after a store is recorded when `p` lies on
+the stack, and is killed by a store through an alias and at loop
+heads. A store to a shared place leaves no fact: the place may be
+written by another party before it is read again (P8), and the
+lowering reloads it, so a fact about it would discharge a test the
+verifier cannot re-derive. A value stored to shared memory that is
+needed again is held in a name.
 
 ### 18.5 Entailment
 
@@ -1835,9 +1849,8 @@ written:
     `kill`, the alias groups of `ref` parameters and of views, the
     kill of every shared fact at a call, and `inv` and `meet` as 18.4
     now states them.
-41. A branch or a `check` yields facts about stack places only; shared
-    places carry the store record and the view offset (18.4). Entry
-    19 questions the store record.
+41. A branch or a `check` yields facts about stack places only; the
+    view offset is the one fact about a shared place (18.4).
 42. One interval per variable, in its type's signedness, with known
     bits; not the verifier's paired ranges. P9 is one-directional, so
     the smaller domain is safe, and the corpus demands are unsigned
@@ -1845,6 +1858,11 @@ written:
 43. The cap of a `for` loop is an output of the checker to the
     lowering, by loop, not a Core annotation; the postcondition of a
     function is a fact at the binding of its call (16).
+44. Entailment folds each configuration constant to its value for the
+    build, the default where none is supplied; the checker runs per
+    build; a `config` with no value at all is an error (entry 18).
+45. The store record `p = e` is kept for stack places only; a store to
+    a shared place leaves no fact (entry 19).
 
 Open questions, with the default the checker implements until decided:
 

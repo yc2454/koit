@@ -13,10 +13,12 @@ what survives.
 A fact is about the places it mentions, and it is dropped when one of
 them may have changed: `kill` after a store, through the aliases a
 store may reach, `killShared` after a call, `inv` at a loop head, and
-`dropNames` at the end of a block. A branch or a `check` gives facts
-about stack places only: a place in a map, the context, the packet, a
-`ref` parameter, or a kernel object may change between the test and
-the use, so a condition on one yields nothing.
+`dropNames` at the end of a block. A branch, a `check`, and a store
+give facts about stack places only: a place in a map, the context,
+the packet, a `ref` parameter, or a kernel object may change between
+the test or store and the use, so neither yields a fact about one.
+The one fact about a shared place is a view's offset, which says
+where the view is, not what it holds.
 
 The module ends with the semantics the soundness theorem is stated
 on: a valuation of places, and what it means for it to satisfy the
@@ -409,17 +411,21 @@ def atomOf (sc : Scope) (p : Place) : Expr :=
   | p => .read p.span p
 
 /-- After `p = e`: the facts about `p` go, then `p = e` is recorded
-when `e` does not read what the store changed and is in the fragment;
-a value read off the stack is admitted here, since the fact says what
-this program stored, not what the place holds. -/
+when `p` lies on the stack, `e` does not read what the store changed,
+and `e` is in the fragment over stack places. A store to a shared
+place leaves no fact: another party may write the place before it is
+read again, and the lowering reloads it. -/
 def record (sc : Scope) (F : Facts) (p : Place) (e : Expr) : Facts :=
   let p := F.resolve p
   let e := F.resolveExpr e
   let F := F.kill sc p
-  if e.atoms.any (fun q => overlaps sc p q) then F
-  else if factForm sc false e then
-    F.add (.pred (.cmp e.span .eq (atomOf sc p) e))
-  else F
+  match sc.place p with
+  | some (.stack, _) =>
+    if e.atoms.any (fun q => overlaps sc p q) then F
+    else if factForm sc true e then
+      F.add (.pred (.cmp e.span .eq (atomOf sc p) e))
+    else F
+  | _ => F
 
 end Facts
 

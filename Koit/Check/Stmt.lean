@@ -198,7 +198,9 @@ def bindInit (env : Env) (K : Ctx) (span : Span) (mutable : Bool) (x : String)
         not a place takes a scalar (P3)"
     let l : Local := { name := x, ty := t, mutable, origin := .stack }
     let F := afterCalls env sc F (callsInExpr e)
-    -- the binding's equation, and the refinement now in force
+    -- the binding's equation, in the scope that has the name, and the
+    -- refinement now in force
+    let sc := scope (env.bind l) K
     let F := F.record sc (.var span x) e
     let F := match ← env.refinement? t with
       | some (v, _, pred) => F.add (.pred (pred.subst v (.var span x)))
@@ -234,11 +236,12 @@ def bindInit (env : Env) (K : Ctx) (span : Span) (mutable : Bool) (x : String)
               (pred.subst v (.read p.span p))
           pure t
         | none => pure tn
-      let F := F.record sc (.var span x) (.read p.span p)
+      let l : Local := { name := x, ty := t, mutable, origin := .stack }
+      let F := F.record (scope (env.bind l) K) (.var span x) (.read p.span p)
       let F := match ← env.refinement? t with
         | some (v, _, pred) => F.add (.pred (pred.subst v (.var span x)))
         | none => F
-      return ({ name := x, ty := t, mutable, origin := .stack }, F)
+      return (l, F)
     match tn with
     | .slot _ n =>
       err span s!"a `{n}` is a slot: it is not bound; it is named by \
@@ -279,10 +282,12 @@ def bindInit (env : Env) (K : Ctx) (span : Span) (mutable : Bool) (x : String)
         demand env K fi.span s!"the field `{fd.name}` of the literal" P
       F := afterCalls env sc F (callsInExpr fi.value)
     -- the literal's own place holds what was written into it
+    let l : Local := { name := x, ty := .ref span st, mutable := false,
+                       origin := .stack }
+    let sc := scope (env.bind l) K
     for fi in fields do
       F := F.record sc (.field fi.span (.var span x) fi.name) fi.value
-    return ({ name := x, ty := .ref span st, mutable := false,
-              origin := .stack }, F)
+    return (l, F)
 
 /-- `return` against what the context returns to: the type, then the
 verdict set or the refined result as a demand. -/

@@ -1,0 +1,13 @@
+// expect: the index demands `policy[0].cur < M`
+// A store to a shared place leaves no fact: the slot may be written by
+// another party before it is read again, so the value stored does not
+// bound the value read. Hold the value in a name and index with that.
+const M = 16
+map policy : array[1] of { cur: u32 }
+map tab    : array[1] of { v: u32[M] }
+
+program p : syscall {
+  policy[0].cur = 3
+  let x = tab[0].v[policy[0].cur]
+  return 0
+}
