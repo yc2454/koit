@@ -1,0 +1,11 @@
+// expect: the field `len` of the literal demands `5 <= 4`
+// A struct literal's initializers are checked against the field
+// predicates as stores are.
+type Key = { len: u32 where len <= 4, v: u32 }
+map m : hash[8] of Key -> { n: u32 }
+
+program p : syscall {
+  let k = { len: 5, v: 1 }
+  let e = m[k] else { return 0 }
+  return 0
+}

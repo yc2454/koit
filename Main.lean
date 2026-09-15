@@ -10,13 +10,14 @@ implemented yet.
 open Koit Koit.Syntax
 
 def usage : String := String.intercalate "\n"
-  ["usage: koitc <command> [--kernel TAG] FILE.ko",
+  ["usage: koitc <command> [--kernel TAG] [--smt] FILE.ko",
    "  lex     print the tokens of FILE, one per line",
    "  parse   parse FILE and list its declarations",
    "  print   parse FILE and print it back as source",
    "  desugar parse FILE and print its Core",
    "  check   type-check FILE against the prelude of kernel TAG",
-   "          (default and only prelude in stage 1: v7.0)",
+   "          (default and only prelude in stage 1: v7.0); with --smt,",
+   "          trace each accepted entailment as an SMT-LIB query on stderr",
    "  run     interpret FILE (from session 3)"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
@@ -66,10 +67,14 @@ def preludeFor (tag : Option String) : IO (Option Prelude) := do
         {", ".intercalate (preludes.map (·.kernel))}"
       return none
 
-/-- Splits `[--kernel TAG] FILE` into the tag and the file. -/
-def kernelOpt : List String → Option (Option String × String)
-  | ["--kernel", t, file] => some (some t, file)
-  | [file] => some (none, file)
+/-- Splits `[--kernel TAG] [--smt] FILE` into the tag, the flag, and
+the file. -/
+def kernelOpt : List String → Option (Option String × Bool × String)
+  | ["--kernel", t, "--smt", file] | ["--smt", "--kernel", t, file] =>
+    some (some t, true, file)
+  | ["--kernel", t, file] => some (some t, false, file)
+  | ["--smt", file] => some (none, true, file)
+  | [file] => some (none, false, file)
   | _ => none
 
 def run (args : List String) : IO UInt32 := do
@@ -98,7 +103,7 @@ def run (args : List String) : IO UInt32 := do
       return 0
     | none => return 1
   | "desugar" :: rest => do
-    let some (tag, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
     let some pre ← preludeFor tag | return 2
     match ← parseFile file with
     | some u =>
@@ -106,12 +111,12 @@ def run (args : List String) : IO UInt32 := do
       return 0
     | none => return 1
   | "check" :: rest => do
-    let some (tag, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let some (tag, smt, file) := kernelOpt rest | do IO.eprint usage; return 2
     let some pre ← preludeFor tag | return 2
     match ← parseFile file with
     | some u =>
-      match Check.checkUnit pre (Core.desugar pre u) with
-      | .ok () =>
+      match Check.checkUnit pre (Core.desugar pre u) smt with
+      | .ok _ =>
         IO.println s!"{file}: ok"
         return 0
       | .error d =>

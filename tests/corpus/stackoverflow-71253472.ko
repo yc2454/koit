@@ -1,0 +1,14 @@
+// expect: the index demands `off < 64`
+// bpfix-empirical stackoverflow-71253472 (BPFIX-E017), a kprobe
+// program ported to syscall: an atomic add whose target is an
+// unbounded variable offset into a map value; the verifier reports
+// "R6 unbounded memory access". In koit the index demand is not
+// entailed, since `off` is read from the environment untested.
+map counters : array[1] of { n: u64[64] }
+map state    : array[1] of { off: u64 }
+
+program p : syscall {
+  let off = state[0].off
+  let _ = atomic_add(counters[0].n[off], 1)
+  return 0
+}

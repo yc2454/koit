@@ -1,0 +1,9 @@
+// expect: the parameter `n` of `f` demands `ctx.ingress_ifindex > 0`
+// A refined parameter is a precondition, demanded of the argument at
+// the call.
+fn f(n: u32 where n > 0) -> u32 { n }
+
+program p : xdp fail drop {
+  let x = f(ctx.ingress_ifindex)
+  drop
+}

@@ -1,0 +1,8 @@
+// expect: the result of `f` demands `x < 10`
+// A refined result is a postcondition, demanded at every `return`.
+fn f(x: u32) -> r: u32 where r < 10 { x }
+
+program p : syscall {
+  let y = f(3)
+  return 0
+}

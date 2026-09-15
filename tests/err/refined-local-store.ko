@@ -1,0 +1,7 @@
+// expect: the store to `n: { n: u64 | n <= 8 }` demands `n + 1 <= 8`
+// A refined local is checked at every store to it.
+program p : syscall {
+  var n: u64 where n <= 8 = 0
+  repeat 10 { n = n + 1 }
+  return 0
+}

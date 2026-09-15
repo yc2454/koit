@@ -1,0 +1,6 @@
+// expect: demands `ctx.ingress_ifindex < 4`
+// A refined local is checked at its binding.
+program p : xdp fail drop {
+  let n: u32 where n < 4 = ctx.ingress_ifindex
+  drop
+}

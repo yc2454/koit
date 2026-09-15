@@ -1,0 +1,58 @@
+// The fact sources and the demands they discharge, one per line: a
+// branch and its negation, a `check`, a coercion, a marked load, a
+// loop bound, a refined local, a join, a modulo, a mask, and a cast.
+const M = 16
+const N = 8
+type Rec = { len: u32 where len <= N, buf: u8[N] }
+map tab   : array[4] of { v: u32[M] }
+map recs  : array[1] of Rec
+map flags : array[1] of { f: u32 where f & 0xF0 == 0 }
+
+fn clamp(x: u32) -> r: u32 where r < M { x % M }
+
+program p : xdp verdict in { PASS, DROP } fail drop {
+  let q = ctx.rx_queue_index
+  // a branch: q < 4 in the then-branch
+  if q < 4 { tab[q].v[0] = 1 }
+  // its negation: after an exit in the then-branch, q >= 4 here
+  if q >= 4 { drop }
+  let a = tab[q].v[0]
+  // a check
+  check q + 1 < 4
+  let b = tab[q + 1].v[0]
+  // a coercion
+  let i = ctx.ingress_ifindex as {v: u32 | v < M}?
+  let c = tab[0].v[i]
+  // a marked load
+  let r = recs[0]
+  let len = r.len?
+  let d = r.buf[len % N]
+  // a loop bound and the loop's index
+  for k in 0..(len as u64) {
+    r.buf[k] = 0
+  }
+  // a refined local, kept across the loop
+  var n: u64 where n <= N = 0
+  for k in 0..N {
+    if r.buf[k] == 0 { break }
+    n = k + 1
+  }
+  r.len = n as u32
+  // a join: both branches bound m
+  var m: u32 = 0
+  if q == 0 { m = 3 } else { m = 5 }
+  let e = tab[0].v[m]
+  // a modulo and a mask
+  tab[0].v[q * 7 % M] = 2
+  flags[0].f = q & 0x0F
+  // a cast through a byte
+  let byte = pkt[0]?
+  let f = tab[0].v[(byte as u32) % M]
+  // a postcondition, a fact at the call site
+  let h = clamp(q * 3)
+  let g = tab[0].v[h]
+  // a constant verdict and a computed one
+  if q == 1 { pass }
+  let v: u32 = 1
+  return v
+}

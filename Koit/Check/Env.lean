@@ -1,6 +1,7 @@
 import Koit.Core.Syntax
 import Koit.Core.Print
 import Koit.Prelude.Tables
+import Koit.Facts.Entail
 import Koit.Check.Diag
 
 /-!
@@ -8,8 +9,9 @@ The typing environments: `G` as `Env`, with the unit's declarations,
 the prelude, the program kind, and the locals in scope; `K` as `Ctx`,
 with what the statement rules read from it in the base half (whether
 the context may fail, whether inside a loop, what `return` returns
-to). Facts `F`, the held set, and effects `E` come with entailment and
-effects, later. The operations on types are in `Types.lean`.
+to) and the facts `F` on the current path; the held set and effects
+`E` come with effects, later. The operations on types are in
+`Types.lean`.
 -/
 
 namespace Koit.Check
@@ -17,13 +19,7 @@ namespace Koit.Check
 open Koit (Span)
 open Koit.Core
 open Koit.Prelude (KindRow)
-
-/-- Where a place lives: the stack, a map value, the
-context, the packet, a `ref` parameter of unknown origin, or a kernel
-object bound by `hold`. -/
-inductive Origin where
-  | stack | map (name : String) | ctx | pkt | param | kernel
-  deriving Repr, BEq, Inhabited
+open Koit.Facts (Origin Facts)
 
 /-- A name in scope: a scalar value, or a place named by a binding,
 whose type is then `ref T`, `view T`, or `own T`. -/
@@ -50,6 +46,9 @@ structure Env where
   locals    : List Local := []
   /-- Untyped constants being expanded, to reject a cycle. -/
   visiting  : List String := []
+  /-- Trace each accepted entailment as a solver query, for the
+  testing cross-check. -/
+  smt       : Bool := false
   deriving Inhabited
 
 namespace Env
@@ -115,6 +114,8 @@ structure Ctx where
   errnoOk   : Bool := false
   /-- The program's verdict set `S`, when it has one. -/
   verdictSet : Option (List String) := none
+  /-- The facts on the current path. -/
+  facts : Facts := {}
   deriving Inhabited
 
 end Koit.Check

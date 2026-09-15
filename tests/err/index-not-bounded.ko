@@ -1,0 +1,10 @@
+// expect: the index demands `i < M`
+// An index the facts do not bound: the demand names the predicate.
+const M = 16
+map tab : array[1] of { v: u32[M] }
+
+program p : xdp fail drop {
+  let i = ctx.rx_queue_index
+  let x = tab[0].v[i]
+  drop
+}

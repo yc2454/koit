@@ -16,7 +16,8 @@ open Koit Koit.Syntax Koit.Core Koit.Check
 private def chk (s : String) : Except Diag Unit :=
   match parse s with
   | .error e => .error { span := e.span, msg := s!"parse: {e.msg}" }
-  | .ok u => checkUnit Prelude.stage1 (desugar Prelude.stage1 u)
+  | .ok u =>
+    (checkUnit Prelude.stage1 (desugar Prelude.stage1 u)).map fun _ => ()
 
 private def ok (s : String) : Bool := (chk s).toOption.isSome
 
@@ -135,11 +136,15 @@ private def unit (decls : List String) (body : List String) : String :=
 #guard has (sys ["  let x = 1", "  x = 2"]) "is immutable"
 #guard ok (sys ["  var x = 1", "  x = 2", "  x += 3"])
 
--- indexes are unsigned; the bound demand is session 3
+-- indexes are unsigned, and the bound is demanded of the facts
 #guard ok (xdp [V, "  let i: u8 = 1", "  let b = eth.dst[i]"])
 #guard has (xdp [V, "  let i: i32 = 1", "  let b = eth.dst[i]"])
   "an index must be unsigned"
 #guard has (xdp [V, "  let b = eth.proto[0]"]) "not an array"
+#guard has (xdp [V, "  let i = ctx.rx_queue_index", "  let b = eth.dst[i]"])
+  "the index demands `i < 6`"
+#guard ok (xdp [V, "  let i = ctx.rx_queue_index",
+                "  if i < 6 { let b = eth.dst[i] }"])
 
 -- marked loads need a `where` field; the unmarked read is the base type
 #guard ok (xdp ["  let cur = policy[0].cur?", "  let n: u32 = cur"])
@@ -181,9 +186,14 @@ private def unit (decls : List String) (body : List String) : String :=
 #guard has (lines ["program p : xdp fail drop",
                    "  on short_packet { reason == 1; pass }",
                    "{ pass }"]) "must be a call"
+#guard has (lines ["map s : array[4] of { n: u64 }",
+                   "program p : xdp fail drop",
+                   "  on short_packet { s[reason].n += 1; pass }",
+                   "{ pass }"]) "the index demands `reason < 4`"
 #guard ok (lines ["map s : array[4] of { n: u64 }",
                   "program p : xdp fail drop",
-                  "  on short_packet { s[reason].n += 1; pass }",
+                  "  on short_packet { if reason < 4 { s[reason].n += 1 }",
+                  "    pass }",
                   "{ pass }"])
 #guard has (sys ["  break"]) "outside a loop"
 #guard ok (sys ["  repeat 4 { break }"])

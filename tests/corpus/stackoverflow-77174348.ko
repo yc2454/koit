@@ -1,0 +1,18 @@
+// expect: the parameter `len` of `copy_bytes` demands `n <= 64`
+// bpfix-empirical stackoverflow-77174348 (BPFIX-E017), a socket
+// program ported to xdp: a variable length passed as the extent of a
+// memory argument, bounded by `< 20` in the source where the callee
+// needs a tighter bound; the verifier reports "R4 unbounded memory
+// access, use 'var &= const' or 'if (var < const)'". In koit the
+// callee's precondition is a demand at the call, and `n < 200` does
+// not entail `n <= 64`.
+map out : array[1] of { b: u8[64] }
+
+fn copy_bytes(len: u32 where len <= 64) -> u32 { len }
+
+program p : xdp fail drop {
+  let n = ctx.rx_queue_index
+  check n < 200
+  let m = copy_bytes(n)
+  drop
+}

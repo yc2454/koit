@@ -9,22 +9,22 @@
 #                     `// expect: ` on line 1
 #   tests/parse/*.ko  must parse and desugar; nothing is claimed about
 #                     typing
+#   tests/corpus/*.ko ports of the coverage cases, named by case id;
+#                     rejected like tests/err, with the recorded reason
 #
 # Every file that parses must also round-trip: printing it as source
 # and parsing and printing that again must give the same text.
 #
 # KOIT_STAGE=lex, parse (the default), or check selects how far the run
-# goes. The err files in LATER need facts, effects, guards, or the
-# verdict set, which sessions 3 and 4 deliver; the check stage skips
-# them until then.
+# goes. The err files in LATER need effects, guards, or `move`, which
+# session 5 delivers; the check stage skips them until then.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
 lake build koitc >/dev/null || { echo "build failed"; exit 2; }
 KOITC=.lake/build/bin/koitc
 STAGE=${KOIT_STAGE:-parse}
-LATER="call-under-lock move-join redirect-not-in-verdicts \
-rotate-no-modulo view-invalidated zero-value-predicate"
+LATER="call-under-lock move-join view-invalidated"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 pass=0
@@ -44,7 +44,8 @@ later() {
   return 1
 }
 
-for f in tests/ok/*.ko tests/err/*.ko tests/parse/*.ko; do
+for f in tests/ok/*.ko tests/err/*.ko tests/parse/*.ko tests/corpus/*.ko; do
+  [ -e "$f" ] || continue
   if ! "$KOITC" lex "$f" >/dev/null 2>"$TMP/out"; then
     failed lex "$f"
     continue
@@ -75,10 +76,11 @@ if [ "$STAGE" = check ]; then
       failed check "$f"
     fi
   done
-  for f in tests/err/*.ko; do
+  for f in tests/err/*.ko tests/corpus/*.ko; do
+    [ -e "$f" ] || continue
     name=$(basename "$f" .ko)
     if later "$name"; then
-      echo "skip $f (sessions 3 and 4)"
+      echo "skip $f (session 5)"
       skipped=$((skipped + 1))
       continue
     fi

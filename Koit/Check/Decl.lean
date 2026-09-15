@@ -6,7 +6,13 @@ of types, constants, configuration, and maps; a function against its
 signature; the call graph; a program's kind, contract, clauses,
 handlers, and body. `checkUnit` is the entry point: it checks the
 declarations in the order of a unit's template and stops at the first
-error, whose span is the surface construct's.
+error, whose span is the surface construct's; it yields the cap of
+every `for` loop, by span, for the lowering.
+
+Two demands live here: the predicate on an array map's value must
+hold of the all-zero value, since such a map is zero-filled at
+creation, and a function's parameter refinements are the facts its
+body starts from.
 -/
 
 namespace Koit.Check
@@ -14,6 +20,7 @@ namespace Koit.Check
 open Koit (Span)
 open Koit.Core
 open Koit.Prelude (KindRow tU32 tU64)
+open Koit.Facts (Facts Fact Caps Scope)
 
 
 /-- A context for declaration-level expressions: no failure, no loop,
@@ -118,6 +125,25 @@ def checkConfig (env : Env) (d : ConfigDecl) : M Unit := do
         expression"
     check env.top K0 i d.ty
 
+/-- Every field predicate in a data type must hold of the all-zero
+value: the value of an array map starts as zeros. -/
+partial def checkZeroValue (env : Env) (mapName : String) (t : Ty)
+    (fuel : Nat := 64) : M Unit := do
+  if fuel == 0 then return ()
+  match ← env.norm t with
+  | .struct _ fields =>
+    for f in fields do
+      if let some pred := f.pred then
+        let zero : Expr := .lit pred.span 0 "0"
+        let P := fields.foldl (fun P g => P.subst g.name zero) pred
+        unless Koit.Facts.entails (scope env.top K0) {} P do
+          err pred.span s!"the predicate `{pred.printPred}` on the value of \
+            `{mapName}` must hold of the all-zero value: an array map is \
+            zero-filled at creation"
+      checkZeroValue env mapName f.ty (fuel - 1)
+  | .array _ elem _ => checkZeroValue env mapName elem (fuel - 1)
+  | _ => pure ()
+
 /-- A map's capacity and its key and value types. -/
 def checkMap (env : Env) (d : MapDecl) : M Unit := do
   let capacity (n : Expr) : M Unit :=
@@ -135,6 +161,7 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
   | .array n v | .percpu n v =>
     capacity n
     value v
+    checkZeroValue env d.name v
   | .hash n k v =>
     capacity n
     checkDataTy env k
@@ -145,8 +172,8 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
     value v
   | .ringbuf n => capacity n
 
-/-- A function against its signature. -/
-def checkFn (env : Env) (f : Fn) : M Unit := do
+/-- A function against its signature: the caps of its loops. -/
+def checkFn (env : Env) (f : Fn) : M Caps := do
   let mut locals : List Local := []
   let mut seen : List String := []
   for p in f.params do
@@ -204,12 +231,16 @@ def checkFn (env : Env) (f : Fn) : M Unit := do
     let _ := s
   | some t => resultScalar t
   | none => pure ()
+  -- the body starts from the parameters' refinements
+  let fenv := { env.top with locals }
+  let F0 : Facts := (refinementFacts fenv).foldl Facts.add {}
   let K : Ctx := { mayFail := f.fails, ret := .fn f.name f.ret,
-                   fnName := some f.name }
-  checkStmts { env.top with locals } K f.body
+                   fnName := some f.name, facts := F0 }
+  let F ← checkStmts fenv K f.body
   if f.ret.isSome && !exits f.body then
     err f.span s!"`{f.name}` has a result type, so its body must end in \
       `return` or an expression"
+  return F.caps
 
 /-! ### The call graph -/
 
@@ -327,11 +358,11 @@ def checkContract (env : Env) (c : Contract) : M Unit := do
   let row ← kindRow env c.span c.kind
   checkClauses env row c.verdicts c.preserved
 
-/-- (Program) and (Handler), the base premises: the kind, the
-contract, the clauses, every handler exiting in a non-failing context,
-and the body; the verdict-set and preserved-region demands on the
-facts and effects are session 4. -/
-def checkProgram (env : Env) (p : Program) : M Unit := do
+/-- (Program) and (Handler): the kind, the contract, the clauses,
+every handler exiting in a non-failing context, and the body, each
+`return` demanded to lie in the verdict set; the preserved-region
+demands come with effects. Yields the caps of the loops. -/
+def checkProgram (env : Env) (p : Program) : M Caps := do
   let row ← kindRow env p.span p.kind
   if let some (s, c) := p.implements then
     match env.contracts.find? (·.name == c) with
@@ -343,21 +374,24 @@ def checkProgram (env : Env) (p : Program) : M Unit := do
   checkClauses env row p.verdicts p.preserved
   let env := { env with kind := some row }
   let vset := p.verdicts.map (·.map (·.2))
+  let mut caps : Caps := []
   for h in p.handlers do
     let hEnv := env.bind { name := "reason", ty := tU32, mutable := false,
                            origin := .stack }
     let K : Ctx := { mayFail := false, ret := .handler row.verdictTy,
                      inHandler := true, verdictSet := vset }
-    checkStmts hEnv K h.body
+    let F ← checkStmts hEnv K h.body
+    caps := caps ++ F.caps
     unless exits h.body do
       err h.span s!"the handler for `{h.kind}` must end in an exit \
        "
   let K : Ctx := { mayFail := true, ret := .program row.verdictTy,
                    verdictSet := vset }
-  checkStmts env K p.body
+  let F ← checkStmts env K p.body
   if row.hasPkt && !exits p.body then
     err p.span s!"the body of {article row.name} `{row.name}` program must end \
       in an exit"
+  return caps ++ F.caps
 
 /-- Unit-level names: types in one namespace, values in another,
 programs and contracts in a third. -/
@@ -376,20 +410,24 @@ def checkNames (u : CompUnit) : M Unit := do
     u.programs.map fun p => (p.span, p.name))
 
 /-- The checker's entry point: every declaration of the unit, in the
-order of a unit's template. -/
-def checkUnit (pre : Prelude) (u : CompUnit) : M Unit := do
+order of a unit's template; the caps of every loop. With `smt`, each
+accepted entailment is traced as a solver query. -/
+def checkUnit (pre : Prelude) (u : CompUnit) (smt : Bool := false) :
+    M Caps := do
   checkNames u
   let env : Env := { prelude := pre, license := u.license.map (·.2),
                      types := u.types, consts := u.consts,
                      configs := u.configs, maps := u.maps, fns := u.fns,
-                     contracts := u.contracts }
+                     contracts := u.contracts, smt }
   for d in u.types do checkTypeDecl env d
   for d in u.consts do checkConst env d
   for d in u.configs do checkConfig env d
   for d in u.maps do checkMap env d
-  for f in u.fns do checkFn env f
+  let mut caps : Caps := []
+  for f in u.fns do caps := caps ++ (← checkFn env f)
   checkCallGraph env u.fns
   for c in u.contracts do checkContract env c
-  for p in u.programs do checkProgram env p
+  for p in u.programs do caps := caps ++ (← checkProgram env p)
+  return caps
 
 end Koit.Check

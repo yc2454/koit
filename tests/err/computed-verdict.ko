@@ -1,0 +1,6 @@
+// expect: the return under the verdict set demands `v == PASS || v == DROP`
+// A computed verdict is a demand against the verdict set.
+program p : xdp verdict in { PASS, DROP } fail drop {
+  let v = ctx.ingress_ifindex
+  return v
+}

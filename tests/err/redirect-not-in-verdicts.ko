@@ -1,4 +1,4 @@
-// expect: REDIRECT is not in the verdict set
+// expect: `REDIRECT` is not in the verdict set
 // From spec/language.md 14.1: a redirect call yields {v | v == REDIRECT},
 // so a contract without REDIRECT rejects the call.
 program filter : xdp

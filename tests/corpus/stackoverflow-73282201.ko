@@ -1,0 +1,15 @@
+// expect: the index demands `i < 4096`
+// bpfix-empirical stackoverflow-73282201 (BPFIX-E005), a kprobe
+// program ported to syscall: a 4096-byte map value indexed one byte
+// past its end; the verifier reports "invalid access to map value,
+// value_size=4096 off=4096 size=1". The test `i <= 4096` admits
+// 4096, so the index demand `i < 4096` is not entailed.
+map buf   : array[1] of { b: u8[4096] }
+map state : array[1] of { len: u64 }
+
+program p : syscall {
+  let i = state[0].len
+  check i <= 4096
+  buf[0].b[i] = 0
+  return 0
+}

@@ -9,6 +9,10 @@ import Koit.Core.Print
 import Koit.Core.Desugar
 import Koit.Prelude.Tables
 import Koit.Prelude.Stage1
+import Koit.Facts.Domain
+import Koit.Facts.Facts
+import Koit.Facts.Smt
+import Koit.Facts.Entail
 import Koit.Check.Diag
 import Koit.Check.Env
 import Koit.Check.Types

@@ -1,4 +1,4 @@
-// expect: demand `cur + 1 < M`
+// expect: demands `policy[0].cur + 1 < M`
 // From spec/mechanisms-by-example.md, M1, "What to notice": a writer
 // that stores cur + 1 without the modulo is rejected with the demand
 // named.

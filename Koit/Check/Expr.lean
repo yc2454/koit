@@ -3,12 +3,18 @@ import Koit.Check.Types
 /-!
 Expression, place, call, and fallible-operation typing: the executable
 form of the expression and place rules and of the operation premises
-of the statement rules, without the `F |= P` demands, which come with
-entailment. Every rule here is one of (Var), (Lit), (LitDef), (Arith),
-(Cmp), (CmpBe), (Cast), (Hton), (Ntoh), (Sub) restricted to refinement
-weakening, (Read), (PVar), (PDeref), (PField), (PIndex), (PArr),
-(Move), the call rule of functions, and the result types of the
-fallible operations; `Rules.lean` states each as a proposition.
+of the statement rules, with their demands `F |= P` decided by
+entailment over the facts in `K`: the index bound of an array or an
+array map, and the refinement a value is checked against, which is a
+parameter's precondition at a call. Every rule here is one of (Var),
+(Lit), (LitDef), (Arith), (Cmp), (CmpBe), (Cast), (Hton), (Ntoh),
+(Sub), (Read), (PVar), (PDeref), (PField), (PIndex), (PArr), (Move),
+the call rule of functions, and the result types of the fallible
+operations; `Rules.lean` states each as a proposition.
+
+`placeTy` types a place and never demands, since the facts consult it
+to learn where a place lives; `placeTyUse` is what a use of a place
+goes through, and it demands the bound of every index on the way.
 
 Bidirectional: `synth` gives an expression its type, `check` checks it
 against one. A literal, an untyped constant, and `size T` take their
@@ -22,6 +28,7 @@ namespace Koit.Check
 open Koit (Span)
 open Koit.Core
 open Koit.Prelude (CallRow Home tU32 tU64)
+open Koit.Facts (Origin Facts Scope Shape)
 
 /-- The type of a place, whether it may be written, and where it
 lives. -/
@@ -136,6 +143,31 @@ def arithOk (span : Span) (tn : Ty) : M Unit :=
       err span s!"arithmetic takes integers; `{t.print}` names a place"
     else err span s!"arithmetic takes integers, found `{t.print}`"
 
+/-- The refinement at the head of a type, through named types: the
+refined name, the base, and the predicate. -/
+partial def Env.refinement? (env : Env) (t : Ty) (fuel : Nat := 64) :
+    M (Option (String × Ty × Expr)) := do
+  if fuel == 0 then return none
+  match t with
+  | .refined _ v base pred => return some (v, base, pred)
+  | .named _ n =>
+    match env.type? n with
+    | some d => env.refinement? d.ty (fuel - 1)
+    | none => return none
+  | _ => return none
+
+/-- The shape of a head-normal type for the domain. -/
+def shapeOf : Ty → Shape
+  | .int _ s w => .int s w
+  | .bool _ => .bool
+  | _ => .other
+
+/-- What a failed demand says: the site, the predicate, and the two
+ways to establish it. -/
+def demandMsg (site : String) (P : Expr) : String :=
+  s!"{site} demands `{P.printPred}`; the facts here do not entail it: \
+    establish it with `check`, or read the value with a marked load"
+
 /-- `pkt` exists in the packet kinds only. -/
 def requirePkt (env : Env) (span : Span) : M Unit :=
   match env.kind with
@@ -243,7 +275,7 @@ partial def synth (env : Env) (K : Ctx) (e : Expr) : M Ty := do
     | .be _ w => return .int s false w
     | _ => err s s!"`ntoh` takes a byte-order value, found `{t.print}`"
   | .read s p =>
-    let info ← placeTy env K p
+    let info ← placeTyUse env K p
     let tn ← env.norm info.ty
     match tn with
     | .int .. | .be .. | .bool .. => return tn
@@ -271,6 +303,12 @@ partial def synth (env : Env) (K : Ctx) (e : Expr) : M Ty := do
   | .invalid s m => err s m
 
 partial def check (env : Env) (K : Ctx) (e : Expr) (t : Ty) : M Unit := do
+  -- (Sub) against a refinement: the base, then the predicate of the
+  -- value as a demand
+  if let some (v, base, pred) ← env.refinement? t then
+    check env K e base
+    demand env K e.span "the value" (pred.subst v e)
+    return ()
   let tn ← env.norm t
   match e with
   | .lit s v text =>
@@ -429,8 +467,67 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
     | _ => err s "`*` applies to a reference or view name"
   | .invalid s m => err s m
 
+/-- What the facts may ask about names here: the origin and shape of
+a place, through `placeTy` without its demands, the value of a
+constant, a configuration constant with a default, or a verdict name,
+the shape a type denotes, and the size of a type. -/
+partial def scope (env : Env) (K : Ctx) : Scope :=
+  { place := fun p =>
+      match placeTy env K p with
+      | .ok info =>
+        match env.norm info.ty with
+        | .ok tn => some (info.origin, shapeOf tn)
+        | .error _ => some (info.origin, .other)
+      | .error _ => none,
+    const := fun n =>
+      if (env.local? n).isSome then none
+      else match env.verdict? n with
+        | some _ =>
+          env.kind.bind fun row => (row.verdicts.lookup n).map Int.ofNat
+        | none => env.evalConst (.var Koit.Facts.noSpan n),
+    sort := fun t => (env.norm t).toOption.map shapeOf,
+    size := fun t => (env.layout t).toOption.map (·.1),
+    smt := env.smt }
+
+/-- A demand `F |= P` at `site`. -/
+partial def demand (env : Env) (K : Ctx) (span : Span) (site : String)
+    (P : Expr) : M Unit := do
+  unless Koit.Facts.entails (scope env K) K.facts P do
+    err span (demandMsg site P)
+
+/-- The index demands along a place: `i < n` for every `p[i]` and
+`m[i]`, from the innermost place out. -/
+partial def placeDemands (env : Env) (K : Ctx) (p : Place) : M Unit := do
+  match p with
+  | .field _ q _ => placeDemands env K q
+  | .index s q i =>
+    placeDemands env K q
+    let info ← placeTy env K q
+    match ← env.norm info.ty with
+    | .array _ _ n => demand env K s "the index" (.cmp s .lt i n)
+    | _ => pure ()
+  | .slot s m i =>
+    match env.map? m with
+    | some d =>
+      match d.kind with
+      | .array n _ | .percpu n _ => demand env K s "the index" (.cmp s .lt i n)
+      | _ => pure ()
+    | none => pure ()
+  | .deref _ e =>
+    match e with
+    | .read _ q => placeDemands env K q
+    | _ => pure ()
+  | _ => pure ()
+
+/-- A place at a use: typed, with its index bounds demanded. -/
+partial def placeTyUse (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
+  let info ← placeTy env K p
+  placeDemands env K p
+  return info
+
 /-- An argument against a parameter. A `const` parameter of a prelude
-signature takes a constant expression. -/
+signature takes a constant expression; a refined parameter's
+predicate is a precondition, demanded of the argument. -/
 partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
     (arg : Arg) : M Unit := do
   let pname := p.name
@@ -446,7 +543,7 @@ partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
   let pn ← env.norm pty
   match pn, arg with
   | .ref _ t, .place p =>
-    let info ← placeTy env K p
+    let info ← placeTyUse env K p
     if info.origin == .pkt then
       err arg.span s!"`{fname}` takes `{pname}: {pty.print}`, a stack or map \
         place; `{p.print}` is in the packet, so the parameter would be a \
@@ -458,7 +555,7 @@ partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
     err arg.span s!"`{fname}` takes `{pname}: {pty.print}`, a place; \
       `{arg.print}` is not one"
   | .view _ t, .place p =>
-    let info ← placeTy env K p
+    let info ← placeTyUse env K p
     unless info.origin == .pkt do
       err arg.span s!"`{fname}` takes `{pname}: {pty.print}`, a place in the \
         packet; `{p.print}` is not one"
@@ -483,14 +580,21 @@ partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
   | .own .., _ =>
     err arg.span s!"`{fname}` consumes its argument `{pname}`: write `move x` \
       for a name bound by `hold`"
-  | _, .val e => check env K e pty
-  | _, .place p =>
-    let info ← placeTy env K p
+  | _, .val e =>
+    check env K e pty
+    if let some q := p.pred then
+      demand env K arg.span s!"the parameter `{pname}` of `{fname}`"
+        (q.subst pname e)
+  | _, .place p' =>
+    let info ← placeTyUse env K p'
     let tn ← env.norm info.ty
     unless tn.isScalar do
       err arg.span s!"`{fname}` takes `{pname}: {pty.print}`, a scalar; \
-        `{p.print}` is an aggregate of type `{info.ty.print}` (P3)"
+        `{p'.print}` is an aggregate of type `{info.ty.print}` (P3)"
     unless ← env.eqv tn pn do mismatch env arg.span pty info.ty
+    if let some q := p.pred then
+      demand env K arg.span s!"the parameter `{pname}` of `{fname}`"
+        (q.subst pname (.read p'.span p'))
   | _, .map s m =>
     err s s!"`{fname}` takes `{pname}: {pty.print}`; `{m}` is a map"
 
@@ -535,8 +639,8 @@ partial def builtinCall (env : Env) (K : Ctx) (span : Span) (f : String)
   | "printk", _ =>
     err span "`printk` takes a string literal as its format"
   | "copy", [.place dst, .place src] =>
-    let d ← placeTy env K dst
-    let s ← placeTy env K src
+    let d ← placeTyUse env K dst
+    let s ← placeTyUse env K src
     if d.origin == .pkt then
       err dst.span "`copy` writes a stack or map place; the packet is written \
         through a view's fields"
@@ -547,7 +651,7 @@ partial def builtinCall (env : Env) (K : Ctx) (span : Span) (f : String)
     return none
   | "copy", _ => err span "`copy(dst, src)` takes two places"
   | "fill", [.place dst, .val b] =>
-    let d ← placeTy env K dst
+    let d ← placeTyUse env K dst
     if d.origin == .pkt then
       err dst.span "`fill` writes a stack or map place"
     unless d.mutable do err dst.span s!"`{dst.print}` is immutable"
@@ -557,11 +661,11 @@ partial def builtinCall (env : Env) (K : Ctx) (span : Span) (f : String)
     err span "`fill(dst, byte)` takes a place and a byte"
   | "insert", [.map ms m, .place k, .place v] =>
     let (kt, vt) ← hashTypes env ms m
-    let ki ← placeTy env K k
+    let ki ← placeTyUse env K k
     unless ← env.eqv ki.ty kt do
       err k.span s!"the key of `{m}` is a `{kt.print}`; `{k.print}` is a \
         `{ki.ty.print}`"
-    let vi ← placeTy env K v
+    let vi ← placeTyUse env K v
     unless ← env.eqv vi.ty vt do
       err v.span s!"the value of `{m}` is a `{vt.print}`; `{v.print}` is a \
         `{vi.ty.print}`"
@@ -571,7 +675,7 @@ partial def builtinCall (env : Env) (K : Ctx) (span : Span) (f : String)
      "
   | "delete", [.map ms m, .place k] =>
     let (kt, _) ← hashTypes env ms m
-    let ki ← placeTy env K k
+    let ki ← placeTyUse env K k
     unless ← env.eqv ki.ty kt do
       err k.span s!"the key of `{m}` is a `{kt.print}`; `{k.print}` is a \
         `{ki.ty.print}`"
@@ -674,7 +778,7 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
     return { ty := some (.view s t), origin := .pkt }
   | .lookup s m k =>
     let (kt, vt) ← hashTypes env s m
-    let ki ← placeTy env K k
+    let ki ← placeTyUse env K k
     unless ← env.eqv ki.ty kt do
       err k.span s!"the key of `{m}` is a `{kt.print}`; `{k.print}` is a \
         `{ki.ty.print}`"
@@ -682,7 +786,7 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
   | .loadw s p =>
     match p with
     | .field _ q fname =>
-      let info ← placeTy env K q
+      let info ← placeTyUse env K q
       match ← env.norm info.ty with
       | .struct _ fields =>
         match fields.find? (·.name == fname) with
@@ -709,7 +813,7 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
     | .place slot =>
       match args with
       | [.place p] =>
-        let info ← placeTy env K p
+        let info ← placeTyUse env K p
         match ← env.norm info.ty with
         | .slot _ n =>
           unless n == slot do
