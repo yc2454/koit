@@ -49,7 +49,7 @@ partial def Ty.print : Ty → String
   | .int _ signed w => (if signed then "i" else "u") ++ toString w
   | .be _ w => "be" ++ toString w
   | .bool _ => "bool"
-  | .spinlock _ => "spinlock"
+  | .slot _ n => n
   | .named _ n => n
   | .struct _ [] => "{ }"
   | .struct _ fields =>

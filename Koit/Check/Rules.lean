@@ -22,7 +22,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (KindRow CallRow tU32 tU64)
+open Koit.Prelude (KindRow CallRow AcqArg Home tU32 tU64)
 
 /-- The comparisons a byte-order value admits. -/
 def isCmpBe : CmpOp → Bool
@@ -155,8 +155,9 @@ inductive PlaceOf : Env → Ctx → Place → PlaceInfo → Prop
   | viewVar {env K s x l s' t} :
       env.local? x = some l → l.ty = .view s' t →
       PlaceOf env K (.var s x) { ty := t, mutable := true, origin := .pkt }
-  | ownVar {env K s x l s' s'' t} :
-      env.local? x = some l → l.ty = .own s' (.ref s'' t) →
+  /-- An owned reference names a place of its type. -/
+  | ownVar {env K s x l s' t} :
+      env.local? x = some l → l.ty = .own s' t →
       PlaceOf env K (.var s x) { ty := t, mutable := true, origin := .kernel }
   /-- A context field, per the kind's table. -/
   | ctx {env K s s' f row cf} :
@@ -205,16 +206,17 @@ inductive IndexOk : Env → Ctx → Expr → Prop
 /-- Arguments against parameters. -/
 inductive ArgsOk : Env → Ctx → String → List Param → List Arg → Prop
   | nil {env K f} : ArgsOk env K f [] []
-  /-- A scalar parameter takes a value. -/
+  /-- A scalar parameter takes a value; a `const` parameter a constant
+  expression. -/
   | val {env K f p ps e as} :
       (∀ s t, p.ty ≠ .ref s t) → (∀ s t, p.ty ≠ .view s t) →
-      (∀ s t, p.ty ≠ .own s t) → Check env K e p.ty →
-      ArgsOk env K f ps as →
+      (∀ s t, p.ty ≠ .own s t) → (p.isConst = true → env.isConstExpr e = true) →
+      Check env K e p.ty → ArgsOk env K f ps as →
       ArgsOk env K f (p :: ps) (.val e :: as)
   /-- A scalar parameter takes a scalar place, read. -/
   | scalarPlace {env K f p ps q as info tn pn} :
       (∀ s t, p.ty ≠ .ref s t) → (∀ s t, p.ty ≠ .view s t) →
-      (∀ s t, p.ty ≠ .own s t) → PlaceOf env K q info →
+      (∀ s t, p.ty ≠ .own s t) → p.isConst = false → PlaceOf env K q info →
       env.norm info.ty = .ok tn → tn.isScalar → env.norm p.ty = .ok pn →
       env.eqv tn pn = .ok true → ArgsOk env K f ps as →
       ArgsOk env K f (p :: ps) (.place q :: as)
@@ -287,27 +289,33 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
         pred = .ok () →
       FallibleOk env K (.coerce s e (.refined s' v base pred))
         { ty := some (.refined s' v base pred), origin := .stack }
-  /-- A spin lock in a map value. -/
-  | lock {env K s f t p info s' m} :
-      PlaceOf env K p info → env.norm info.ty = .ok (.spinlock s') →
-      info.origin = .map m →
-      FallibleOk env K (.acquire s .spinlock f t [.place p]) { ty := none }
-  | rcu {env K s f t} : FallibleOk env K (.acquire s .rcu f t []) { ty := none }
-  | preempt {env K s f t} :
-      FallibleOk env K (.acquire s .preempt f t []) { ty := none }
-  | irq {env K s f t} : FallibleOk env K (.acquire s .irq f t []) { ty := none }
-  /-- A ring-buffer record. -/
-  | ringbuf {env K s f s' m t d n sz} :
+  /-- An acquisition whose row takes a place of a slot type, in one of
+  the slot's homes. -/
+  | acquireSlot {env K s r f t p info s' slot row srow m} :
+      env.prelude.resource? r = some row → row.arg = .place slot →
+      PlaceOf env K p info → env.norm info.ty = .ok (.slot s' slot) →
+      env.prelude.slot? slot = some srow → info.origin = .map m →
+      srow.homes.contains .mapValue = true →
+      FallibleOk env K (.acquire s r f t [.place p]) { ty := none }
+  /-- A scope-only acquisition. -/
+  | acquireScope {env K s r f t row} :
+      env.prelude.resource? r = some row → row.arg = .scope →
+      FallibleOk env K (.acquire s r f t []) { ty := none }
+  /-- An acquisition through a kernel function's row: the result is
+  `own T`, bound by `hold`. -/
+  | acquireCall {env K s r f args row crow params ret} :
+      env.prelude.resource? r = some row → row.arg = .call →
+      env.prelude.call? f = some crow → crow.sig = .fn params ret →
+      PreludeOk env K s crow → ArgsOk env K f params args →
+      FallibleOk env K (.acquire s r f none args)
+        { ty := ret, origin := .kernel }
+  /-- A ring-buffer record, the one acquiring builtin. -/
+  | acquireReserve {env K s r s' m t d n sz row} :
+      env.prelude.resource? r = some row → row.arg = .call →
       env.map? m = some d → d.kind = .ringbuf n →
       env.notRepresentable t false = .ok none → env.layout t = .ok sz →
-      FallibleOk env K (.acquire s .ringbuf f (some t) [.map s' m])
-        { ty := some (.own s (.ref s t)), origin := .kernel }
-  /-- A socket reference, through the acquiring helper's row. -/
-  | sockref {env K s f args row params ret} :
-      env.prelude.call? f = some row → row.sig = .fn params ret →
-      PreludeOk env K s row → ArgsOk env K f params args →
-      FallibleOk env K (.acquire s .sockref f none args)
-        { ty := ret, origin := .kernel }
+      FallibleOk env K (.acquire s r "reserve" (some t) [.map s' m])
+        { ty := some (.own s t), origin := .kernel }
 
 /-- A local from what a fallible operation binds. -/
 def boundLocal (x : String) (t : Ty) (b : Bound) : Local :=

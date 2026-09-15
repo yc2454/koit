@@ -21,7 +21,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (CallRow tU32 tU64)
+open Koit.Prelude (CallRow Home tU32 tU64)
 
 /-- The type of a place, whether it may be written, and where it
 lives. -/
@@ -247,9 +247,9 @@ partial def synth (env : Env) (K : Ctx) (e : Expr) : M Ty := do
     let tn ← env.norm info.ty
     match tn with
     | .int .. | .be .. | .bool .. => return tn
-    | .spinlock _ =>
-      err s "a `spinlock` is not read; it is held with `hold lock(p)` \
-       "
+    | .slot _ n =>
+      err s s!"a `{n}` is a slot: it is not read; it is named by \
+        {env.slotUse n}"
     | _ =>
       err s s!"`{p.print}` is an aggregate of type `{info.ty.print}`: name it \
         with `let`, or read one of its fields (P3)"
@@ -352,9 +352,8 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
       match l.ty with
       | .ref _ t => return { ty := t, mutable := true, origin := l.origin }
       | .view _ t => return { ty := t, mutable := true, origin := .pkt }
-      | .own _ (.ref _ t) =>
-        return { ty := t, mutable := true, origin := .kernel }
-      | .own _ t => return { ty := t, mutable := false, origin := .kernel }
+      -- an owned reference names a place of its type
+      | .own _ t => return { ty := t, mutable := true, origin := .kernel }
       | t => return { ty := t, mutable := l.mutable, origin := l.origin }
     | none =>
       if (env.map? x).isSome then
@@ -418,7 +417,7 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
         let (t, origin) ← match l.ty with
           | .ref _ t => pure (t, l.origin)
           | .view _ t => pure (t, Origin.pkt)
-          | .own _ (.ref _ t) => pure (t, Origin.kernel)
+          | .own _ t => pure (t, Origin.kernel)
           | t => err vs s!"`*` applies to a reference or view; `{x}` is a \
               `{t.print}`"
         let tn ← env.norm t
@@ -430,9 +429,20 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
     | _ => err s "`*` applies to a reference or view name"
   | .invalid s m => err s m
 
-/-- An argument against a parameter type. -/
-partial def checkArg (env : Env) (K : Ctx) (fname pname : String) (pty : Ty)
+/-- An argument against a parameter. A `const` parameter of a prelude
+signature takes a constant expression. -/
+partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
     (arg : Arg) : M Unit := do
+  let pname := p.name
+  let pty := p.ty
+  if p.isConst then
+    match arg with
+    | .val e =>
+      unless env.isConstExpr e do
+        err arg.span s!"`{fname}` takes `{pname}` as a constant expression; \
+          `{e.print}` is not one"
+    | _ =>
+      err arg.span s!"`{fname}` takes `{pname}` as a constant expression"
   let pn ← env.norm pty
   match pn, arg with
   | .ref _ t, .place p =>
@@ -492,7 +502,7 @@ partial def preludeFn (env : Env) (K : Ctx) (span : Span) (row : CallRow)
   if let some k := env.kind then
     if !row.kinds.isEmpty && !row.kinds.contains k.name then
       err span s!"`{row.name}` is not available in {article k.name} `{k.name}` \
-        program"
+        program on kernel {env.prelude.kernel}"
   if row.gplOnly && !env.gplCompatible then
     err span s!"`{row.name}` is GPL-only; declare `license \"GPL\"` or another \
       GPL-compatible license"
@@ -502,7 +512,7 @@ partial def preludeFn (env : Env) (K : Ctx) (span : Span) (row : CallRow)
       err span s!"`{row.name}` takes {params.length} arguments, {args.length} \
         given"
     for (p, a) in params.zip args do
-      checkArg env K row.name p.name p.ty a
+      checkArg env K row.name p a
     return ret
   | .builtin => builtinCall env K span row.name args
 
@@ -601,7 +611,7 @@ partial def synthCall (env : Env) (K : Ctx) (span : Span) (f : String)
     unless args.length == d.params.length do
       err span s!"`{f}` takes {d.params.length} arguments, {args.length} given"
     for (p, a) in d.params.zip args do
-      checkArg env K f p.name p.ty a
+      checkArg env K f p a
     if d.fails && !K.mayFail then
       err span s!"`{f}` may fail; a call to it is allowed only in a failing \
         context, a program or a function marked `fails`"
@@ -687,56 +697,71 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
     | _ => err s "a marked load reads a field"
   | .call s fn args => return { ty := ← synthCall env K s fn args true }
   | .acquire s r fn tyArg args =>
-    if r == .iter then
-      err s "iterator loops are not in this draft's resource table \
-        (an open design point)"
-    match r with
-    | .spinlock =>
+    -- the acquisition's argument form is a column of its row
+    let row ← match env.prelude.resource? r with
+      | some row => pure row
+      | none =>
+        if r == .iter then
+          err s "iterator loops are not in this draft's resource table \
+            (an open design point)"
+        err s s!"`{r}` has no row in the resource table"
+    match row.arg with
+    | .place slot =>
       match args with
       | [.place p] =>
         let info ← placeTy env K p
         match ← env.norm info.ty with
-        | .spinlock _ => pure ()
+        | .slot _ n =>
+          unless n == slot do
+            err p.span s!"`{fn}` takes a `{slot}` place; `{p.print}` is a \
+              `{n}`"
         | _ =>
-          err p.span s!"`lock` takes a `spinlock` place; `{p.print}` is a \
+          err p.span s!"`{fn}` takes a `{slot}` place; `{p.print}` is a \
             `{info.ty.print}`"
+        let homes := ((env.prelude.slot? slot).map (·.homes)).getD []
+        let homesText := ", ".intercalate (homes.map Home.describe)
         match info.origin with
-        | .map _ => pure ()
-        | _ => err p.span "a spin lock lives in a map value"
+        | .map _ =>
+          unless homes.contains .mapValue do
+            err p.span s!"a `{slot}` lives in {homesText}"
+        | _ => err p.span s!"a `{slot}` lives in {homesText}"
         return { ty := none }
-      | _ => err s "`lock(p)` takes one `spinlock` place"
-    | .rcu | .preempt | .irq =>
+      | _ => err s s!"`{fn}(p)` takes one `{slot}` place"
+    | .scope =>
       unless args.isEmpty do err s s!"`{fn}` takes no arguments"
       return { ty := none }
-    | .ringbuf =>
-      match args, tyArg with
-      | [.map ms m], some t =>
-        match env.map? m with
-        | some d =>
-          match d.kind with
-          | .ringbuf _ =>
-            if let some why ← env.notRepresentable t false then
-              err s s!"a ring-buffer record holds data; `{t.print}` contains \
-                {why}"
-            let _ ← env.layout t
-            return { ty := some (.own s (.ref s t)), origin := .kernel }
-          | _ => err ms s!"`{m}` is not a ring buffer"
-        | none => err ms s!"unknown map `{m}`"
-      | _, _ =>
-        err s "`rb.reserve<T>()` takes a ring buffer and a record type"
-    | .sockref =>
+    | .call =>
       match env.prelude.call? fn with
-      | some row =>
-        return { ty := ← preludeFn env K s row args, origin := .kernel }
+      | some crow =>
+        match crow.sig with
+        | .fn .. =>
+          return { ty := ← preludeFn env K s crow args, origin := .kernel }
+        | .builtin =>
+          -- `rb.reserve<T>()`, the one acquiring builtin, typed by rule
+          unless fn == "reserve" do err s s!"`{fn}` has no typing rule"
+          match args, tyArg with
+          | [.map ms m], some t =>
+            match env.map? m with
+            | some d =>
+              match d.kind with
+              | .ringbuf _ =>
+                if let some why ← env.notRepresentable t false then
+                  err s s!"a ring-buffer record holds data; `{t.print}` \
+                    contains {why}"
+                let _ ← env.layout t
+                return { ty := some (.own s t), origin := .kernel }
+              | _ => err ms s!"`{m}` is not a ring buffer"
+            | none => err ms s!"unknown map `{m}`"
+          | _, _ =>
+            err s "`rb.reserve<T>()` takes a ring buffer and a record type"
       | none => err s s!"unknown function `{fn}`"
-    | .iter => err s "unreachable"
   | .callopt s fn args =>
     match env.fn? fn with
     | some d =>
       unless args.length == d.params.length do
         err s s!"`{fn}` takes {d.params.length} arguments, {args.length} given"
       for (p, a) in d.params.zip args do
-        checkArg env K fn p.name p.ty a
+        checkArg env K fn p a
       if d.fails && !K.mayFail then
         err s s!"`{fn}` may fail; a call to it is allowed only in a failing \
           context, a program or a function marked `fails`"

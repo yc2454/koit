@@ -48,24 +48,23 @@ instance : ToString Kind := ⟨spelling⟩
 
 end Kind
 
-/-- The resources a `hold` block can hold, one per row of the resource
-table: spin locks, RCU sections, preempt-off and IRQ-off sections,
-ring-buffer records, and socket references; plus `iter` for the
-iterator loops `for x in it bounded N`, whose row this draft of the
-language does not define, so that desugaring stays total and the
-checker rejects the form. -/
-inductive Resource where
-  | spinlock | rcu | preempt | irq | ringbuf | sockref | iter
+/-- A resource a `hold` block can hold, named by its row of the
+prelude's resource table; the core knows the row's columns and never
+the row's name. `iter`, the resource of the iterator loops `for x in it
+bounded N`, has no row until the extensions add one, so that desugaring
+stays total and the checker rejects the form. -/
+structure Resource where
+  name : String
   deriving Repr, BEq, DecidableEq, Inhabited
 
 namespace Resource
 
-def spelling : Resource → String
-  | .spinlock => "spinlock" | .rcu => "rcu"         | .preempt => "preempt"
-  | .irq => "irq"           | .ringbuf => "ringbuf" | .sockref => "sockref"
-  | .iter => "iter"
+def spelling (r : Resource) : String := r.name
 
 instance : ToString Resource := ⟨spelling⟩
+
+/-- The iterator loops' resource, whose row the extensions add. -/
+def iter : Resource := ⟨"iter"⟩
 
 end Resource
 
@@ -123,7 +122,11 @@ inductive Ty where
   | int (span : Span) (signed : Bool) (width : Nat)
   | be (span : Span) (width : Nat)
   | bool (span : Span)
-  | spinlock (span : Span)
+  /-- A slot type, opaque, from the prelude's slot table: a spin lock,
+  and in the extensions timers, graph roots and nodes, and kernel
+  pointer fields. Only a prelude type declaration has this body; the
+  source names it like any type. -/
+  | slot (span : Span) (name : String)
   | named (span : Span) (name : String)
   | struct (span : Span) (fields : List Field)
   | array (span : Span) (elem : Ty) (len : Expr)
@@ -217,7 +220,7 @@ end
 deriving instance Repr, Inhabited for Ty, Field, Expr, Place, Arg, Fallible
 
 def Ty.span : Ty → Span
-  | .int s .. | .be s .. | .bool s | .spinlock s | .named s .. | .struct s ..
+  | .int s .. | .be s .. | .bool s | .slot s .. | .named s .. | .struct s ..
   | .array s .. | .ref s .. | .view s .. | .own s .. | .refined s ..
   | .opt s .. => s
 
@@ -342,11 +345,15 @@ inductive Effect where
   | write (r : Region)
   deriving Repr, Inhabited
 
+/-- A parameter. `isConst`, for prelude signatures only, marks a
+parameter that takes a constant expression at every call, the kernel's
+constant-size arguments. -/
 structure Param where
   span : Span
   name : String
   ty   : Ty
   pred : Option Expr
+  isConst : Bool := false
   deriving Repr, Inhabited
 
 /-- A function, kept in Core with its signature, since it is checked

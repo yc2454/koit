@@ -1,0 +1,10 @@
+// expect: is a slot
+// A slot type is not data: a spin lock is never read or bound; it is
+// named by `hold lock(p)`.
+map counters : array[1] of { lk: spinlock, n: u64 }
+
+program p : xdp fail drop {
+  let c = counters[0]
+  let l = c.lk
+  pass
+}

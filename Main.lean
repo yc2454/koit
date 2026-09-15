@@ -10,12 +10,13 @@ implemented yet.
 open Koit Koit.Syntax
 
 def usage : String := String.intercalate "\n"
-  ["usage: koitc <command> FILE.ko",
+  ["usage: koitc <command> [--kernel TAG] FILE.ko",
    "  lex     print the tokens of FILE, one per line",
    "  parse   parse FILE and list its declarations",
    "  print   parse FILE and print it back as source",
    "  desugar parse FILE and print its Core",
-   "  check   type-check FILE against the stage-1 prelude",
+   "  check   type-check FILE against the prelude of kernel TAG",
+   "          (default and only prelude in stage 1: v7.0)",
    "  run     interpret FILE (from session 3)"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
@@ -50,6 +51,27 @@ def notYet (cmd session : String) : IO UInt32 := do
   IO.eprintln s!"koitc {cmd}: not implemented yet ({session})"
   return 2
 
+/-- The preludes the compiler carries, one per kernel tag. -/
+def preludes : List Prelude := [Prelude.stage1]
+
+/-- The prelude for a kernel tag; the first one when no tag is given. -/
+def preludeFor (tag : Option String) : IO (Option Prelude) := do
+  match tag with
+  | none => return preludes.head?
+  | some t =>
+    match preludes.find? (·.kernel == t) with
+    | some p => return some p
+    | none =>
+      IO.eprintln s!"koitc: no prelude for kernel {t}; available: \
+        {", ".intercalate (preludes.map (·.kernel))}"
+      return none
+
+/-- Splits `[--kernel TAG] FILE` into the tag and the file. -/
+def kernelOpt : List String → Option (Option String × String)
+  | ["--kernel", t, file] => some (some t, file)
+  | [file] => some (none, file)
+  | _ => none
+
 def run (args : List String) : IO UInt32 := do
   match args with
   | ["lex", file] => do
@@ -75,16 +97,20 @@ def run (args : List String) : IO UInt32 := do
       IO.print u.print
       return 0
     | none => return 1
-  | ["desugar", file] => do
+  | "desugar" :: rest => do
+    let some (tag, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let some pre ← preludeFor tag | return 2
     match ← parseFile file with
     | some u =>
-      IO.print (Core.desugar Prelude.stage1 u).print
+      IO.print (Core.desugar pre u).print
       return 0
     | none => return 1
-  | ["check", file] => do
+  | "check" :: rest => do
+    let some (tag, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let some pre ← preludeFor tag | return 2
     match ← parseFile file with
     | some u =>
-      match Check.checkUnit Prelude.stage1 (Core.desugar Prelude.stage1 u) with
+      match Check.checkUnit pre (Core.desugar pre u) with
       | .ok () =>
         IO.println s!"{file}: ok"
         return 0

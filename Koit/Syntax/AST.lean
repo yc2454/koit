@@ -52,7 +52,6 @@ inductive Ty where
   | int (span : Span) (signed : Bool) (width : Nat)
   | be (span : Span) (width : Nat)
   | bool (span : Span)
-  | spinlock (span : Span)
   | named (span : Span) (name : String)
   | struct (span : Span) (fields : List Field)
   /-- `{ v: T | P }`. -/
@@ -95,7 +94,7 @@ end
 deriving instance Repr, Inhabited for Ty, Field, Expr, FieldInit
 
 def Ty.span : Ty → Span
-  | .int s .. | .be s .. | .bool s | .spinlock s | .named s ..
+  | .int s .. | .be s .. | .bool s | .named s ..
   | .struct s .. | .refined s .. | .array s .. | .ref s .. | .view s ..
   | .opt s .. | .own s .. => s
 

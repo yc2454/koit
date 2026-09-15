@@ -86,9 +86,9 @@ def bindInit (env : Env) (K : Ctx) (span : Span) (mutable : Bool) (x : String)
         return { name := x, ty := t, mutable, origin := .stack }
       | none => return { name := x, ty := tn, mutable, origin := .stack }
     match tn with
-    | .spinlock _ =>
-      err span "a `spinlock` is not bound; it is held with `hold lock(p)` \
-       "
+    | .slot _ n =>
+      err span s!"a `{n}` is a slot: it is not bound or read; it is named by \
+        {env.slotUse n}"
     | _ => pure ()
     -- (P3): an aggregate place is named
     if mutable then
@@ -178,8 +178,15 @@ partial def checkStmts (env : Env) (K : Ctx) : List Stmt → M Unit
             assign to it"
       let tn ← env.norm info.ty
       match tn with
-      | .spinlock _ => err span "a `spinlock` is not assigned"
+      | .slot _ n =>
+        err span s!"a `{n}` is a slot: it is not assigned; it is named by \
+          {env.slotUse n}"
       | _ => pure ()
+      if info.origin == .pkt then
+        if let some row := env.kind then
+          unless row.pktWritable do
+            err span s!"the packet is read-only in {article row.name} \
+              `{row.name}` program"
       unless tn.isScalar do
         err span s!"`{p.print}` is an aggregate of type `{info.ty.print}`; \
           assign its fields, or use `copy` (P3)"

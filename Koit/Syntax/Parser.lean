@@ -154,7 +154,6 @@ def primType (span : Span) : String → Ty
   | "i32" => .int span true 32   | "i64" => .int span true 64
   | "be16" => .be span 16 | "be32" => .be span 32 | "be64" => .be span 64
   | "bool" => .bool span
-  | "spinlock" => .spinlock span
   | n => .named span n
 
 def cmpOp : Token → Option BinOp

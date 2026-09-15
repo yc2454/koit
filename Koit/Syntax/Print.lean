@@ -88,7 +88,6 @@ partial def Ty.print : Ty → String
   | .int _ signed w => (if signed then "i" else "u") ++ toString w
   | .be _ w => "be" ++ toString w
   | .bool _ => "bool"
-  | .spinlock _ => "spinlock"
   | .named _ n => n
   | .struct _ fields =>
     "{ " ++ ", ".intercalate (fields.map Field.print) ++ " }"

@@ -17,7 +17,8 @@ open Koit.Core
 /-- `enum xdp_action`, include/uapi/linux/bpf.h; `struct xdp_md` fields
 per `xdp_is_valid_access`. -/
 def xdpRow : KindRow :=
-  { name := "xdp", section_ := "xdp", hasPkt := true, verdictTy := tU32,
+  { name := "xdp", section_ := "xdp", hasPkt := true, pktWritable := true,
+    verdictTy := tU32,
     verdicts := [("ABORTED", 0), ("DROP", 1), ("PASS", 2), ("TX", 3),
                  ("REDIRECT", 4)],
     sugar := [("pass", "PASS"), ("drop", "DROP"), ("tx", "TX"),
@@ -30,7 +31,8 @@ def xdpRow : KindRow :=
 `u32`. `struct __sk_buff` fields per `tc_cls_act_is_valid_access`, of
 which `mark` is writable. -/
 def tcRow : KindRow :=
-  { name := "tc", section_ := "tc", hasPkt := true, verdictTy := tU32,
+  { name := "tc", section_ := "tc", hasPkt := true, pktWritable := true,
+    verdictTy := tU32,
     verdicts := [("OK", 0), ("SHOT", 2), ("UNSPEC", 0xFFFFFFFF),
                  ("PIPE", 3), ("REDIRECT", 7)],
     sugar := [("pass", "OK"), ("drop", "SHOT")],
@@ -71,19 +73,19 @@ def callRows : List CallRow := [
     (fails := some .helper),
   callRow "delete" .builtin [.call, .fail] "bpf_map_delete_elem"
     (fails := some .helper),
-  -- `rb.reserve<T>()` yields `own (ref T)`, bound by `hold`
+  -- `rb.reserve<T>()` yields `own T`, bound by `hold`
   callRow "reserve" .builtin [.call, .fail] "bpf_ringbuf_reserve"
-    (fails := some .helper) (acquires := some .ringbuf),
+    (fails := some .helper) (acquires := some ⟨"ringbuf"⟩),
   callRow "sk_lookup_tcp"
     (.fn [param "tuple" (.ref noSpan (.named noSpan "SockTuple"))]
       (some (.own noSpan (.named noSpan "Sock"))))
     [.call, .fail] "bpf_sk_lookup_tcp" (fails := some .missing)
-    (acquires := some .sockref) (kinds := ["xdp", "tc"]),
+    (acquires := some ⟨"sockref"⟩) (kinds := ["xdp", "tc"]),
   callRow "sk_lookup_udp"
     (.fn [param "tuple" (.ref noSpan (.named noSpan "SockTuple"))]
       (some (.own noSpan (.named noSpan "Sock"))))
     [.call, .fail] "bpf_sk_lookup_udp" (fails := some .missing)
-    (acquires := some .sockref) (kinds := ["xdp", "tc"]),
+    (acquires := some ⟨"sockref"⟩) (kinds := ["xdp", "tc"]),
   -- a consuming call: its parameter is a `move` sink
   callRow "sk_release" (.fn [param "sk" (.own noSpan (.named noSpan "Sock"))]
     none) [.call] "bpf_sk_release" (kinds := ["xdp", "tc"]),
@@ -112,43 +114,57 @@ def callRows : List CallRow := [
 /-! ### Resources -/
 
 def resourceRows : List ResourceRow := [
-  { res := .spinlock, acquirers := ["lock"], yields := false, fails := none,
+  { res := ⟨"spinlock"⟩, acquirers := ["lock"], arg := .place "spinlock",
+    yields := false, fails := none,
     normalExit := "bpf_spin_unlock", abnormalExit := "bpf_spin_unlock",
     forbidden := [.call, .resize, .sleep], nesting := .no,
     guards := "the allocation the lock lies in, for moved graph nodes" },
-  { res := .rcu, acquirers := ["rcu"], yields := false, fails := none,
-    normalExit := "bpf_rcu_read_unlock", abnormalExit := "bpf_rcu_read_unlock",
-    forbidden := [.sleep], nesting := .counted,
+  { res := ⟨"rcu"⟩, acquirers := ["rcu"], arg := .scope, yields := false,
+    fails := none, normalExit := "bpf_rcu_read_unlock",
+    abnormalExit := "bpf_rcu_read_unlock", forbidden := [.sleep],
+    nesting := .counted,
     guards := "RCU-protected pointers, kernel-memory extension" },
-  { res := .preempt, acquirers := ["preempt_off"], yields := false,
-    fails := none, normalExit := "bpf_preempt_enable",
+  { res := ⟨"preempt"⟩, acquirers := ["preempt_off"], arg := .scope,
+    yields := false, fails := none, normalExit := "bpf_preempt_enable",
     abnormalExit := "bpf_preempt_enable", forbidden := [.sleep],
     nesting := .counted, guards := "" },
-  { res := .irq, acquirers := ["irq_off"], yields := false, fails := none,
-    normalExit := "bpf_local_irq_restore",
+  { res := ⟨"irq"⟩, acquirers := ["irq_off"], arg := .scope, yields := false,
+    fails := none, normalExit := "bpf_local_irq_restore",
     abnormalExit := "bpf_local_irq_restore", forbidden := [.sleep],
     nesting := .lifo, guards := "" },
-  { res := .ringbuf, acquirers := ["reserve"], yields := true,
+  { res := ⟨"ringbuf"⟩, acquirers := ["reserve"], arg := .call, yields := true,
     fails := some .helper, normalExit := "bpf_ringbuf_submit",
     abnormalExit := "bpf_ringbuf_discard", forbidden := [.sleep],
     nesting := .yes, guards := "" },
-  { res := .sockref, acquirers := ["sk_lookup_tcp", "sk_lookup_udp"],
-    yields := true, fails := some .missing, normalExit := "bpf_sk_release",
-    abnormalExit := "bpf_sk_release", forbidden := [.sleep],
-    nesting := .yes, guards := "" }
+  { res := ⟨"sockref"⟩, acquirers := ["sk_lookup_tcp", "sk_lookup_udp"],
+    arg := .call, yields := true, fails := some .missing,
+    normalExit := "bpf_sk_release", abnormalExit := "bpf_sk_release",
+    forbidden := [.sleep], nesting := .yes, guards := "" }
 ]
 
 /-! ### Region kinds -/
 
 def regionRows : List RegionRow := [
-  { name := "stack", dynamic := false, guard := none,
+  { name := "stack", dynamic := false, writable := true, initialized := true,
+    guard := none,
     note := "locals and struct literals; frame size reported by the compiler" },
-  { name := "map value", dynamic := false, guard := none,
-    note := "array slots and hash lookups; valid for the whole run" },
-  { name := "ctx", dynamic := false, guard := none,
-    note := "fields per kind, table 2" },
-  { name := "pkt", dynamic := true, guard := some .layout,
-    note := "views; the layout token is dropped by `resize`" }
+  { name := "map value", dynamic := false, writable := true,
+    initialized := true, guard := none,
+    note := "array slots and hash lookups; zero-filled; valid for the whole run" },
+  { name := "ctx", dynamic := false, writable := false, initialized := true,
+    guard := none, note := "fields per kind, table 2; writability per field" },
+  { name := "pkt", dynamic := true, writable := true, initialized := true,
+    guard := some .layout,
+    note := "views; writable per kind; the layout token is dropped by `resize`" }
+]
+
+/-! ### Slot types -/
+
+/-- `enum btf_field_type` and `btf_get_field_type`, kernel/bpf/btf.c;
+stage 1 has the spin lock. -/
+def slotRows : List SlotRow := [
+  { name := "spinlock", kernel := "bpf_spin_lock", size := 4, align := 4,
+    unique := true, homes := [.mapValue], namedBy := "`hold lock(p)`" }
 ]
 
 /-! ### Constants and types -/
@@ -177,6 +193,7 @@ def constRows : List ConstDecl := [
 /-- `Sock` is opaque; `SockTuple` is `struct bpf_sock_tuple`'s IPv4
 member, the argument of the socket lookups. -/
 def typeRows : List TypeDecl := [
+  { span := noSpan, name := "spinlock", ty := .slot noSpan "spinlock" },
   { span := noSpan, name := "Sock", ty := .struct noSpan [] },
   { span := noSpan, name := "SockTuple",
     ty := .struct noSpan [field "saddr" tBe32, field "daddr" tBe32,
@@ -186,7 +203,7 @@ def typeRows : List TypeDecl := [
 /-- The stage-1 prelude, transcribed from upstream v7.0. -/
 def stage1 : Prelude :=
   { kernel := "v7.0", kinds := [xdpRow, tcRow, syscallRow], calls := callRows,
-    resources := resourceRows, regions := regionRows,
+    resources := resourceRows, regions := regionRows, slots := slotRows,
     consts := constRows, types := typeRows }
 
 end Koit.Prelude

@@ -13,6 +13,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
+open Koit.Prelude (Home SlotRow maxSlots)
 
 
 /-- `{v: T | P}` weakened to `T`, at the head. -/
@@ -93,7 +94,10 @@ partial def Env.layout (env : Env) (t : Ty) (fuel : Nat := 64) :
   | .int _ _ w => return (w / 8, w / 8)
   | .be _ w => return (w / 8, w / 8)
   | .bool _ => return (1, 1)
-  | .spinlock _ => return (4, 4)
+  | .slot s n =>
+    match env.prelude.slot? n with
+    | some row => return (row.size, row.align)
+    | none => err s s!"unknown slot type `{n}`"
   | .struct _ fields =>
     let mut off := 0
     let mut align := 1
@@ -112,41 +116,75 @@ partial def Env.layout (env : Env) (t : Ty) (fuel : Nat := 64) :
 
 end
 
-/-- Why a type is not packet-representable, if it is not:
-a `spinlock`, a `ref`, a `view`, an `own`, or an optional inside it.
-With `allowLock`, one `spinlock` is admitted, as in a map value. -/
-partial def Env.notRepresentable (env : Env) (t : Ty) (allowLock : Bool)
+/-- Why a type is not packet-representable, if it is not: a slot type,
+a `ref`, a `view`, an `own`, or an optional inside it. With
+`allowSlots`, slot types are admitted, as in a map value, where their
+rows are checked separately. -/
+partial def Env.notRepresentable (env : Env) (t : Ty) (allowSlots : Bool)
     (fuel : Nat := 64) : M (Option String) := do
   if fuel == 0 then return some "a type nested too deep"
   match ← env.norm t with
   | .int .. | .be .. | .bool .. => return none
-  | .spinlock _ => return if allowLock then none else some "`spinlock`"
+  | .slot _ n =>
+    return if allowSlots then none else some s!"the slot type `{n}`"
   | .struct _ fields =>
     for f in fields do
-      if let some why ← env.notRepresentable f.ty allowLock (fuel - 1) then
+      if let some why ← env.notRepresentable f.ty allowSlots (fuel - 1) then
         return some why
     return none
-  | .array _ elem _ => env.notRepresentable elem allowLock (fuel - 1)
+  | .array _ elem _ => env.notRepresentable elem allowSlots (fuel - 1)
   | .ref .. => return some "`ref`"
   | .view .. => return some "`view`"
   | .own .. => return some "`own`"
   | .opt .. => return some "an optional"
   | _ => return some "an unknown type"
 
-/-- The number of `spinlock` fields in a data type, through nesting. -/
-partial def Env.spinlocks (env : Env) (t : Ty) (fuel : Nat := 64) : M Nat := do
-  if fuel == 0 then return 0
+/-- The slot fields of a data type, through nesting, one entry per
+field with an array's elements counted. -/
+partial def Env.slotsIn (env : Env) (t : Ty) (fuel : Nat := 64) :
+    M (List String) := do
+  if fuel == 0 then return []
   match ← env.norm t with
-  | .spinlock _ => return 1
+  | .slot _ n => return [n]
   | .struct _ fields =>
-    let mut n := 0
+    let mut acc : List String := []
     for f in fields do
-      n := n + (← env.spinlocks f.ty (fuel - 1))
-    return n
+      acc := acc ++ (← env.slotsIn f.ty (fuel - 1))
+    return acc
   | .array _ elem n =>
     let k := (env.evalConst n).map (·.toNat) |>.getD 1
-    return k * (← env.spinlocks elem (fuel - 1))
-  | _ => return 0
+    let inner ← env.slotsIn elem (fuel - 1)
+    return (List.replicate k inner).flatten
+  | _ => return []
+
+/-- What names a slot type, for a diagnostic about using one as data. -/
+def Env.slotUse (env : Env) (n : String) : String :=
+  match env.prelude.slot? n with
+  | some row => row.namedBy
+  | none => "its resource"
+
+/-- The slot rules over a data type: a row for every slot, at most one
+field of a unique slot, at most `maxSlots` in all, and, when `home` is
+given, every slot at home there. `what` names the type in messages. -/
+def Env.checkSlots (env : Env) (span : Span) (what : String) (t : Ty)
+    (home : Option Home := none) : M Unit := do
+  let names ← env.slotsIn t
+  if names.length > maxSlots then
+    err span s!"{what} has {names.length} slot fields; a value holds at \
+      most {maxSlots}"
+  for n in names.eraseDups do
+    let row ← match env.prelude.slot? n with
+      | some row => pure row
+      | none => err span s!"unknown slot type `{n}`"
+    let k := names.count n
+    if row.unique && k > 1 then
+      err span s!"{what} has {k} fields of type `{n}`; at most one field of \
+        type `{n}`"
+    if let some h := home then
+      unless row.homes.contains h do
+        err span s!"{what} may not contain a `{n}`: a `{n}` lives in \
+          {", ".intercalate (row.homes.map Home.describe)}, not in \
+          {h.describe}"
 
 /-- Base-type equality: structural, through named types, with
 refinements ignored and array lengths compared by value when both
@@ -160,7 +198,7 @@ partial def Env.eqv (env : Env) (a b : Ty) (fuel : Nat := 64) : M Bool := do
   | .int _ s w, .int _ s' w' => return s == s' && w == w'
   | .be _ w, .be _ w' => return w == w'
   | .bool _, .bool _ => return true
-  | .spinlock _, .spinlock _ => return true
+  | .slot _ a, .slot _ b => return a == b
   | .struct _ fs, .struct _ gs =>
     if fs.length != gs.length then return false
     for (f, g) in fs.zip gs do

@@ -25,7 +25,7 @@ and a struct field may have. -/
 partial def checkDataTy (env : Env) (t : Ty) (fuel : Nat := 64) : M Unit := do
   if fuel == 0 then err t.span "type nesting too deep"
   match t with
-  | .int .. | .be .. | .bool .. | .spinlock .. => pure ()
+  | .int .. | .be .. | .bool .. | .slot .. => pure ()
   | .named s n =>
     match env.type? n with
     | some _ =>
@@ -50,8 +50,7 @@ partial def checkDataTy (env : Env) (t : Ty) (fuel : Nat := 64) : M Unit := do
         let sibs : List Local := fields.map fun g =>
           { name := g.name, ty := g.ty, mutable := false, origin := .stack }
         checkPred env sibs p
-    if (← env.spinlocks t) > 1 then
-      err s "at most one field of type `spinlock`"
+    env.checkSlots s "the struct" t
   | .array _ elem n =>
     checkDataTy env elem (fuel - 1)
     checkCount env.top K0 "an array length" n
@@ -124,15 +123,13 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
   let capacity (n : Expr) : M Unit :=
     checkCount env.top K0 "a map capacity" n
   let value (v : Ty) : M Unit := do
-    let locks ← env.spinlocks v
-    if locks > 1 then
-      err v.span s!"the value type of map `{d.name}` has {locks} fields of \
-        type `spinlock`; at most one field of type `spinlock`"
+    env.checkSlots v.span s!"the value type of map `{d.name}`" v
+      (some .mapValue)
     checkDataTy env v
     if let some why ← env.notRepresentable v true then
       err v.span s!"the value type of map `{d.name}` may not contain {why}: \
         map keys and values are packet-representable, and a value may hold \
-        one `spinlock`"
+        slot types per their rows"
     let _ ← env.layout v
   match d.kind with
   | .array n v | .percpu n v =>

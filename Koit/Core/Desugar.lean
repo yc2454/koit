@@ -96,7 +96,6 @@ def primTy? (span : Span) : String → Option Ty
   | "i32" => some (.int span true 32)   | "i64" => some (.int span true 64)
   | "be16" => some (.be span 16) | "be32" => some (.be span 32)
   | "be64" => some (.be span 64) | "bool" => some (.bool span)
-  | "spinlock" => some (.spinlock span)
   | _ => none
 
 def lit0 (span : Span) : Expr := .lit span 0 "0"
@@ -163,7 +162,6 @@ partial def dTy (c : Ctx) : Syntax.Ty → M Ty
   | .int s signed w => pure (.int s signed w)
   | .be s w => pure (.be s w)
   | .bool s => pure (.bool s)
-  | .spinlock s => pure (.spinlock s)
   | .named s n => pure (.named s n)
   | .struct s fields => do
     let names := fields.map (·.name)
@@ -202,10 +200,12 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
     | some (.hash ..) => return some (.op (.lookup s m (← dPlace c k)))
     | _ => return none
   | .tcall s (.var _ m) "reserve" ty [] => do
-    if (c.map? m).isSome then
-      return some (.op (.acquire s .ringbuf "reserve" (some (← dTy c ty))
+    -- the ring-buffer record's resource, from its row
+    match c.map? m, c.info.prelude.acquirer? "reserve" with
+    | some _, some row =>
+      return some (.op (.acquire s row.res "reserve" (some (← dTy c ty))
         [.map s m]))
-    return none
+    | _, _ => return none
   | .call s (.var _ f) args => do
     if let some d := c.fn? f then
       match d.ret with
