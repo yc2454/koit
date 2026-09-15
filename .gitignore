@@ -1,3 +1,4 @@
 .lake/
-spec/
+spec/*
+!spec/language.md
 PLAN.md
