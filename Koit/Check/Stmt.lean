@@ -24,6 +24,7 @@ open Koit (Span)
 open Koit.Core
 open Koit.Prelude (tU32 tU64 AcqArg)
 open Koit.Facts (Origin Facts Fact Scope)
+open Koit.Effects (Eff Effs Conflict)
 
 /-- Whether a block ends in an exit: its
 last statement exits on every path through it. -/
@@ -465,25 +466,261 @@ def atomicAfter (env : Env) (K : Ctx) (p : Place) (args : List Expr)
   | some n => F.dropNames [n]
   | none => F
 
+
+/-! ### Effects -/
+
+/-- The calls in an initializer. -/
+def callsInInit : Init → List (String × List Arg)
+  | .expr e => callsInExpr e
+  | .place p => callsInPlace p
+  | .lit _ fs => fs.flatMap fun f => callsInExpr f.value
+
+/-- A literal expression for a byte count. -/
+def litNat (s : Span) (n : Nat) : Expr := .lit s n (toString n)
+
+/-- `e + n`, folded when `e` is a literal, and `e` when `n` is zero. -/
+def plusNat (e : Expr) (n : Nat) : Expr :=
+  match e with
+  | .lit s v _ => litNat s (v + n)
+  | _ => if n == 0 then e else .arith e.span .add e (litNat e.span n)
+
+/-- The byte offset of field `f` in a struct type; `none` when the type
+has no such field. -/
+def fieldOffset (env : Env) (t : Ty) (f : String) : M (Option Nat) := do
+  match ← env.norm t with
+  | .struct _ fields =>
+    let mut off := 0
+    for fd in fields do
+      let (sz, al) ← env.layout fd.ty
+      off := (off + al - 1) / al * al
+      if fd.name == f then return some off
+      off := off + sz
+    return none
+  | _ => return none
+
+/-- The name a place is reached through and the constant byte offset
+of the place within it, through fields and literal indexes; the
+offset is `none` when an index is not a literal. -/
+partial def placeOffset (env : Env) (K : Ctx) (p : Place) :
+    M (Option (String × Option Nat)) := do
+  match p with
+  | .var _ x | .deref _ (.var _ x) => return some (x, some 0)
+  | .field _ q f =>
+    match ← placeOffset env K q with
+    | some (x, some k) =>
+      let info ← placeTy env K q
+      match ← fieldOffset env info.ty f with
+      | some o => return some (x, some (k + o))
+      | none => return some (x, none)
+    | r => return r
+  | .index _ q i =>
+    match ← placeOffset env K q with
+    | some (x, some k) =>
+      let info ← placeTy env K q
+      match ← env.norm info.ty with
+      | .array _ elem _ =>
+        let (sz, _) ← env.layout elem
+        match env.evalConst i with
+        | some v => return some (x, some (k + sz * v.toNat))
+        | none => return some (x, none)
+      | _ => return some (x, none)
+    | r => return r
+  | _ => return none
+
+/-- The view parameters of the function under check. -/
+def viewParams (env : Env) (K : Ctx) : List String :=
+  match K.fnName.bind env.fn? with
+  | some d => d.params.filterMap fun p => match p.ty with
+    | .view .. => some p.name
+    | _ => none
+  | none => []
+
+/-- The packet write of a store to the bytes `[lo, hi)` of the place
+`q`, which lies in the packet: the range from the view's offset, when
+the facts have it; the range relative to the view parameter, inside a
+function; the whole packet otherwise. A store at an offset that is
+not constant, an element at a variable index, is the view's whole
+extent. -/
+def pktWrite (env : Env) (K : Ctx) (q : Place) (lo hi : Nat) : M Eff := do
+  let q := K.facts.resolve q
+  let some (h, k?) ← placeOffset env K q | return .pktAll
+  let some l := env.local? h | return .pktAll
+  let vsz ← match l.ty with
+    | .view _ vt => (env.layout vt).map (·.1)
+    | _ => return .pktAll
+  let (rlo, rhi) := match k? with
+    | some k => (k + lo, k + hi)
+    | none => (0, vsz)
+  match K.facts.offsetOf h with
+  | some o =>
+    -- a constant offset, `EthHdr.size`, is folded to its bytes
+    let o := match env.evalConst o with
+      | some v => litNat o.span v.toNat
+      | none => o
+    return .pkt (plusNat o rlo) (plusNat o rhi)
+  | none =>
+    if (viewParams env K).contains h then return .viaView h rlo rhi
+    else return .pktAll
+
+/-- The write effect of a store to `p`: the map it lies in, the
+context field, the packet range through its view, or the parameter it
+is reached through inside a function; nothing for the stack. -/
+def writesOf (env : Env) (K : Ctx) (p : Place) : M Effs := do
+  let info ← placeTy env K p
+  match info.origin with
+  | .stack | .kernel => return {}
+  | .map m => return Effs.ofList [.map m]
+  | .ctx =>
+    match p with
+    | .field _ _ f => return Effs.ofList [.ctx f]
+    | _ => return {}
+  | .param =>
+    match ← placeOffset env K (K.facts.resolve p) with
+    | some (x, _) => return Effs.ofList [.viaRef x]
+    | none => return {}
+  | .pkt =>
+    let (sz, _) ← env.layout info.ty
+    return Effs.ofList [← pktWrite env K p 0 sz]
+
+/-- The effects of a call: a function of the unit contributes its
+summary instantiated on the arguments, the writes through its `ref`
+and `view` parameters becoming writes to what was passed; a prelude
+call contributes its row, with the writes of `copy`, `fill`,
+`insert`, and `delete` from their place or map argument. -/
+def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
+    M Effs := do
+  if let some d := env.fn? f then
+    let E := (env.fnEffects.lookup f).getD {}
+    let argOf (x : String) : Option Arg :=
+      ((d.params.zip args).find? (·.1.name == x)).map (·.2)
+    let mut R : Effs := {}
+    for e in E.effs do
+      match e with
+      | .viaRef x =>
+        if let some (.place q) := argOf x then
+          R := R.union (← writesOf env K q)
+      | .viaView h lo hi =>
+        if let some (.place q) := argOf h then
+          R := R.add (← pktWrite env K q lo hi)
+      | e => R := R.add e
+    return R
+  match env.prelude.call? f with
+  | some row =>
+    let mut R := Effs.ofCore row.effects
+    match f, args with
+    | "copy", .place dst :: _ | "fill", .place dst :: _ =>
+      R := R.union (← writesOf env K dst)
+    | "insert", .map _ m :: _ | "delete", .map _ m :: _ =>
+      R := R.add (.map m)
+    | _, _ => pure ()
+    return R
+  | none => return {}
+
+def effectsOfCalls (env : Env) (K : Ctx) (calls : List (String × List Arg)) :
+    M Effs := do
+  let mut R : Effs := {}
+  for (f, args) in calls do
+    R := R.union (← callEffects env K f args)
+  return R
+
+/-- The effects of a fallible operation: the calls in its operands,
+and the call itself for a helper, a `T?` function, or an acquiring
+kernel function. -/
+def fallibleEffects (env : Env) (K : Ctx) : Fallible → M Effs
+  | .view _ off _ => effectsOfCalls env K (callsInExpr off)
+  | .lookup _ _ k => effectsOfCalls env K (callsInPlace k)
+  | .loadw _ p => effectsOfCalls env K (callsInPlace p)
+  | .coerce _ e _ => effectsOfCalls env K (callsInExpr e)
+  | .call _ f args | .callopt _ f args | .acquire _ _ f _ args =>
+    effectsOfCalls env K ((f, args) :: callsInArgs args)
+
+/-- The effects of a statement itself, apart from the blocks inside
+it: the calls in its expressions, the write of its store, and `fail`
+for a `raise`. -/
+def stmtEffects (env : Env) (K : Ctx) : Stmt → M Effs
+  | .«let» _ _ _ _ init => effectsOfCalls env K (callsInInit init)
+  | .assign _ p e => do
+    return (← writesOf env K p).union
+      (← effectsOfCalls env K (callsInPlace p ++ callsInExpr e))
+  | .ite _ c .. => effectsOfCalls env K (callsInExpr c)
+  | .loop _ n _ => effectsOfCalls env K (callsInExpr n)
+  | .«for» _ _ lo hi _ =>
+    effectsOfCalls env K (callsInExpr lo ++ callsInExpr hi)
+  | .ret _ (some e) => effectsOfCalls env K (callsInExpr e)
+  | .raise _ _ r => do return (← effectsOfCalls env K (callsInExpr r)).add .fail
+  | .«try» _ _ f .. => fallibleEffects env K f
+  | .hold _ _ _ acq .. => fallibleEffects env K acq
+  | .atomic _ _ _ p args => do
+    return (← writesOf env K p).union
+      (← effectsOfCalls env K (args.flatMap callsInExpr))
+  | _ => return {}
+
+/-- What a write effect touches, for a message. -/
+def describeWrite : Eff → String
+  | .pkt lo hi => s!"the packet bytes [{lo.printPred} .. {hi.printPred})"
+  | .pktAll => "the packet"
+  | .map m => s!"the map `{m}`"
+  | .ctx f => s!"the context field `{f}`"
+  | e => s!"`{e.print}`"
+
+/-- The program's preserved regions against the effects of one
+statement: a write into a preserved region or a resize under a
+preserved packet region is an error at the statement, and a packet
+write against a packet range demands, of the facts, that the two
+ranges be disjoint. -/
+def checkPreserved (env : Env) (K : Ctx) (span : Span) (E : Effs) :
+    M Unit := do
+  for r in K.preserved do
+    for e in E.effs do
+      match Koit.Effects.conflict r e with
+      | .none => pure ()
+      | .always =>
+        match e with
+        | .resize =>
+          err span s!"this statement resizes the packet, which \
+            `{r.printClause}` forbids: a resize moves every byte; drop the \
+            clause or the resize"
+        | _ =>
+          err span s!"this statement writes {describeWrite e}, which \
+            `{r.printClause}` forbids; drop the clause or the write"
+      | .demand P =>
+        unless Koit.Facts.entails (scope env K) K.facts P do
+          err span s!"the write to {describeWrite e} under \
+            `{r.printClause}` demands `{P.printPred}`; the facts here do \
+            not entail it: `check` the offset, or narrow the clause"
+
 mutual
 
 /-- A block: the facts on exit, with those about its own locals
-dropped. -/
-partial def checkStmts (env : Env) (K : Ctx) (ss : List Stmt) : M Facts := do
+dropped, and the effects of its statements. -/
+partial def checkStmts (env : Env) (K : Ctx) (ss : List Stmt) :
+    M (Facts × Effs) := do
   let mut env := env
   let mut F := K.facts
+  let mut E : Effs := {}
   let mut declared : List String := []
   for s in ss do
-    let (env', F', names) ← checkStmt env { K with facts := F } s
+    let (env', F', names, E') ← checkStmt env { K with facts := F } s
     env := env'
     F := F'
+    E := E.union E'
     declared := declared ++ names
-  return F.dropNames declared
+  return (F.dropNames declared, E)
 
-/-- One statement: the environment after it, the facts after it, and
-the names it declared. -/
+/-- One statement: the environment after it, the facts after it, the
+names it declared, and its effects, its own checked against the
+preserved regions and joined with those of the blocks inside it. -/
 partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
-    M (Env × Facts × List String) := do
+    M (Env × Facts × List String × Effs) := do
+  let (env', F', names, Esub) ← checkStmtBody env K s
+  let E ← stmtEffects env K s
+  checkPreserved env K s.span E
+  return (env', F', names, E.union Esub)
+
+/-- The typing of one statement, yielding the effects of the blocks
+inside it. -/
+partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
+    M (Env × Facts × List String × Effs) := do
   let sc := scope env K
   let F := K.facts
   match s with
@@ -493,12 +730,13 @@ partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
       match init with
       | .expr (.call s' f args) =>
         let _ ← synthCall env K s' f args false
-        return (env, afterCalls env sc F ((f, args) :: callsInArgs args), [])
+        return (env, afterCalls env sc F ((f, args) :: callsInArgs args), [],
+                {})
       | .expr (.invalid s' m) => err s' m
       | _ => err span "a bare expression statement must be a call"
     else
       let (l, F') ← bindInit env K span mutable x ty init
-      return (env.bind l, F', [x])
+      return (env.bind l, F', [x], {})
   | .assign span p e =>
     -- (Assign), (AssignW): a mutable scalar place, the field
     -- predicate or the local's refinement demanded, the store
@@ -545,37 +783,38 @@ partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
           let _ := s
       | none => pure ()
     | _ => pure ()
-    return (env, assignAfter env K p e, [])
+    return (env, assignAfter env K p e, [], {})
   | .ite _ c t e =>
     check env K c (.bool c.span)
     let (Fthn, Fels) := iteEntry env K c
-    let Ft ← checkStmts env { K with facts := Fthn } t
-    let Fe ← checkStmts env { K with facts := Fels } e
+    let (Ft, Et) ← checkStmts env { K with facts := Fthn } t
+    let (Fe, Ee) ← checkStmts env { K with facts := Fels } e
     -- (IfConst), and a condition the facts decide: one branch is dead
-    return (env, iteAfter env K c Ft Fe, [])
+    return (env, iteAfter env K c Ft Fe, [], Et.union Ee)
   | .loop _ n body =>
     -- (Repeat)
     checkCount env K "the count of `repeat`" n
-    let Fb ← checkStmts env { K with inLoop := true,
-                                     facts := loopHead env sc F body } body
-    return (env, loopAfter env K body Fb, [])
+    let (Fb, Eb) ← checkStmts env { K with inLoop := true,
+                                           facts := loopHead env sc F body }
+      body
+    return (env, loopAfter env K body Fb, [], Eb)
   | .«for» span x lo hi body =>
     -- (For): the cap is the bound's largest value under the facts, or
     -- the top of its type; the body has `lo <= i < hi`
     check env K lo tU64
     check env K hi tU64
-    let Fb ← checkStmts (env.bind (forLocal span x))
+    let (Fb, Eb) ← checkStmts (env.bind (forLocal span x))
       { K with inLoop := true, facts := forEntry env K span x lo hi body } body
-    return (env, loopAfter env K body Fb, [])
+    return (env, loopAfter env K body Fb, [], Eb)
   | .brk span =>
     unless K.inLoop do err span "`break` outside a loop"
-    return (env, F.bot, [])
+    return (env, F.bot, [], {})
   | .cont span =>
     unless K.inLoop do err span "`continue` outside a loop"
-    return (env, F.bot, [])
+    return (env, F.bot, [], {})
   | .ret span v =>
     checkRet env K span v
-    return (env, F.bot, [])
+    return (env, F.bot, [], {})
   | .raise span _ r =>
     -- (Mark), (Fail): the context may fail
     unless K.mayFail do
@@ -585,7 +824,7 @@ partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
       err span s!"`{K.fnName.getD "?"}` is not marked `fails`, so it may not \
         contain a marker, `check`, or `fail`"
     check env K r tU32
-    return (env, F.bot, [])
+    return (env, F.bot, [], {})
   | .«try» span x f thn els elseExits =>
     let b ← fallibleTy env K f
     let env' ← match x, b.ty with
@@ -597,16 +836,16 @@ partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
         err span s!"`{x}` binds nothing: the operation yields no value; \
           write `_`"
     let (Fthn, Fels) ← fallibleFacts env' K x f b
-    let Ft ← checkStmts env' { K with facts := Fthn } thn
-    let Fe ← checkStmts env
+    let (Ft, Et) ← checkStmts env' { K with facts := Fthn } thn
+    let (Fe, Ee) ← checkStmts env
       { K with facts := Fels, errnoOk := fallibleKind env f == .helper } els
     if elseExits && !exits els then
       err span s!"the `else` block must end in an exit: {exitForms} \
        "
-    return (env, meetK env K (Ft.dropNames [x]) Fe, [])
+    return (env, meetK env K (Ft.dropNames [x]) Fe, [], Et.union Ee)
   | .hold span r x acq body els =>
     -- (Hold); the held set, forbidden effects, nesting, and `move`
-    -- consistency come with effects
+    -- consistency come with resources
     let b ← fallibleTy env K acq
     let row ← match env.prelude.resource? r with
       | some row => pure row
@@ -630,19 +869,19 @@ partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
         err span s!"`{acqName acq}` yields a value; bind it with \
           `hold x = ...`"
     let F := holdEntry env K (row.arg == .call) acq
-    let Fb ← checkStmts env' { K with facts := F } body
+    let (Fb, Eb) ← checkStmts env' { K with facts := F } body
     let Fb := match x with
       | some n => Fb.dropNames [n]
       | none => Fb
     match els with
     | some e =>
-      let Fe ← checkStmts env { K with facts := F,
-                                       errnoOk := row.fails == some .helper } e
+      let (Fe, Ee) ← checkStmts env
+        { K with facts := F, errnoOk := row.fails == some .helper } e
       unless exits e do
         err span s!"the `else` block must end in an exit: {exitForms} \
          "
-      return (env, meetK env K Fb Fe, [])
-    | none => return (env, Fb, [])
+      return (env, meetK env K Fb Fe, [], Eb.union Ee)
+    | none => return (env, Fb, [], Eb)
   | .atomic span x op p args =>
     let info ← placeTyUse env K p
     unless info.mutable do err span s!"`{p.print}` is immutable"
@@ -666,8 +905,8 @@ partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
     | some n =>
       let l : Local := { name := n, ty := tn, mutable := false,
                          origin := .stack }
-      return (env.bind l, F, [n])
-    | none => return (env, F, [])
+      return (env.bind l, F, [n], {})
+    | none => return (env, F, [], {})
   | .invalid span m => err span m
 
 end

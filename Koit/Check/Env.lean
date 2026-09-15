@@ -2,16 +2,17 @@ import Koit.Core.Syntax
 import Koit.Core.Print
 import Koit.Prelude.Tables
 import Koit.Facts.Entail
+import Koit.Effects.Effects
 import Koit.Check.Diag
 
 /-!
 The typing environments: `G` as `Env`, with the unit's declarations,
 the prelude, the program kind, and the locals in scope; `K` as `Ctx`,
-with what the statement rules read from it in the base half (whether
-the context may fail, whether inside a loop, what `return` returns
-to) and the facts `F` on the current path; the held set and effects
-`E` come with effects, later. The operations on types are in
-`Types.lean`.
+with what the statement rules read from it (whether the context may
+fail, whether inside a loop, what `return` returns to), the facts `F`
+on the current path, and the program's preserved regions, which every
+statement's effects are checked against; the held set comes with
+resources. The operations on types are in `Types.lean`.
 -/
 
 namespace Koit.Check
@@ -20,6 +21,7 @@ open Koit (Span)
 open Koit.Core
 open Koit.Prelude (KindRow)
 open Koit.Facts (Origin Facts)
+open Koit.Effects (Effs)
 
 /-- A name in scope: a scalar value, or a place named by a binding,
 whose type is then `ref T`, `view T`, or `own T`. -/
@@ -46,6 +48,9 @@ structure Env where
   locals    : List Local := []
   /-- Untyped constants being expanded, to reject a cycle. -/
   visiting  : List String := []
+  /-- The effect summary of each function checked so far, stated over
+  its parameters; callees are checked before their callers. -/
+  fnEffects : List (String × Effs) := []
   /-- Trace each accepted entailment as a solver query, for the
   testing cross-check. -/
   smt       : Bool := false
@@ -116,6 +121,8 @@ structure Ctx where
   verdictSet : Option (List String) := none
   /-- The facts on the current path. -/
   facts : Facts := {}
+  /-- The preserved regions of the enclosing program, `W`. -/
+  preserved : List Region := []
   deriving Inhabited
 
 end Koit.Check

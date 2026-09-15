@@ -348,16 +348,32 @@ def add (F : Facts) (f : Fact) : Facts :=
 def dropWhere (F : Facts) (f : Place → Bool) : Facts :=
   { F with facts := F.facts.filter fun fact => !fact.mentions f }
 
+/-- As `dropWhere`, keeping a view's offset: a store or a call changes
+what the packet holds, never where a view was carved, so an offset
+over stack names outlives both. Only the end of the view's scope, and
+later the guard it lives under, remove it. -/
+def dropWhereKept (F : Facts) (f : Place → Bool) : Facts :=
+  { F with facts := F.facts.filter fun fact =>
+      match fact with
+      | .off _ e => !e.atoms.any f
+      | _ => !fact.mentions f }
+
+/-- The offset a view was carved at, if it is a fact. -/
+def offsetOf (F : Facts) (h : String) : Option Expr :=
+  F.facts.findSome? fun
+    | .off h' e => if h' == h then some e else none
+    | _ => none
+
 /-- After a store to `p`: every fact about a place the store may
 change goes. -/
 def kill (sc : Scope) (F : Facts) (p : Place) : Facts :=
   let p := F.resolve p
-  F.dropWhere fun q => overlaps sc p q
+  F.dropWhereKept fun q => overlaps sc p q
 
 /-- After a call: every fact about a place off the stack goes, since
 the callee or the kernel may write it. -/
 def killShared (sc : Scope) (F : Facts) : Facts :=
-  F.dropWhere fun q =>
+  F.dropWhereKept fun q =>
     match sc.place q with
     | some (.stack, _) => false
     | some _ => true

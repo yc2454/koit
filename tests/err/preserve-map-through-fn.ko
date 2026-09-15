@@ -1,0 +1,20 @@
+// expect: writes the map `policy`, which `preserve maps except stats` forbids
+// From spec/language.md 14.1: `preserve` covers the functions the
+// program calls; the write reaches `policy` through the function's
+// `ref` parameter.
+type Policy = { cur: u32 }
+map policy : array[1] of Policy
+map stats  : percpu_array[1] of { seen: u64 }
+
+fn advance(p: ref Policy) { p.cur = p.cur + 1 }
+
+program observe : xdp
+  preserve maps except stats
+  fail pass
+{
+  stats[0].seen += 1
+  let p = policy[0]
+  // error: write(policy) through `advance`
+  advance(p)
+  pass
+}

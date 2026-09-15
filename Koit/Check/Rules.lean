@@ -4,9 +4,10 @@ import Koit.Check.Decl
 The typing judgment of Core as a proposition: the expression and
 place rules with their demands `F |= P` as `Entails` premises, the
 semantic entailment of `Facts.lean`, and the statement rules carrying
-the facts from one statement to the next; the held set and the
-effects come with effects as further premises of the same
-constructors.
+the facts from one statement to the next, each with its effect set
+`E`: the statement's own effects, checked against the preserved
+regions, joined with those of its blocks; the held set comes with
+resources as further premises of the same constructors.
 
 `checkUnit` (Decl.lean) is the decision procedure for this judgment;
 `check_sound` states that a unit it accepts is well-typed, and rests
@@ -30,6 +31,7 @@ open Koit (Span)
 open Koit.Core
 open Koit.Prelude (KindRow CallRow AcqArg Home tU32 tU64)
 open Koit.Facts (Facts Caps Entails)
+open Koit.Effects (Effs)
 
 /-- The comparisons a byte-order value admits. -/
 def isCmpBe : CmpOp → Bool
@@ -369,27 +371,34 @@ def localRefinement (env : Env) (x : String) : Option (String × Ty × Expr) :=
 
 mutual
 
-/-- `G;F;K |- s -| F'`: one statement, with the environment and the
-facts after it and the names it declared. -/
+/-- `G;F;K |- s -| F' ; E`: one statement, with the environment and
+the facts after it, the names it declared, and its effects: the
+statement's own, `stmtEffects`, checked against the preserved
+regions, joined with those of its blocks. -/
 inductive StmtOk :
-    Env → Ctx → Stmt → Env → Facts → List String → Prop
+    Env → Ctx → Stmt → Env → Facts → List String → Effs → Prop
   /-- A call for its effect: the facts about shared places go. -/
-  | callStmt {env K s s' f args r} :
+  | callStmt {env K s s' f args r E} :
       synthCall env K s' f args false = .ok r →
+      stmtEffects env K (.«let» s false "_" none (.expr (.call s' f args)))
+        = .ok E →
+      checkPreserved env K s E = .ok () →
       StmtOk env K (.«let» s false "_" none (.expr (.call s' f args))) env
         (afterCalls env (scope env K) K.facts ((f, args) :: callsInArgs args))
-        []
+        [] E
   /-- `let x = e`, `var x = e`, `let x = p`, and the struct literal:
   the local, and the facts `bindInit` derives, with the demands of a
   declared refinement and of the literal's field predicates inside
   it. -/
-  | «let» {env K s m x ty init l F'} :
+  | «let» {env K s m x ty init l F' E} :
       x ≠ "_" → bindInit env K s m x ty init = .ok (l, F') →
-      StmtOk env K (.«let» s m x ty init) (env.bind l) F' [x]
+      stmtEffects env K (.«let» s m x ty init) = .ok E →
+      checkPreserved env K s E = .ok () →
+      StmtOk env K (.«let» s m x ty init) (env.bind l) F' [x] E
   /-- (Assign), (AssignW): a mutable scalar place; the field predicate
   with siblings read, or the local's refinement, is a demand; the
-  store is recorded after its kills. -/
-  | assign {env K s p e info tn} :
+  store is recorded after its kills and its write is the effect. -/
+  | assign {env K s p e info tn E} :
       PlaceOf env K p info → info.mutable → env.norm info.ty = .ok tn →
       tn.isScalar → Check env K e tn →
       (∀ s' q f P, p = .field s' q f →
@@ -398,86 +407,118 @@ inductive StmtOk :
       (∀ s' x v base pred, p = .var s' x →
         localRefinement env x = some (v, base, pred) →
         Entails (scope env K) K.facts (pred.subst v e)) →
-      StmtOk env K (.assign s p e) env (assignAfter env K p e) []
+      stmtEffects env K (.assign s p e) = .ok E →
+      checkPreserved env K s E = .ok () →
+      StmtOk env K (.assign s p e) env (assignAfter env K p e) [] E
   /-- Both branches, the condition in one and its negation in the
   other; a condition the facts decide leaves one branch dead. -/
-  | ite {env K s c t e Ft Fe} :
+  | ite {env K s c t e Ft Fe E Et Ee} :
       Check env K c (.bool c.span) →
-      BlockOk env { K with facts := (iteEntry env K c).1 } t Ft →
-      BlockOk env { K with facts := (iteEntry env K c).2 } e Fe →
+      BlockOk env { K with facts := (iteEntry env K c).1 } t Ft Et →
+      BlockOk env { K with facts := (iteEntry env K c).2 } e Fe Ee →
+      stmtEffects env K (.ite s c t e) = .ok E →
+      checkPreserved env K s E = .ok () →
       StmtOk env K (.ite s c t e) env (iteAfter env K c Ft Fe) []
+        (E.union (Et.union Ee))
   /-- (Repeat): the body under the loop head's facts. -/
-  | loop {env K s n body Fb} :
+  | loop {env K s n body Fb E Eb} :
       checkCount env K "the count of `repeat`" n = .ok () →
       BlockOk env { K with inLoop := true,
                            facts := loopHead env (scope env K) K.facts body }
-        body Fb →
+        body Fb Eb →
+      stmtEffects env K (.loop s n body) = .ok E →
+      checkPreserved env K s E = .ok () →
       StmtOk env K (.loop s n body) env (loopAfter env K body Fb) []
+        (E.union Eb)
   /-- (For): the index is a `u64` with `lo <= i < hi` in the body; the
   cap is the bound's largest value under the facts. -/
-  | «for» {env K s x lo hi body Fb} :
+  | «for» {env K s x lo hi body Fb E Eb} :
       Check env K lo tU64 → Check env K hi tU64 →
       BlockOk (env.bind (forLocal s x))
         { K with inLoop := true, facts := forEntry env K s x lo hi body }
-        body Fb →
+        body Fb Eb →
+      stmtEffects env K (.«for» s x lo hi body) = .ok E →
+      checkPreserved env K s E = .ok () →
       StmtOk env K (.«for» s x lo hi body) env (loopAfter env K body Fb) []
-  | brk {env K s} : K.inLoop → StmtOk env K (.brk s) env K.facts.bot []
-  | cont {env K s} : K.inLoop → StmtOk env K (.cont s) env K.facts.bot []
+        (E.union Eb)
+  | brk {env K s} : K.inLoop → StmtOk env K (.brk s) env K.facts.bot [] {}
+  | cont {env K s} : K.inLoop → StmtOk env K (.cont s) env K.facts.bot [] {}
   /-- (Return): the value against the context, the verdict set or the
   refined result demanded inside `checkRet`. -/
-  | ret {env K s v} :
-      checkRet env K s v = .ok () → StmtOk env K (.ret s v) env K.facts.bot []
-  /-- (Mark), (Fail): the context may fail; the reason is a `u32`. -/
-  | raise {env K s k r} :
+  | ret {env K s v E} :
+      checkRet env K s v = .ok () →
+      stmtEffects env K (.ret s v) = .ok E →
+      checkPreserved env K s E = .ok () →
+      StmtOk env K (.ret s v) env K.facts.bot [] E
+  /-- (Mark), (Fail): the context may fail; the reason is a `u32`; the
+  effect is `fail`. -/
+  | raise {env K s k r E} :
       K.mayFail → Check env K r tU32 →
-      StmtOk env K (.raise s k r) env K.facts.bot []
+      stmtEffects env K (.raise s k r) = .ok E →
+      checkPreserved env K s E = .ok () →
+      StmtOk env K (.raise s k r) env K.facts.bot [] E
   /-- (Else), (IfLet), (Coerce), (Mark), (LoadW), (View): `try` binds
   the operation's result in the then-branch with the facts the
   operation establishes; a tail's `else` exits. -/
-  | «try» {env K s x f thn els ex b t Fthn Fels Ft Fe} :
+  | «try» {env K s x f thn els ex b t Fthn Fels Ft Fe E Et Ee} :
       FallibleOk env K f b → b.ty = some t → x ≠ "_" →
       fallibleFacts (env.bind (boundLocal x t b)) K x f b = .ok (Fthn, Fels) →
-      BlockOk (env.bind (boundLocal x t b)) { K with facts := Fthn } thn Ft →
+      BlockOk (env.bind (boundLocal x t b)) { K with facts := Fthn } thn
+        Ft Et →
       BlockOk env { K with facts := Fels,
-                           errnoOk := fallibleKind env f == .helper } els Fe →
+                           errnoOk := fallibleKind env f == .helper } els
+        Fe Ee →
       (ex = true → exits els = true) →
+      stmtEffects env K (.«try» s x f thn els ex) = .ok E →
+      checkPreserved env K s E = .ok () →
       StmtOk env K (.«try» s x f thn els ex) env
-        (meetK env K (Ft.dropNames [x]) Fe) []
-  | tryDiscard {env K s f thn els ex b Fthn Fels Ft Fe} :
+        (meetK env K (Ft.dropNames [x]) Fe) [] (E.union (Et.union Ee))
+  | tryDiscard {env K s f thn els ex b Fthn Fels Ft Fe E Et Ee} :
       FallibleOk env K f b →
       fallibleFacts env K "_" f b = .ok (Fthn, Fels) →
-      BlockOk env { K with facts := Fthn } thn Ft →
+      BlockOk env { K with facts := Fthn } thn Ft Et →
       BlockOk env { K with facts := Fels,
-                           errnoOk := fallibleKind env f == .helper } els Fe →
+                           errnoOk := fallibleKind env f == .helper } els
+        Fe Ee →
       (ex = true → exits els = true) →
+      stmtEffects env K (.«try» s "_" f thn els ex) = .ok E →
+      checkPreserved env K s E = .ok () →
       StmtOk env K (.«try» s "_" f thn els ex) env (meetK env K Ft Fe) []
-  /-- (Hold), scope-only: the held set comes with effects. -/
-  | holdScope {env K s r acq body row Fb} :
+        (E.union (Et.union Ee))
+  /-- (Hold), scope-only: the held set comes with resources. -/
+  | holdScope {env K s r acq body row Fb E Eb} :
       FallibleOk env K acq { ty := none } →
       env.prelude.resource? r = some row →
       row.fails = none →
       BlockOk env { K with facts := holdEntry env K (row.arg == .call) acq }
-        body Fb →
-      StmtOk env K (.hold s r none acq body none) env Fb []
+        body Fb Eb →
+      stmtEffects env K (.hold s r none acq body none) = .ok E →
+      checkPreserved env K s E = .ok () →
+      StmtOk env K (.hold s r none acq body none) env Fb [] (E.union Eb)
   /-- (Hold), value-yielding, with the tail as `else`. -/
-  | holdValue {env K s r x acq body els row b t Fb Fe} :
+  | holdValue {env K s r x acq body els row b t Fb Fe E Eb Ee} :
       FallibleOk env K acq b → b.ty = some t →
       env.prelude.resource? r = some row → row.fails ≠ none →
       BlockOk (env.bind { name := x, ty := t, mutable := false,
                           origin := .kernel })
-        { K with facts := holdEntry env K (row.arg == .call) acq } body Fb →
+        { K with facts := holdEntry env K (row.arg == .call) acq } body
+        Fb Eb →
       BlockOk env { K with facts := holdEntry env K (row.arg == .call) acq,
-                           errnoOk := row.fails == some .helper } els Fe →
+                           errnoOk := row.fails == some .helper } els Fe Ee →
       exits els →
+      stmtEffects env K (.hold s r (some x) acq body (some els)) = .ok E →
+      checkPreserved env K s E = .ok () →
       StmtOk env K (.hold s r (some x) acq body (some els)) env
-        (meetK env K (Fb.dropNames [x]) Fe) []
+        (meetK env K (Fb.dropNames [x]) Fe) [] (E.union (Eb.union Ee))
   /-- (Atomic): an integer place in a map value or on the stack; the
-  place's facts go. -/
-  | atomic {env K s x op p args info tn} :
+  place's facts go; its write is the effect. -/
+  | atomic {env K s x op p args info tn E} :
       PlaceOf env K p info → info.mutable → env.norm info.ty = .ok tn →
       tn.isIntTy → (info.origin = .stack ∨ ∃ m, info.origin = .map m) →
       args.length = (if op = .cmpxchg then 2 else 1) →
       (∀ a ∈ args, Check env K a tn) →
+      stmtEffects env K (.atomic s x op p args) = .ok E →
+      checkPreserved env K s E = .ok () →
       StmtOk env K (.atomic s x op p args)
         (match x with
          | some n => env.bind { name := n, ty := tn, mutable := false,
@@ -487,21 +528,24 @@ inductive StmtOk :
         (match x with
          | some n => [n]
          | none => [])
+        E
 
-/-- `G;F;K |- s* -| F'`: a sequence, each statement under the facts
-the previous left, with the names declared. -/
-inductive StmtsOk : Env → Ctx → List Stmt → Facts → List String → Prop
-  | nil {env K} : StmtsOk env K [] K.facts []
-  | cons {env K s rest env' F' ns F'' ns'} :
-      StmtOk env K s env' F' ns →
-      StmtsOk env' { K with facts := F' } rest F'' ns' →
-      StmtsOk env K (s :: rest) F'' (ns ++ ns')
+/-- `G;F;K |- s* -| F' ; E`: a sequence, each statement under the
+facts the previous left, with the names declared and the effects
+unioned. -/
+inductive StmtsOk :
+    Env → Ctx → List Stmt → Facts → List String → Effs → Prop
+  | nil {env K} : StmtsOk env K [] K.facts [] {}
+  | cons {env K s rest env' F' ns E F'' ns' E'} :
+      StmtOk env K s env' F' ns E →
+      StmtsOk env' { K with facts := F' } rest F'' ns' E' →
+      StmtsOk env K (s :: rest) F'' (ns ++ ns') (E.union E')
 
 /-- A block: its statements, with the facts about its own locals
 dropped on exit. -/
-inductive BlockOk : Env → Ctx → List Stmt → Facts → Prop
-  | mk {env K ss F ns} :
-      StmtsOk env K ss F ns → BlockOk env K ss (F.dropNames ns)
+inductive BlockOk : Env → Ctx → List Stmt → Facts → Effs → Prop
+  | mk {env K ss F ns E} :
+      StmtsOk env K ss F ns E → BlockOk env K ss (F.dropNames ns) E
 
 end
 
@@ -509,8 +553,8 @@ end
 well-formedness is `checkFn`'s, which checks the body from the
 parameters' refinements. -/
 inductive FnOk : Env → Fn → Prop
-  | mk {env f caps} :
-      checkFn env f = .ok caps → FnOk env f
+  | mk {env f caps E} :
+      checkFn env f = .ok (caps, E) → FnOk env f
 
 /-- The environment of a program body: the kind in scope. -/
 def programEnv (env : Env) (row : KindRow) : Env :=
@@ -525,24 +569,30 @@ def handlerEnv (env : Env) (row : KindRow) : Env :=
   (programEnv env row).bind
     { name := "reason", ty := tU32, mutable := false, origin := .stack }
 
-def handlerCtx (row : KindRow) (vs : Option (List String)) : Ctx :=
+def handlerCtx (row : KindRow) (vs : Option (List String))
+    (W : List Region) : Ctx :=
   { mayFail := false, ret := .handler row.verdictTy, inHandler := true,
-    verdictSet := vs }
+    verdictSet := vs, preserved := W }
 
-def programCtx (row : KindRow) (vs : Option (List String)) : Ctx :=
-  { mayFail := true, ret := .program row.verdictTy, verdictSet := vs }
+def programCtx (row : KindRow) (vs : Option (List String))
+    (W : List Region) : Ctx :=
+  { mayFail := true, ret := .program row.verdictTy, verdictSet := vs,
+    preserved := W }
 
 /-- (Program) and (Handler): the body and every handler from no
-facts, every `return` within the verdict set. -/
+facts, every `return` within the verdict set, and every statement's
+effects against the preserved regions `W`, which the statement rules
+check where the effects arise. -/
 inductive ProgramOk : Env → Program → Prop
   | mk {env p row} :
       env.prelude.kind? p.kind = some row →
       checkClauses env row p.verdicts p.preserved = .ok () →
-      (∀ h ∈ p.handlers, ∃ F,
-        BlockOk (handlerEnv env row) (handlerCtx row (verdictNames p))
-          h.body F ∧ exits h.body = true) →
-      (∃ F, BlockOk (programEnv env row) (programCtx row (verdictNames p))
-        p.body F) →
+      (∀ h ∈ p.handlers, ∃ F E,
+        BlockOk (handlerEnv env row)
+          (handlerCtx row (verdictNames p) p.preserved) h.body F E ∧
+        exits h.body = true) →
+      (∃ F E, BlockOk (programEnv env row)
+        (programCtx row (verdictNames p) p.preserved) p.body F E) →
       (row.hasPkt = true → exits p.body = true) →
       ProgramOk env p
 
@@ -568,8 +618,8 @@ inductive UnitOk : Prelude → CompUnit → Prop
 /-- Soundness of the checker: a unit `checkUnit` accepts is well-typed.
 Stated now, proved after the design settles; the demands rest on
 `entails_sound`. -/
-theorem check_sound (pre : Prelude) (u : CompUnit) (caps : Caps) :
-    checkUnit pre u = .ok caps → UnitOk pre u := by
+theorem check_sound (pre : Prelude) (u : CompUnit) (out : Checked) :
+    checkUnit pre u = .ok out → UnitOk pre u := by
   sorry
 
 /-- The executable expression typing agrees with the judgment. -/
@@ -582,8 +632,9 @@ theorem check_expr_sound (env : Env) (K : Ctx) (e : Expr) (t : Ty) :
   sorry
 
 /-- The executable statement checking agrees with the judgment. -/
-theorem stmts_sound (env : Env) (K : Ctx) (ss : List Stmt) (F : Facts) :
-    checkStmts env K ss = .ok F → BlockOk env K ss F := by
+theorem stmts_sound (env : Env) (K : Ctx) (ss : List Stmt) (F : Facts)
+    (E : Effs) :
+    checkStmts env K ss = .ok (F, E) → BlockOk env K ss F E := by
   sorry
 
 end Koit.Check

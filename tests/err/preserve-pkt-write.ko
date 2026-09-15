@@ -1,0 +1,19 @@
+// expect: the write to the packet bytes [22 .. 23) under `preserve pkt[0 .. 24)`
+// From spec/language.md 14.1 and 23.4: the filter's TTL decrement
+// writes pkt[22..23), which a contract preserving the first 24 bytes
+// forbids; the disjointness demand is not entailed.
+type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
+type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
+                 ttl: u8, protocol: u8, csum: be16,
+                 saddr: be32, daddr: be32 }
+
+program filter : xdp
+  verdict in { PASS, DROP }
+  preserve pkt[0 .. 24)
+  fail drop
+{
+  let ip = pkt.view<Ipv4Hdr>(EthHdr.size)?
+  // error: write(pkt[22..23)) is not disjoint from [0, 24)
+  ip.ttl = ip.ttl - 1
+  pass
+}

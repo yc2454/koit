@@ -21,6 +21,7 @@ open Koit (Span)
 open Koit.Core
 open Koit.Prelude (KindRow tU32 tU64)
 open Koit.Facts (Facts Fact Caps Scope)
+open Koit.Effects (Effs)
 
 
 /-- A context for declaration-level expressions: no failure, no loop,
@@ -178,7 +179,7 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
   | .ringbuf n => capacity n
 
 /-- A function against its signature: the caps of its loops. -/
-def checkFn (env : Env) (f : Fn) : M Caps := do
+def checkFn (env : Env) (f : Fn) : M (Caps × Effs) := do
   let mut locals : List Local := []
   let mut seen : List String := []
   for p in f.params do
@@ -241,11 +242,11 @@ def checkFn (env : Env) (f : Fn) : M Caps := do
   let F0 : Facts := (refinementFacts fenv).foldl Facts.add {}
   let K : Ctx := { mayFail := f.fails, ret := .fn f.name f.ret,
                    fnName := some f.name, facts := F0 }
-  let F ← checkStmts fenv K f.body
+  let (F, E) ← checkStmts fenv K f.body
   if f.ret.isSome && !exits f.body then
     err f.span s!"`{f.name}` has a result type, so its body must end in \
       `return` or an expression"
-  return F.caps
+  return (F.caps, E)
 
 /-! ### The call graph -/
 
@@ -313,12 +314,33 @@ partial def visitCalls (fns : List Fn) (edges : List (String × List String))
   for h in (edges.lookup g).getD [] do
     visitCalls fns edges (path ++ [g]) h
 
+/-- The unit's calls between its own functions. -/
+def callEdges (env : Env) (fns : List Fn) : List (String × List String) :=
+  fns.map fun f =>
+    (f.name, (calleesStmts f.body).filter fun g => (env.fn? g).isSome)
+
 /-- The call graph must be acyclic. -/
 def checkCallGraph (env : Env) (fns : List Fn) : M Unit := do
-  let edges : List (String × List String) := fns.map fun f =>
-    (f.name, (calleesStmts f.body).filter fun g => (env.fn? g).isSome)
+  let edges := callEdges env fns
   for f in fns do
     visitCalls fns edges [] f.name
+
+/-- The functions with every callee before its callers, so that a
+function's effect summary is known at each call to it; the call graph
+is acyclic by the time this runs, and any remainder is kept in
+declaration order. -/
+def calleesFirst (env : Env) (fns : List Fn) : List Fn :=
+  let edges := callEdges env fns
+  let rec go (done pending : List Fn) : Nat → List Fn
+    | 0 => done ++ pending
+    | fuel + 1 =>
+      let ready := pending.filter fun f =>
+        ((edges.lookup f.name).getD []).all fun g =>
+          g == f.name || done.any (·.name == g)
+      if ready.isEmpty then done ++ pending
+      else go (done ++ ready)
+        (pending.filter fun f => !ready.any (·.name == f.name)) fuel
+  go [] fns fns.length
 
 /-- The verdict names and regions of a contract or a program header. -/
 def checkClauses (env : Env) (row : KindRow)
@@ -365,9 +387,10 @@ def checkContract (env : Env) (c : Contract) : M Unit := do
 
 /-- (Program) and (Handler): the kind, the contract, the clauses,
 every handler exiting in a non-failing context, and the body, each
-`return` demanded to lie in the verdict set; the preserved-region
-demands come with effects. Yields the caps of the loops. -/
-def checkProgram (env : Env) (p : Program) : M Caps := do
+`return` demanded to lie in the verdict set and every statement's
+effects checked against the preserved regions. Yields the caps of
+the loops and the program's effects. -/
+def checkProgram (env : Env) (p : Program) : M (Caps × Effs) := do
   let row ← kindRow env p.span p.kind
   if let some (s, c) := p.implements then
     match env.contracts.find? (·.name == c) with
@@ -380,23 +403,26 @@ def checkProgram (env : Env) (p : Program) : M Caps := do
   let env := { env with kind := some row }
   let vset := p.verdicts.map (·.map (·.2))
   let mut caps : Caps := []
+  let mut E : Effs := {}
   for h in p.handlers do
     let hEnv := env.bind { name := "reason", ty := tU32, mutable := false,
                            origin := .stack }
     let K : Ctx := { mayFail := false, ret := .handler row.verdictTy,
-                     inHandler := true, verdictSet := vset }
-    let F ← checkStmts hEnv K h.body
+                     inHandler := true, verdictSet := vset,
+                     preserved := p.preserved }
+    let (F, Eh) ← checkStmts hEnv K h.body
     caps := caps ++ F.caps
+    E := E.union Eh
     unless exits h.body do
       err h.span s!"the handler for `{h.kind}` must end in an exit \
        "
   let K : Ctx := { mayFail := true, ret := .program row.verdictTy,
-                   verdictSet := vset }
-  let F ← checkStmts env K p.body
+                   verdictSet := vset, preserved := p.preserved }
+  let (F, Eb) ← checkStmts env K p.body
   if row.hasPkt && !exits p.body then
     err p.span s!"the body of {article row.name} `{row.name}` program must end \
       in an exit"
-  return caps ++ F.caps
+  return (caps ++ F.caps, E.union Eb)
 
 /-- Unit-level names: types in one namespace, values in another,
 programs and contracts in a third. -/
@@ -414,11 +440,21 @@ def checkNames (u : CompUnit) : M Unit := do
   dup "program or contract" (u.contracts.map (fun c => (c.span, c.name)) ++
     u.programs.map fun p => (p.span, p.name))
 
+/-- What checking a unit yields for the later stages: the cap of
+every loop, and the effect set of every function, stated over its
+parameters, and of every program. -/
+structure Checked where
+  caps     : Caps := []
+  fns      : List (String × Effs) := []
+  programs : List (String × Effs) := []
+  deriving Inhabited
+
 /-- The checker's entry point: every declaration of the unit, in the
-order of a unit's template; the caps of every loop. With `smt`, each
+order of a unit's template, with functions after the call graph is
+known to be acyclic and callees before callers. With `smt`, each
 accepted entailment is traced as a solver query. -/
 def checkUnit (pre : Prelude) (u : CompUnit) (smt : Bool := false) :
-    M Caps := do
+    M Checked := do
   checkNames u
   let env : Env := { prelude := pre, license := u.license.map (·.2),
                      types := u.types, consts := u.consts,
@@ -428,11 +464,18 @@ def checkUnit (pre : Prelude) (u : CompUnit) (smt : Bool := false) :
   for d in u.consts do checkConst env d
   for d in u.configs do checkConfig env d
   for d in u.maps do checkMap env d
-  let mut caps : Caps := []
-  for f in u.fns do caps := caps ++ (← checkFn env f)
   checkCallGraph env u.fns
+  let mut env := env
+  let mut out : Checked := {}
+  for f in calleesFirst env u.fns do
+    let (caps, E) ← checkFn env f
+    env := { env with fnEffects := env.fnEffects ++ [(f.name, E)] }
+    out := { out with caps := out.caps ++ caps, fns := out.fns ++ [(f.name, E)] }
   for c in u.contracts do checkContract env c
-  for p in u.programs do caps := caps ++ (← checkProgram env p)
-  return caps
+  for p in u.programs do
+    let (caps, E) ← checkProgram env p
+    out := { out with caps := out.caps ++ caps,
+                      programs := out.programs ++ [(p.name, E)] }
+  return out
 
 end Koit.Check
