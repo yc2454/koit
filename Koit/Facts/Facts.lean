@@ -226,6 +226,10 @@ structure Facts where
   aliases : List (String × Place) := []
   bottom  : Bool := false
   caps    : Caps := []
+  /-- The owned names moved on this path, each with its `move`: path
+  state carried with the facts because it joins where they join, and
+  the two sides of a join must agree on it. -/
+  moved   : List (String × Span) := []
   deriving Inhabited
 
 namespace Facts
@@ -234,6 +238,14 @@ def empty : Facts := {}
 
 /-- The facts of a path that has exited. -/
 def bot (F : Facts) : Facts := { F with bottom := true }
+
+/-- After `move x`: the name is moved on this path. -/
+def addMoved (F : Facts) (x : String) (s : Span) : Facts :=
+  { F with moved := F.moved ++ [(x, s)] }
+
+/-- Whether `x` is moved on this path, with the `move`. -/
+def moved? (F : Facts) (x : String) : Option Span :=
+  (F.moved.find? (·.1 == x)).map (·.2)
 
 /-- A reference bound to a place: `let r = m[0]`. -/
 def alias (F : Facts) (x : String) (p : Place) : Facts :=
@@ -385,7 +397,8 @@ def dropNames (F : Facts) (names : List String) : Facts :=
   let F := F.dropWhere fun q => match q.root with
     | some x => names.contains x
     | none => false
-  { F with aliases := F.aliases.filter fun (x, _) => !names.contains x }
+  { F with aliases := F.aliases.filter fun (x, _) => !names.contains x,
+           moved := F.moved.filter fun (x, _) => !names.contains x }
 
 /-- At a loop head: the facts about what the body assigns and about
 shared places go; the body's own facts are added by the loop rule. -/
@@ -663,7 +676,10 @@ def meet (sc : Scope) (F1 F2 : Facts) : Facts :=
       | _, _ => false
     let joined := (F1.state sc).join (F2.state sc)
     let hull := joined.flatMap fun (p, v) => factsOf sc p v
-    { facts := common ++ hull, aliases := F1.aliases, bottom := false, caps }
+    -- the two sides agree on what is moved, or the join is an error
+    -- the checker reports before it meets them
+    { facts := common ++ hull, aliases := F1.aliases, bottom := false, caps,
+      moved := F1.moved }
 
 /-- The facts printed one per line, for messages and tests. -/
 def print (F : Facts) : List String :=

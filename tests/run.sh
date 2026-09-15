@@ -16,15 +16,15 @@
 # and parsing and printing that again must give the same text.
 #
 # KOIT_STAGE=lex, parse (the default), or check selects how far the run
-# goes. The err files in LATER need effects, guards, or `move`, which
-# session 5 delivers; the check stage skips them until then.
+# goes. The err files in LATER need guards, which session 5 delivers;
+# the check stage skips them until then.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
 lake build koitc >/dev/null || { echo "build failed"; exit 2; }
 KOITC=.lake/build/bin/koitc
 STAGE=${KOIT_STAGE:-parse}
-LATER="call-under-lock move-join view-invalidated"
+LATER="view-invalidated"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 pass=0

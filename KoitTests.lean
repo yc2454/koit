@@ -5,3 +5,5 @@ import KoitTests.Check
 import KoitTests.Facts
 import KoitTests.Entail
 import KoitTests.Effects
+import KoitTests.Held
+import KoitTests.Move

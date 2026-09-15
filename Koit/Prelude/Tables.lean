@@ -125,6 +125,8 @@ inductive AcqArg where
 
 structure ResourceRow where
   res : Resource
+  /-- The resource as a message names it: "a spin lock". -/
+  describe : String
   /-- The surface spellings that acquire it after `hold`. -/
   acquirers : List String
   arg : AcqArg

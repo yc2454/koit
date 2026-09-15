@@ -2,7 +2,7 @@ import Koit.Core.Syntax
 import Koit.Core.Print
 import Koit.Prelude.Tables
 import Koit.Facts.Entail
-import Koit.Effects.Effects
+import Koit.Effects.Held
 import Koit.Check.Diag
 
 /-!
@@ -10,9 +10,9 @@ The typing environments: `G` as `Env`, with the unit's declarations,
 the prelude, the program kind, and the locals in scope; `K` as `Ctx`,
 with what the statement rules read from it (whether the context may
 fail, whether inside a loop, what `return` returns to), the facts `F`
-on the current path, and the program's preserved regions, which every
-statement's effects are checked against; the held set comes with
-resources. The operations on types are in `Types.lean`.
+on the current path, the program's preserved regions, which every
+statement's effects are checked against, and the held set `H`. The
+operations on types are in `Types.lean`.
 -/
 
 namespace Koit.Check
@@ -21,7 +21,7 @@ open Koit (Span)
 open Koit.Core
 open Koit.Prelude (KindRow)
 open Koit.Facts (Origin Facts)
-open Koit.Effects (Effs)
+open Koit.Effects (Effs Held)
 
 /-- A name in scope: a scalar value, or a place named by a binding,
 whose type is then `ref T`, `view T`, or `own T`. -/
@@ -123,6 +123,12 @@ structure Ctx where
   facts : Facts := {}
   /-- The preserved regions of the enclosing program, `W`. -/
   preserved : List Region := []
+  /-- The resources held by the enclosing `hold` blocks, innermost
+  first. -/
+  held : Held := []
+  /-- The owned names moved at the head of the innermost loop, which a
+  path back to the head or out of the loop must not have added to. -/
+  loopMoved : List String := []
   deriving Inhabited
 
 end Koit.Check

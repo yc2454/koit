@@ -24,7 +24,7 @@ open Koit (Span)
 open Koit.Core
 open Koit.Prelude (tU32 tU64 AcqArg)
 open Koit.Facts (Origin Facts Fact Scope)
-open Koit.Effects (Eff Effs Conflict)
+open Koit.Effects (Eff Effs Conflict Held HeldEntry)
 
 /-- Whether a block ends in an exit: its
 last statement exits on every path through it. -/
@@ -344,6 +344,17 @@ def acqName : Fallible → String
   | .acquire _ _ f .. => f
   | f => f.print
 
+/-- The acquisition as the programmer wrote it after `hold`:
+`lock(c.lk)`, `rcu`, `sk_lookup_tcp(t)`. -/
+def acqSpelling : Fallible → String
+  | .acquire _ _ f ty args =>
+    let targ := match ty with
+      | some t => "<" ++ t.print ++ ">"
+      | none => ""
+    if args.isEmpty && ty.isNone then f
+    else f ++ targ ++ "(" ++ Arg.printList args ++ ")"
+  | f => f.print
+
 /-- The facts a fallible operation establishes in its then-branch for
 the name it binds, and in its else-branch. -/
 def fallibleFacts (env : Env) (K : Ctx) (x : String) (f : Fallible)
@@ -390,6 +401,108 @@ def fallibleFacts (env : Env) (K : Ctx) (x : String) (f : Fallible)
 def meetK (env : Env) (K : Ctx) (F1 F2 : Facts) : Facts :=
   Facts.meet (scope env K) F1 F2
 
+
+/-! ### Ownership -/
+
+/-- The arguments of a call as expressions, a place read. -/
+def argExprs (args : List Arg) : List Expr :=
+  args.filterMap fun
+    | .val e => some e
+    | .place p => some (.read p.span p)
+    | .map .. => none
+
+/-- The operands of a fallible operation. -/
+def fallibleExprs : Fallible → List Expr
+  | .view _ off _ => [off]
+  | .lookup _ _ k => [.read k.span k]
+  | .loadw _ p => [.read p.span p]
+  | .coerce _ e _ => [e]
+  | .call _ _ args | .callopt _ _ args | .acquire _ _ _ _ args => argExprs args
+
+/-- The expressions a statement evaluates itself, apart from its
+blocks. -/
+def ownExprs : Stmt → List Expr
+  | .«let» _ _ _ _ (.expr e) => [e]
+  | .«let» _ _ _ _ (.place p) => [.read p.span p]
+  | .«let» _ _ _ _ (.lit _ fs) => fs.map (·.value)
+  | .assign _ p e => [.read p.span p, e]
+  | .ite _ c .. => [c]
+  | .loop _ n _ => [n]
+  | .«for» _ _ lo hi _ => [lo, hi]
+  | .ret _ (some e) => [e]
+  | .raise _ _ r => [r]
+  | .«try» _ _ f .. => fallibleExprs f
+  | .hold _ _ _ f .. => fallibleExprs f
+  | .atomic _ _ _ p args => .read p.span p :: args
+  | _ => []
+
+mutual
+
+/-- The names an expression mentions, with their positions, through
+calls; with `movesOnly`, the names it moves. -/
+partial def namesInExpr (movesOnly : Bool) : Expr → List (Span × String)
+  | .var s x => if movesOnly then [] else [(s, x)]
+  | .move s x => [(s, x)]
+  | .arith _ _ l r | .cmp _ _ l r | .and _ l r | .or _ l r =>
+    namesInExpr movesOnly l ++ namesInExpr movesOnly r
+  | .not _ e | .cast _ e _ | .hton _ e | .ntoh _ e => namesInExpr movesOnly e
+  | .read _ p => namesInPlace movesOnly p
+  | .call _ _ args => args.flatMap fun
+    | .val e => namesInExpr movesOnly e
+    | .place p => namesInPlace movesOnly p
+    | .map .. => []
+  | _ => []
+
+partial def namesInPlace (movesOnly : Bool) : Place → List (Span × String)
+  | .var s x => if movesOnly then [] else [(s, x)]
+  | .field _ p _ => namesInPlace movesOnly p
+  | .index _ p i => namesInPlace movesOnly p ++ namesInExpr movesOnly i
+  | .slot _ _ i => namesInExpr movesOnly i
+  | .deref _ e => namesInExpr movesOnly e
+  | .invalid .. => []
+
+end
+
+/-- The context a statement is checked in: a mention of a name moved
+on this path is an error, since the name is dead after its `move`;
+then the statement's own moves are recorded, each name once, before
+its blocks are checked. -/
+def moveCtx (K : Ctx) (s : Stmt) : M Ctx := do
+  let es := ownExprs s
+  for (sp, x) in es.flatMap (namesInExpr false) do
+    if let some m := K.facts.moved? x then
+      err sp s!"`{x}` was moved at line {m.start.line} and is dead after it \
+       "
+  let mut F := K.facts
+  for (sp, x) in es.flatMap (namesInExpr true) do
+    if (F.moved? x).isSome then
+      err sp s!"`{x}` is moved twice in one statement"
+    F := F.addMoved x sp
+  return { K with facts := F }
+
+/-- Where two live paths meet, each owned name is moved on both or on
+neither, so that the scope's release is unconditional. -/
+def joinMoved (span : Span) (F1 F2 : Facts) : M Unit := do
+  if F1.bottom || F2.bottom then return
+  let only (F G : Facts) : Option (String × Span) :=
+    F.moved.find? fun (x, _) => (G.moved? x).isNone
+  if let some (x, m) := only F1 F2 <|> only F2 F1 then
+    err span s!"`{x}` moved on one branch and held on the other at this join \
+      (`move {x}` at line {m.start.line}): move it on both paths, or after \
+      the join"
+
+/-- A path back to a loop's head, at `continue` or the end of the
+body, or out of it at `break`, holds what was held at the head:
+a name bound outside the loop is moved inside it only on a path that
+leaves the program or function. -/
+def loopMovedOk (K : Ctx) (span : Span) (F : Facts) (next : String) :
+    M Unit := do
+  if F.bottom then return
+  if let some (x, m) := F.moved.find? fun (x, _) => !K.loopMoved.contains x then
+    err span s!"`{x}` moved inside the loop (`move {x}` at line \
+      {m.start.line}) and held at the loop head, so {next} would find it \
+      moved: move it on a path that leaves the program, or after the loop"
+
 /-! ### The fact transformers of the statement rules, shared with the
 judgment of `Rules.lean` so that the two cannot drift apart. -/
 
@@ -416,15 +529,22 @@ def iteEntry (env : Env) (K : Ctx) (c : Expr) : Facts × Facts :=
   let F := afterCalls env sc K.facts (callsInExpr c)
   (F.assume sc c, F.assume sc (Facts.negate c))
 
-/-- After a conditional: what the two branches meet at, or the live
-branch alone when the facts decide the condition (IfConst). -/
-def iteAfter (env : Env) (K : Ctx) (c : Expr) (Ft Fe : Facts) : Facts :=
+/-- Whether the facts decide a condition (IfConst), and how. -/
+def iteDecided (env : Env) (K : Ctx) (c : Expr) : Option Bool :=
   let sc := scope env K
   let F := afterCalls env sc K.facts (callsInExpr c)
   match Koit.Facts.eval sc (F.state sc) (F.resolveExpr c) with
-  | .bool .yes => { Ft with caps := Ft.caps ++ Fe.caps }
-  | .bool .no => { Fe with caps := Ft.caps ++ Fe.caps }
-  | _ => meetK env K Ft Fe
+  | .bool .yes => some true
+  | .bool .no => some false
+  | _ => none
+
+/-- After a conditional: what the two branches meet at, or the live
+branch alone when the facts decide the condition (IfConst). -/
+def iteAfter (env : Env) (K : Ctx) (c : Expr) (Ft Fe : Facts) : Facts :=
+  match iteDecided env K c with
+  | some true => { Ft with caps := Ft.caps ++ Fe.caps }
+  | some false => { Fe with caps := Ft.caps ++ Fe.caps }
+  | none => meetK env K Ft Fe
 
 /-- The cap of `for i in lo..hi`: the bound's largest value under the
 facts, or the top of its type. -/
@@ -447,6 +567,17 @@ def forEntry (env : Env) (K : Ctx) (s : Span) (x : String) (lo hi : Expr)
   (Fh.assume sc' (.cmp s .le lo (.var s x))).assume sc'
     (.cmp s .lt (.var s x) hi)
 
+/-- The join of a conditional's branches, unless the facts decide the
+condition and one branch is dead. -/
+def iteJoin (env : Env) (K : Ctx) (span : Span) (c : Expr) (Ft Fe : Facts) :
+    M Unit := do
+  if (iteDecided env K c).isNone then joinMoved span Ft Fe
+
+/-- The context of a loop body: inside a loop, from the facts `F`,
+with what is moved at the head recorded. -/
+def loopCtx (K : Ctx) (F : Facts) : Ctx :=
+  { K with inLoop := true, loopMoved := K.facts.moved.map (·.1), facts := F }
+
 /-- After a loop: the head's facts, with the caps the body gathered. -/
 def loopAfter (env : Env) (K : Ctx) (body : List Stmt) (Fb : Facts) : Facts :=
   { loopHead env (scope env K) K.facts body with caps := Fb.caps }
@@ -456,6 +587,13 @@ it is a kernel call. -/
 def holdEntry (env : Env) (K : Ctx) (isCall : Bool) (acq : Fallible) : Facts :=
   if isCall then afterCalls env (scope env K) K.facts (callsInFallible acq)
   else K.facts
+
+/-- The context of a `hold` body: the acquisition's facts, and the
+resource pushed onto the held set with the name it binds. -/
+def holdCtx (env : Env) (K : Ctx) (span : Span) (row : Prelude.ResourceRow)
+    (x : Option String) (acq : Fallible) : Ctx :=
+  { K with facts := holdEntry env K (row.arg == .call) acq,
+           held := { row, name := x, what := acqSpelling acq, span } :: K.held }
 
 /-- After an atomic update on `p`: the place's facts go. -/
 def atomicAfter (env : Env) (K : Ctx) (p : Place) (args : List Expr)
@@ -655,6 +793,29 @@ def stmtEffects (env : Env) (K : Ctx) : Stmt → M Effs
       (← effectsOfCalls env K (args.flatMap callsInExpr))
   | _ => return {}
 
+/-- The held set against the effects of one statement: an effect a
+held row forbids is an error at the statement, naming the resource
+and the `hold` that acquired it. A sleeping call is also refused in
+a program kind whose row does not permit it. -/
+def checkHeld (env : Env) (K : Ctx) (span : Span) (E : Effs) : M Unit := do
+  if let some (e, h) := K.held.forbidden E then
+    err span s!"the {e.print} effect is forbidden while {h.row.describe} is \
+      held (`hold {h.what}` at line {h.span.start.line}); move it outside \
+      the block"
+  if E.has .sleep then
+    if let some row := env.kind then
+      unless row.sleep do
+        err span s!"a sleeping call is not permitted in {article row.name} \
+          `{row.name}` program"
+
+/-- A resource acquired while an instance of it is held, when its row
+does not nest. -/
+def checkNesting (K : Ctx) (span : Span) (row : Prelude.ResourceRow) :
+    M Unit := do
+  if let some h := K.held.nestingConflict row then
+    err span s!"{row.describe} cannot be held inside another: `hold \
+      {h.what}` at line {h.span.start.line} is still held"
+
 /-- What a write effect touches, for a message. -/
 def describeWrite : Eff → String
   | .pkt lo hi => s!"the packet bytes [{lo.printPred} .. {hi.printPred})"
@@ -712,9 +873,11 @@ names it declared, and its effects, its own checked against the
 preserved regions and joined with those of the blocks inside it. -/
 partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
     M (Env × Facts × List String × Effs) := do
+  let K ← moveCtx K s
   let (env', F', names, Esub) ← checkStmtBody env K s
   let E ← stmtEffects env K s
   checkPreserved env K s.span E
+  checkHeld env K s.span E
   return (env', F', names, E.union Esub)
 
 /-- The typing of one statement, yielding the effects of the blocks
@@ -789,14 +952,15 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     let (Fthn, Fels) := iteEntry env K c
     let (Ft, Et) ← checkStmts env { K with facts := Fthn } t
     let (Fe, Ee) ← checkStmts env { K with facts := Fels } e
-    -- (IfConst), and a condition the facts decide: one branch is dead
+    -- (IfConst), and a condition the facts decide: one branch is dead;
+    -- (Meet): the branches agree on what is moved
+    iteJoin env K s.span c Ft Fe
     return (env, iteAfter env K c Ft Fe, [], Et.union Ee)
   | .loop _ n body =>
     -- (Repeat)
     checkCount env K "the count of `repeat`" n
-    let (Fb, Eb) ← checkStmts env { K with inLoop := true,
-                                           facts := loopHead env sc F body }
-      body
+    let (Fb, Eb) ← checkStmts env (loopCtx K (loopHead env sc F body)) body
+    loopMovedOk K s.span Fb "the next iteration"
     return (env, loopAfter env K body Fb, [], Eb)
   | .«for» span x lo hi body =>
     -- (For): the cap is the bound's largest value under the facts, or
@@ -804,13 +968,16 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     check env K lo tU64
     check env K hi tU64
     let (Fb, Eb) ← checkStmts (env.bind (forLocal span x))
-      { K with inLoop := true, facts := forEntry env K span x lo hi body } body
+      (loopCtx K (forEntry env K span x lo hi body)) body
+    loopMovedOk K span Fb "the next iteration"
     return (env, loopAfter env K body Fb, [], Eb)
   | .brk span =>
     unless K.inLoop do err span "`break` outside a loop"
+    loopMovedOk K span F "the code after the loop"
     return (env, F.bot, [], {})
   | .cont span =>
     unless K.inLoop do err span "`continue` outside a loop"
+    loopMovedOk K span F "the next iteration"
     return (env, F.bot, [], {})
   | .ret span v =>
     checkRet env K span v
@@ -842,10 +1009,11 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     if elseExits && !exits els then
       err span s!"the `else` block must end in an exit: {exitForms} \
        "
+    joinMoved span (Ft.dropNames [x]) Fe
     return (env, meetK env K (Ft.dropNames [x]) Fe, [], Et.union Ee)
   | .hold span r x acq body els =>
-    -- (Hold); the held set, forbidden effects, nesting, and `move`
-    -- consistency come with resources
+    -- (Hold): the body under the resource, which its row must allow
+    -- to nest; `move` consistency comes with ownership
     let b ← fallibleTy env K acq
     let row ← match env.prelude.resource? r with
       | some row => pure row
@@ -868,8 +1036,9 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
       | none, some _ =>
         err span s!"`{acqName acq}` yields a value; bind it with \
           `hold x = ...`"
+    checkNesting K span row
     let F := holdEntry env K (row.arg == .call) acq
-    let (Fb, Eb) ← checkStmts env' { K with facts := F } body
+    let (Fb, Eb) ← checkStmts env' (holdCtx env K span row x acq) body
     let Fb := match x with
       | some n => Fb.dropNames [n]
       | none => Fb
@@ -880,6 +1049,7 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
       unless exits e do
         err span s!"the `else` block must end in an exit: {exitForms} \
          "
+      joinMoved span Fb Fe
       return (env, meetK env K Fb Fe, [], Eb.union Ee)
     | none => return (env, Fb, [], Eb)
   | .atomic span x op p args =>

@@ -14,6 +14,7 @@ import Koit.Facts.Facts
 import Koit.Facts.Smt
 import Koit.Facts.Entail
 import Koit.Effects.Effects
+import Koit.Effects.Held
 import Koit.Check.Diag
 import Koit.Check.Env
 import Koit.Check.Types
