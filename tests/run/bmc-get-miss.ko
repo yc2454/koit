@@ -1,0 +1,183 @@
+// run: --packet aaaaaaaaaaaabbbbbbbbbbbb08004500003000000000401100000a0000010a000002c0002bcb00200000000000000001000067657420666f6f200d0a --program bmc_rx
+// bmc_rx: PASS
+// map cache: all zero
+// map stats:
+//   [0] = { hits: 0, misses: 1, short: 0, other: 0 }
+
+// The BMC cache of language.md 23.3 on a memcached GET for a key not
+// in the cache: a miss, counted, and the request goes on to userspace.
+const MAX_KEY   = 250
+const MAX_VAL   = 1000
+const DATA_SIZE = MAX_KEY + MAX_VAL + 53
+config SLOTS : u32 = 3250000
+const MC_PORT   = hton(11211)
+const REASON_NOT_GET  = 1
+const REASON_LONG_KEY = 2
+
+// not in 23.3: from 23.2
+type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
+
+type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
+                 ttl: u8, protocol: u8, csum: be16,
+                 saddr: be32, daddr: be32 }
+type UdpHdr  = { source: be16, dest: be16, len: be16, csum: be16 }
+type McHdr   = { req_id: be16, seq: be16, n: be16, reserved: be16 }
+
+type Entry = {
+  lk:    spinlock,
+  valid: u8,
+  hash:  u32,
+  // holds of the zero value
+  len:   u32 where len <= DATA_SIZE,
+  data:  u8[DATA_SIZE],
+}
+type Stats = { hits: u64, misses: u64, short: u64, other: u64 }
+
+map cache : array[SLOTS] of Entry
+map stats : percpu_array[1] of Stats
+
+fn fnv_step(h: u32, c: u8) -> u32 { (h ^ (c as u32)) * 16777619 }
+
+// not in 23.3: called there, never defined. One byte at a time, since
+// aggregates are never copied (P3) and there is no local array.
+fn swap_addresses(h: view EthHdr) {
+  for i in 0..6 {
+    let t = h.dst[i]
+    h.dst[i] = h.src[i]
+    h.src[i] = t
+  }
+}
+
+// whatever we cannot serve goes to the stack
+program bmc_rx : xdp fail pass
+  on short_packet { stats[0].short += 1; pass }
+  on program      { stats[0].other += 1; pass }
+  // a corrupted entry is a bug; make it visible
+  on invariant    { abort }
+{
+  var off = 0
+  let eth = pkt.view<EthHdr>(off)?
+  if eth.proto != ETH_P_IP { pass }
+  off += EthHdr.size
+  let ip = pkt.view<Ipv4Hdr>(off)?
+  if ip.protocol != IPPROTO_UDP { pass }
+  off += ((ip.vihl & 0xf) as u64) * 4
+  let udp = pkt.view<UdpHdr>(off)?
+  if udp.dest != MC_PORT { pass }
+  off += UdpHdr.size + McHdr.size
+  let cmd = pkt.view<u8[4]>(off)?
+  let is_get = cmd[0] == 'g' && cmd[1] == 'e' && cmd[2] == 't' && cmd[3] == ' '
+  if !is_get { fail REASON_NOT_GET }
+  off += 4
+  let koff = off
+
+  // hash the key; n <= MAX_KEY follows from i < MAX_KEY
+  var h: u32 = 2166136261
+  var n: u64 where n <= MAX_KEY = 0
+  for i in 0..MAX_KEY {
+    let c = pkt[koff + i]?
+    if c == ' ' || c == '\r' { break }
+    h = fnv_step(h, c)
+    n = i + 1
+  }
+  if n == 0 || n == MAX_KEY { fail REASON_LONG_KEY }
+
+  // demand h % SLOTS < SLOTS: entailed
+  let e = cache[h % SLOTS]
+  // helper: pass; kills eth, ip, udp, cmd
+  pkt.adjust_tail(DATA_SIZE as i32)?
+
+  var rlen: u64 where rlen <= DATA_SIZE = 0
+  // no calls inside; released on every exit below
+  hold lock(e.lk) {
+    // invariant: abort, after unlocking
+    let len = e.len?
+    if e.valid == 1 && e.hash == h && (len as u64) >= n {
+      var same = true
+      // bound from n's refinement
+      for i in 0..n {
+        // short_packet: unlock, count, pass
+        let c = pkt[koff + i]?
+        // demand i < DATA_SIZE: i < n <= MAX_KEY
+        if e.data[i] != c { same = false }
+      }
+      if same {
+        rlen = len as u64
+        for i in 0..rlen {
+          let d = pkt.view<u8>(koff + i)?
+          // demand i < DATA_SIZE: i < rlen <= DATA_SIZE
+          *d = e.data[i]
+        }
+      }
+    }
+  }
+  if rlen == 0 { stats[0].misses += 1; pass }
+  stats[0].hits += 1
+
+  // re-carve after the resize
+  let eth2 = pkt.view<EthHdr>(0)?
+  // a function over a view, no effects
+  swap_addresses(eth2)
+  // ... swap IP and UDP addresses, fix lengths and checksums ...
+  tx
+}
+
+// The server's reply on the egress path: `VALUE <key> <flags>
+// <bytes>\r\n<data>\r\nEND\r\n`. As BMC does, the cache stores the reply
+// text from `VALUE` to the end of the datagram, so that a hit can be
+// answered by copying it back. The spec's 23.3 leaves this program as
+// a sketch; the parsing below completes it (spec/ISSUES.md, entry 2):
+// the same header views as `bmc_rx`, the key hashed the same way, and
+// the value length taken through the one runtime coercion, since the
+// length of the rest of the datagram is the difference of two
+// positions, which the entailment fragment does not track (10.4).
+program bmc_tx : tc fail pass
+  on short_packet { pass }
+{
+  var off = 0
+  let eth = pkt.view<EthHdr>(off)?
+  if eth.proto != ETH_P_IP { pass }
+  off += EthHdr.size
+  let ip = pkt.view<Ipv4Hdr>(off)?
+  if ip.protocol != IPPROTO_UDP { pass }
+  off += ((ip.vihl & 0xf) as u64) * 4
+  let udp = pkt.view<UdpHdr>(off)?
+  // a reply comes from the server's port
+  if udp.source != MC_PORT { pass }
+  off += UdpHdr.size + McHdr.size
+  // the reply text starts here
+  let voff = off
+  let cmd = pkt.view<u8[6]>(off)?
+  let is_value = cmd[0] == 'V' && cmd[1] == 'A' && cmd[2] == 'L' &&
+    cmd[3] == 'U' && cmd[4] == 'E' && cmd[5] == ' '
+  if !is_value { pass }
+  off += 6
+  let koff = off
+
+  // hash the key as bmc_rx does; a key too long to cache is skipped
+  var h: u32 = 2166136261
+  var klen: u64 where klen <= MAX_KEY = 0
+  for i in 0..MAX_KEY {
+    let c = pkt[koff + i]?
+    if c == ' ' { break }
+    h = fnv_step(h, c)
+    klen = i + 1
+  }
+  if klen == 0 || klen == MAX_KEY { pass }
+
+  // bound: pass. A reply longer than an entry is not cached.
+  let n = (pkt.len - voff) as {v: u64 | v <= DATA_SIZE}?
+
+  // demand h % SLOTS < SLOTS: entailed
+  let e = cache[h % SLOTS]
+  // no calls inside; released on every exit below
+  hold lock(e.lk) {
+    e.hash = h
+    // demand n <= DATA_SIZE: entailed from n's refinement
+    e.len  = n as u32
+    // demand i < DATA_SIZE: i < n <= DATA_SIZE
+    for i in 0..n { let c = pkt[voff + i]?; e.data[i] = c }
+    e.valid = 1
+  }
+  pass
+}

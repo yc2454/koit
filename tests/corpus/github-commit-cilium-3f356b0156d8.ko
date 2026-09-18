@@ -1,0 +1,14 @@
+// expect: view `payload` was invalidated by `adjust_tail`
+// bpfix-empirical github-commit-cilium-3f356b0156d8 (BPFIX-E011), a tc
+// program: packet data is dereferenced after a helper call that
+// invalidates it; the verifier reports "R6 invalid mem access
+// 'scalar'". In koit a byte view is a place guarded by the packet's
+// layout token, which the helper drops.
+program cil : tc fail drop {
+  let payload = pkt.view<u8>(40)?
+  // trims trailing bytes and drops the token
+  pkt.adjust_tail(-4)?
+  // error: the byte is read through a dead view
+  if *payload == 0 { drop }
+  pass
+}

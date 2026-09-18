@@ -22,3 +22,6 @@ import Koit.Check.Expr
 import Koit.Check.Stmt
 import Koit.Check.Decl
 import Koit.Check.Rules
+import Koit.Core.Machine
+import Koit.Core.Semantics
+import Koit.Core.Interp

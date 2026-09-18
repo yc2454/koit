@@ -1,0 +1,15 @@
+// expect: struct literals have scalar fields only
+// bpfix-empirical stackoverflow-73443797 (BPFIX-E011), an xdp
+// program: bpf_spin_lock on a stack-local struct; the verifier reports
+// "R1 type=fp expected=map_value". In koit a spin lock is a slot,
+// which lives in a map value only: the one way to make a stack
+// aggregate, a struct literal, admits scalar fields alone, so the
+// program cannot name a lock on the stack for `hold lock(p)` to take.
+type Guarded = { lk: spinlock, n: u64 }
+
+program so : xdp fail drop {
+  // error: a slot is not a scalar; no stack place has one
+  let g = { lk: 0, n: 0 }
+  hold lock(g.lk) { g.n += 1 }
+  pass
+}

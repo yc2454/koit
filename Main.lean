@@ -2,9 +2,10 @@ import Koit
 
 /-!
 `koitc`, the koit command line: `lex`, `parse`, `print`, `desugar`,
-`check`, `run`. Session 1 delivered the first three, session 2
-`desugar` and the base `check`; `run` reports that it is not
-implemented yet.
+`check`, `run`. `run` checks the unit, then interprets every program
+of it in order, or the one named, over a packet given in hex and
+zero-filled maps, and prints each verdict, the lines `printk` wrote,
+and the map state.
 -/
 
 open Koit Koit.Syntax
@@ -18,7 +19,11 @@ def usage : String := String.intercalate "\n"
    "  check   type-check FILE against the prelude of kernel TAG",
    "          (default and only prelude in stage 1: v7.0); with --smt,",
    "          trace each accepted entailment as an SMT-LIB query on stderr",
-   "  run     interpret FILE (from session 3)"] ++ "\n"
+   "  run     check FILE, then interpret its programs in order:",
+   "          --packet HEX     the input packet (default: empty)",
+   "          --program NAME   this program only",
+   "          --ctx FIELD=N    a context field's value (default: 0)",
+   "          --fuel N         the step budget (default: 100000)"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
 def readSource (path : String) : IO String := do
@@ -77,6 +82,32 @@ def kernelOpt : List String → Option (Option String × Bool × String)
   | [file] => some (none, false, file)
   | _ => none
 
+/-- The options of `run`. -/
+structure RunOpts where
+  kernel  : Option String := none
+  packet  : ByteArray := ByteArray.empty
+  program : Option String := none
+  ctx     : List (String × Nat) := []
+  fuel    : Nat := 100000
+  file    : Option String := none
+
+partial def runOpts : List String → RunOpts → Option RunOpts
+  | [], o => some o
+  | "--kernel" :: t :: rest, o => runOpts rest { o with kernel := some t }
+  | "--packet" :: h :: rest, o => do
+    let b ← Sem.parseHex h
+    runOpts rest { o with packet := b }
+  | "--program" :: n :: rest, o => runOpts rest { o with program := some n }
+  | "--ctx" :: fv :: rest, o =>
+    match fv.splitOn "=" with
+    | [f, v] => do
+      let n ← v.toNat?
+      runOpts rest { o with ctx := o.ctx ++ [(f, n)] }
+    | _ => none
+  | "--fuel" :: n :: rest, o => do runOpts rest { o with fuel := ← n.toNat? }
+  | [file], o => if file.startsWith "--" then none else some { o with file := some file }
+  | _, _ => none
+
 def run (args : List String) : IO UInt32 := do
   match args with
   | ["lex", file] => do
@@ -123,9 +154,27 @@ def run (args : List String) : IO UInt32 := do
         IO.eprintln s!"{file}:{d}"
         return 1
     | none => return 1
-  | ["run", file] => do
-    let _ ← readSource file
-    notYet "run" "session 3"
+  | "run" :: rest => do
+    let some opts := runOpts rest {} | do IO.eprint usage; return 2
+    let some file := opts.file | do IO.eprint usage; return 2
+    let some pre ← preludeFor opts.kernel | return 2
+    let some u ← parseFile file | return 1
+    let core := Core.desugar pre u
+    match Check.checkUnit pre core with
+    | .error d =>
+      IO.eprintln s!"{file}:{d}"
+      return 1
+    | .ok _ =>
+      match Sem.runUnit pre core opts.packet opts.ctx opts.program opts.fuel with
+      | .ok (reports, maps) =>
+        for r in reports do
+          for l in r.log do IO.println s!"{r.program}: printk: {l}"
+          IO.println s!"{r.program}: {r.verdict}"
+        for l in maps do IO.println l
+        return 0
+      | .error m =>
+        IO.eprintln s!"{file}: run: {m}"
+        return 1
   | _ => do
     IO.eprint usage
     return 2

@@ -1,0 +1,20 @@
+// expect: view `eth` was invalidated by `adjust_tail`
+// bpfix-empirical github-commit-cilium-06c6520c57ad (BPFIX-E001), a tc
+// program: packet data is accessed after a helper path that can
+// invalidate it; the verifier reports "invalid access to packet,
+// off=14 size=1". In koit the view carved before the helper is dead
+// after any statement with the resize effect, and the use is
+// rejected naming the statement.
+type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
+
+program cil : tc fail drop {
+  let eth = pkt.view<EthHdr>(0)?
+  if eth.proto == ETH_P_IP {
+    pkt.adjust_tail(4)?
+  }
+  // error: the byte at offset 14 is read through a view the helper
+  // path invalidated
+  let b = pkt.view<u8>(14)?
+  if eth.dst[0] == *b { drop }
+  pass
+}

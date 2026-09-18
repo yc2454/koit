@@ -1,0 +1,16 @@
+// expect: view `hdr` was invalidated by `adjust_head`
+// bpfix-empirical kernel-selftest dynptr_fail
+// xdp_invalid_data_slice1 (BPFIX-E011): an intentional negative test
+// that reads `hdr->h_proto` after `bpf_xdp_adjust_head(xdp, 0)`; the
+// verifier reports "R8 invalid mem access 'scalar'". In koit the
+// resize kills the view even when it moves nothing, since the
+// statement has the resize effect.
+type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
+
+program slice : xdp fail drop {
+  let hdr = pkt.view<EthHdr>(0)?
+  pkt.adjust_head(0)?
+  // error: the view did not survive the resize
+  if hdr.proto == ETH_P_IP { pass }
+  drop
+}

@@ -15,9 +15,14 @@
 # Every file that parses must also round-trip: printing it as source
 # and parsing and printing that again must give the same text.
 #
-# KOIT_STAGE=lex, parse (the default), or check selects how far the run
-# goes. The err files in LATER, empty since session 5, are skipped at
-# the check stage.
+# tests/run/*.ko    a unit with a `// run: OPTIONS` line first, whose
+#                   `koitc run` output must be the rest of that comment
+#                   block, each expected line after `// `
+#
+# KOIT_STAGE=lex, parse (the default), check, or run selects how far
+# the run goes; run includes check. The err files in LATER, empty since
+# session 5, are skipped at the check stage. At the run stage every ok
+# file must also run to a verdict on an empty packet.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
@@ -44,7 +49,7 @@ later() {
   return 1
 }
 
-for f in tests/ok/*.ko tests/err/*.ko tests/parse/*.ko tests/corpus/*.ko; do
+for f in tests/ok/*.ko tests/err/*.ko tests/parse/*.ko tests/corpus/*.ko tests/run/*.ko; do
   [ -e "$f" ] || continue
   if ! "$KOITC" lex "$f" >/dev/null 2>"$TMP/out"; then
     failed lex "$f"
@@ -68,7 +73,7 @@ for f in tests/ok/*.ko tests/err/*.ko tests/parse/*.ko tests/corpus/*.ko; do
   pass=$((pass + 1))
 done
 
-if [ "$STAGE" = check ]; then
+if [ "$STAGE" = check ] || [ "$STAGE" = run ]; then
   for f in tests/ok/*.ko; do
     if "$KOITC" check "$f" >"$TMP/out" 2>&1; then
       pass=$((pass + 1))
@@ -90,6 +95,30 @@ if [ "$STAGE" = check ]; then
     elif ! grep -qF -- "$expect" "$TMP/out"; then
       echo "    expected: $expect"
       failed diagnostic "$f"
+    else
+      pass=$((pass + 1))
+    fi
+  done
+fi
+
+if [ "$STAGE" = run ]; then
+  for f in tests/ok/*.ko; do
+    if "$KOITC" run "$f" >"$TMP/out" 2>&1; then
+      pass=$((pass + 1))
+    else
+      failed run "$f"
+    fi
+  done
+  for f in tests/run/*.ko; do
+    [ -e "$f" ] || continue
+    opts=$(sed -n '1s|^// run: ||p' "$f")
+    sed -n '2,/^$/{s|^// ||p;}' "$f" >"$TMP/want"
+    # shellcheck disable=SC2086
+    if ! "$KOITC" run $opts "$f" >"$TMP/out" 2>&1; then
+      failed run "$f"
+    elif ! cmp -s "$TMP/out" "$TMP/want"; then
+      echo "    expected:"; sed 's/^/      /' "$TMP/want"
+      failed output "$f"
     else
       pass=$((pass + 1))
     fi
