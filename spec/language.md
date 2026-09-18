@@ -104,6 +104,14 @@ Revisions folded on 2026-09-14 from `ISSUES.md`:
    a block comment spanning lines counts as a newline (entry 10;
    sections 5, 14.1).
 
+Revision folded on 2026-09-18 from `ISSUES.md`:
+
+1. The dynamic semantics is a big-step relation over a machine,
+   parameterized by a kernel that stands for the helpers' choices;
+   the frames of the earlier small-step account are the enclosing
+   rules, and T1 quantifies over every kernel within its contracts
+   (entry 20; sections 19, 20).
+
 Reading guide. Sections 2 to 17 are the surface language and can become
 the manual. Sections 18 to 20 are the formal part. Section 23 gives the
 program template and examples.
@@ -1600,76 +1608,130 @@ policy, `fails`. Refinements are checked, not searched for.
 
 ## 19. Dynamic semantics of Core
 
-### 19.1 Configurations
+### 19.1 The machine and the kernel
 
-`<s, sigma, mu, B, held, C>` with `sigma` the local store, `mu` the map
-store, `B` the packet, `held` the list of held resources innermost
-first, and `C` a stack of frames `loop(k, s)`, `with(R, x)`, `block`.
-Terminal configurations are `halt(v)` and `err`; the theorems make `err`
-unreachable. Arithmetic is the total function of section 8.1.
+A run acts on a state `st` with the frame `sigma`, the names in scope
+bound to a value, to a place, or marked moved; the map store `mu`;
+the packet `B` with its layout token; the held set, innermost first,
+each entry with the name it binds and the object it releases; and the
+negative return of the last helper that failed, which `errno` reads.
+Values are scalars: a fixed-width integer reduced to its type's range,
+a byte-order value, a boolean, or the location of a place. A literal
+or an untyped constant carries no width until it meets an operand or a
+place, as it takes its type from the context in section 18. Places are
+bytes in a region: a map slot, the packet, a struct literal's frame,
+or an object the kernel handed out. Arithmetic is the total function
+of section 8.1.
 
-### 19.2 Selected rules
+Helpers are nondeterministic relations constrained by their
+contracts. The semantics takes them as a parameter: a kernel `K` says,
+for each row of the call table and its evaluated arguments, what the
+call does, a result and a new state, or a failure with the negative
+return the `helper` reason defaults to. A kernel is within its
+contracts when it never errs, yields a value exactly when the row's
+signature has a result, changes the packet or its token only when the
+row has the `resize` effect, and fails only when the row is fallible.
+Every statement about runs holds for every such kernel; the evaluator
+of `koitc run` is one of them, with its choices recorded.
+
+### 19.2 Judgments
+
+The relation is big-step: a judgment relates a state and a phrase to
+what the phrase produces and the state after it. Core's control is
+structured and bounded, so every phrase of a well-typed program has a
+derivation, and a run is one derivation. The continuation frames of a
+small-step account are the enclosing rules here: `loop` consumes a
+`break`, a call consumes a `return`, `hold` releases on its way out
+of any other outcome, and the program consumes a failure by running
+the handler of its kind.
+
+```
+K |- <e, st>  =>  v, st'   |  abort, st'      expressions
+K |- <p, st>  =>  place                       places
+K |- <F, st>  =>  binding, st' | failed, st'  fallible operations
+K |- <s, st>  =>  o, st'                      statements
+K |- <P, st>  =>  halt(v), st' | err          programs
+
+o ::= normal | break | continue | return v | raise k r | err
+```
+
+An expression or a fallible operation aborts when a function it calls
+raises a failure. A block drops the names it declared. Two further
+judgments carry the loops: `loop` with the iterations left, and `for`
+with the index's next value.
+
+### 19.3 Selected rules
 
 ```
 (Try-ok)
-    F succeeds with value or place u
-    <try x = F then s1 else s2, sigma, ...>  ->  <s1, sigma[x := u], ...>
+    K |- <F, st> => u, st1     K |- <then, st1[x := u]> => o, st2
+    -----------------------------------------------------------
+    K |- <try x = F then s1 else s2, st> => o, st2
 (Try-fail)
-    F fails
-    <try x = F then s1 else s2, ...>  ->  <s2, ...>
+    K |- <F, st> => failed, st1     K |- <s2, st1> => o, st2
+    ------------------------------------------------------
+    K |- <try x = F then s1 else s2, st> => o, st2
 
 (Raise)
-    <raise k e, sigma, mu, B, held, C>
-        ->  unwind(held, C) ; run H(k) with reason := [[e]]sigma
-    unwind releases each resource in held with its abnormal action,
-    innermost first, and clears C; H(k) runs in a fresh frame and ends
-    in halt(v).
+    <raise k e, st>  =>  raise k [[e]]st, st
+    a `raise` is an outcome every enclosing rule passes upward, each
+    `hold` releasing abnormally on the way; the program rule consumes it
+(Program-handled)
+    K |- <body, st> => raise k r, st1
+    K |- <H(k), st1[reason := r, held := []]> => return v, st2
+    -------------------------------------------------------
+    K |- <program(S, W, H, body), st> => halt(v), st2
+(Program-return)
+    K |- <body, st> => return v, st1
+    ------------------------------------------
+    K |- <program(S, W, H, body), st> => halt(v), st1
+    a `syscall` body that completes normally halts with 0
 
-(Return)
-    <return e, ..., held, C>  ->  unwind(held, C) ; halt([[e]]sigma)
-(Break)
-    <break, ..., held, loop(k, s) :: C>  ->  <skip, ..., held', C>
-    releasing, abnormally, the hold-frames above the loop frame
-(Hold-in)
-    <hold R x = acquire R (a...) s, ..., held, C>
-        ->  <s, sigma[x := r], ..., R(x) :: held, hold(R,x) :: C>
-(Hold-out)
-    <skip, ..., R(x) :: held, hold(R,x) :: C>
-        ->  normal release of R ; <skip, ..., held, C>
-(Hold-out-moved)
-    <skip, ..., held, hold(R,x) :: C>     with R(x) not in held
-        ->  <skip, ..., held, C>
-(Move)
-    [[move x]]  =  the reference sigma(x), and R(x) is removed from held,
-    so neither unwind nor Hold-out releases it; the sink now owns it
-(Guard-drop)
-    a step with effect resize drops layout(pkt); a read or write through
-    a place whose guard is not held  ==>  err        (unreachable, T1)
 (Loop)
-    <loop n s, ..., C>  ->  <s, ..., loop(n, s) :: C>     if n > 0
-    <loop 0 s, ...>     ->  <skip, ...>
-(LoopNext)
-    <skip, ..., loop(k, s) :: C>  ->  <loop (k-1) s, ..., C>
+    K |- <s, st> => normal | continue, st1    K |- <loop (n-1) s, st1> => o, st2
+    ---------------------------------------------------------------------------
+    K |- <loop n s, st> => o, st2            (n > 0)
+    <loop 0 s, st> => normal, st
+(Break)
+    K |- <s, st> => break, st1
+    ----------------------------------
+    K |- <loop n s, st> => normal, st1
+    a `return` or a failure leaves the loop as the body's outcome
+
+(Hold-in, Hold-out)
+    K |- <acq, st> => u, st1      R(x) pushed on the held set of st1
+    K |- <body, st1[x := u]> => o, st2
+    ------------------------------------------------------------------
+    K |- <hold R x = acq body, st> => o, release(st2, o, x)
+    release performs R's normal action when o is normal and its
+    abnormal action otherwise, and nothing when x was moved (Hold-out-moved)
+(Move)
+    <move x, st>  =>  the reference sigma(x),
+                      st with x marked moved and R(x) removed from the
+                      held set, so that no release runs; the sink owns it
+(Guard-drop)
+    a view remembers the layout token it was carved under; a step with
+    effect resize changes the token; a read or write through a view
+    whose token is not the current one  =>  err     (unreachable, T1)
 
 (Store)
     p denotes (region r, offset o) with o + size(T) <= size(r)
-        ==>  write the bytes of [[e]]
+        =>  the bytes of [[e]] written, normal
 (Store-err)
-    otherwise  ==>  err                           (unreachable, T1)
+    otherwise  =>  err                              (unreachable, T1)
 (Atomic)
-    as (Store), with the read-modify-write performed indivisibly
+    as (Store), with the read-modify-write performed indivisibly and
+    the previous value bound
 (Call)
-    h with effects E:  x := some value of the result type;
-    if resize in E then B := any packet;
-    if held contains a row forbidding call  ==>  err  (unreachable, T1)
+    K(row, [[a...]], st) = ok(v, st')    =>  v, st'
+    K(row, [[a...]], st) = failed(n, st') =>  failed, st'[errno := n]
+    a call forbidden by a row of the held set  =>  err  (unreachable, T1)
 (Insert)
-    mu(m)[k] := copy of the value, or unchanged when the map is full,
-    which is a failure
+    mu(m)[k] := copy of the value, or failed when the map is full
 ```
 
-Helpers are nondeterministic relations constrained by their contracts,
-which over-approximates the kernel; after a resize the old packet is
-gone, which is why typing kills views.
+A helper that resizes yields, through `K`, any packet its contract
+allows; the old packet is gone, which is why typing kills views.
 
 ## 20. Properties and theorems
 
@@ -1696,11 +1758,15 @@ construction of the semantics.
 
 ### 20.2 Theorems
 
-**T1, safety of Core.** A well-typed Core program never reaches `err`,
-and every execution has the properties of 20.1. Proof by progress and
-preservation over the configuration typing, with the loop and resource
-frames typed by `K`, a termination lemma by induction on the declared
-bounds, and a lemma per row.
+**T1, safety of Core.** For every kernel within its contracts, every
+program of a well-typed unit, and every initial state, a derivation
+ending in `halt(v)` exists and no derivation ends in `err`; and every
+run has the properties of 20.1. Existence is progress and termination
+in one, since Core's loops are bounded and its calls acyclic; the
+absence of `err` covers the cases the rules make unreachable, an
+out-of-bounds store, a use of a view under a dropped token, a call a
+held row forbids. Proof by induction on the derivation with the typing
+judgment as the invariant, a lemma per row of 20.1.
 
 **T2, soundness of entailment.** If `F |= P` and `sigma` satisfies `F`
 then `sigma` satisfies `P`. So no demand accepted statically can fail at
@@ -1863,6 +1929,13 @@ written:
     build; a `config` with no value at all is an error (entry 18).
 45. The store record `p = e` is kept for stack places only; a store to
     a shared place leaves no fact (entry 19).
+Revision of 2026-09-18, from `ISSUES.md` entry 20:
+46. The dynamic semantics is a big-step relation over a machine,
+    parameterized by a kernel that stands for the helpers' choices and
+    is trusted to its contracts; the frames of the earlier small-step
+    account are the enclosing rules; T1 quantifies over every such
+    kernel and states existence of a halting derivation and absence
+    of `err` (sections 19, 20).
 
 Open questions, with the default the checker implements until decided:
 
