@@ -1,0 +1,548 @@
+# BIR, the flat language, and the target machine
+
+Status: draft 1, 2026-09-18. The second intermediate language and the
+machine the theorems are stated against. BIR is bytecode with names:
+its registers are unbounded and its jumps go to labels. Bytecode is
+BIR with eleven registers, the frame reached through `r10`, and label
+offsets. Both run on the machine of section 2, which is eBPF with the
+verifier's safety conditions as stuck states. `lir.md` defines the
+language above; `lowering.md`, to come, the passes and the theorems.
+The decisions embedded here are listed in section 10.
+
+## 1. Role
+
+Three things happen between closed LIR and the kernel, and BIR is the
+middle one. LIR is structured; BIR is flat: labels and jumps, one
+instruction per line, every operand a register or an immediate. BIR
+has as many registers as it likes and names its frame objects;
+bytecode has eleven registers and a frame of 512 bytes. So the
+flattening pass, LIR to BIR, settles control and addressing; the
+allocation pass, BIR to bytecode, settles registers and the frame;
+encoding is the last and smallest step.
+
+The machine both run on is the point of this document. Its values are
+scalars or locations, never integers standing for addresses. A load
+or store outside its region, through a stale packet location, or
+from an uninitialized frame slot has no step. An unlock that does not
+match the innermost lock, a call a held row forbids, or an exit while
+anything is held has no step. These are the conditions the kernel
+verifier checks, made into the machine's own rules.
+
+For a program as submitted to the kernel this is the only semantics
+there is. The kernel rewrites context accesses, patches division and
+modulo, and resolves map references before an instruction runs, so a
+concrete semantics of the submitted instructions does not exist apart
+from those rewrites. The model takes the rewritten meaning as
+primitive: a context field is an abstract value, a division by zero
+yields zero, a map reference is a handle. The correspondence between
+this model and the kernel is validated, not proved (section 9).
+
+Two consequences. The correctness theorem of `lowering.md` says that
+the bytecode's unique run from the loaded state halts with the
+source's verdict and never reaches a stuck state; with T1 this is the
+corollary of `language.md` section 20.2 with its compiler condition
+discharged. And the machine is the definition of an unsafe access at
+the bytecode level that `safety-claim.md` section 4 lists as missing,
+in the terms Alivio builds its safety conditions, so the proof and
+the per-program validation speak of one object.
+
+## 2. The machine
+
+### 2.1 Values
+
+```
+v ::= scalar n          a 64-bit pattern, n < 2^64
+    | loc(r, off, tok)  a region, a signed offset, the token it was
+                        made under
+```
+
+A register holds one value. Null is `scalar 0`. A location's offset
+may leave its region between the arithmetic that moves it and the
+access that uses it; only the access is checked. The token matters
+for the packet region only and is compared at every access.
+
+### 2.2 Memory
+
+The regions are Core's, with the frame added:
+
+| region | size | contents | made by |
+|---|---|---|---|
+| `map(m, i)` | the value size of `m` | bytes | `lookup`, `mapval` |
+| `pkt` | the packet's current length | bytes, guarded by the token | `data`, `data_end` |
+| `kernel(id)` | the object's size | bytes | acquiring rows |
+| `frame` | 512 bytes as 64 slots of 8 | slots, below | `r10`, `lea` |
+| `ctx` | the kind's field table | abstract fields | `r1` at entry |
+
+Bytes are little-endian. A scalar load of `w` bits reads `w / 8`
+bytes and zero-extends; a store writes them.
+
+**The frame** is 64 slots of 8 bytes at offsets `-512` to `-1` from
+its top. A slot is `spilled v`, one value, or `bytes b_0 .. b_7`,
+each byte initialized or not. The rules are the verifier's:
+
+- a store of a location is admitted only as 8 bytes at a slot
+  boundary, and makes the slot `spilled`; anywhere else it is stuck,
+  which is the rule that a pointer never leaks into a map, the
+  packet, or a misaligned slot;
+- a store of a scalar makes bytes, and unspills the slot it touches;
+- a load of 8 bytes at a spilled slot yields the value;
+- a load of bytes requires every byte read to be initialized and
+  none to belong to a spilled slot;
+- the frame starts with every byte uninitialized.
+
+**The context** is a table of fields per kind, from the prelude: for
+each field its offset, its size, and whether it is readable and
+writable. A load or store at an offset and size that is not a row is
+stuck, which is the verifier's context-access check; the lowering
+never emits one, because context access goes through the kind row.
+Two rows of a packet kind yield locations rather than scalars:
+`data` yields `loc(pkt, 0, tok)` and `data_end` yields
+`loc(pkt, len, tok)` with the current token, which is the kernel's
+conversion of those fields made primitive.
+
+### 2.3 Maps and rings
+
+The map operations are builtins with fixed semantics, the ones
+`Semantics.lean` gives them, and do not consult the kernel
+parameter:
+
+| builtin | arguments | meaning |
+|---|---|---|
+| `lookup m` | the key's location | an array kind: `loc(map(m, k), 0)` when `k` is below the capacity, else null; a hash kind: the entry's location or null; per-CPU arrays as arrays |
+| `update m` | the key's and the value's locations | insert or replace; a full hash map answers with the negative `E2BIG` |
+| `delete m` | the key's location | remove, or the negative `ENOENT` |
+| `mapval m + k` | none | `loc(map(m, 0), k)` for an `array[1]` map: direct value access |
+| `reserve m n` | none | a fresh kernel object of `n` bytes, held as a record, or null when the ring is full |
+| `submit`, `discard` | the record | pop it; `submit` appends it to the ring |
+| `lock`, `unlock` | the lock field's location in a map value | push, pop |
+| `enter R`, `leave R` | none | push, pop, for the scope rows |
+| `copy n`, `fill n` | locations, a byte | byte moves, expanded by the flattening |
+| `printk` | the format's location, up to three scalars | an event on the trace |
+| `atomic op(w)` | a location, one or two scalars | the read-modify-write of section 8.5, at 32 or 64 bits |
+
+A key or value argument may lie in any readable region, and its
+bytes must be initialized. The lock argument must be the slot-typed
+field of the value it lies in, which the map's declaration fixes.
+
+### 2.4 The kernel parameter
+
+Every other row of the call table is a kernel function, and the
+machine consults the same `Kernel` as Core: `K.helper row args st`
+answers with a value and a state, or a failure with its negative
+return, and `KernelOk` is the same contract. The machine fits the
+argument registers to the row's parameter kinds before the call: a
+scalar parameter of width `w` takes a scalar reduced to `w`, a
+memory parameter takes a location whose region is one the row's
+region column admits, and anything else is stuck, which is the
+verifier's argument-type check. Afterwards:
+
+| the kernel answers | `r0` |
+|---|---|
+| a value `v` | `v` |
+| no value | `scalar 0` |
+| failure `n`, a row whose result is a scalar | `n` as a 64-bit two's complement pattern |
+| failure, a row whose result is a location | `scalar 0` |
+
+This convention is a rule, derived from the row's result type, not a
+column; a row that needs an exception gets a column then. A row that
+acquires pushes its result on the held stack; a row that releases
+pops the entry whose object is its argument and is stuck otherwise.
+A row with the `resize` effect may change the packet and its token,
+as `KernelOk` allows and nothing else may. A call while a held row
+forbids `call` is stuck, except the row's own release. Every call
+appends an event to the trace.
+
+### 2.5 Protocol state and the trace
+
+The held stack is a list of entries `(row, object)`, innermost
+first, pushed and popped by the builtins and rows above. The packet
+token is a counter changed only by rows with `resize`. The trace is
+a list of events:
+
+```
+ev ::= call row [v_i] (ok v? | failed n) | print fmt [v_i]
+```
+
+Both are part of the shared state, so Core's run and the machine's
+append the same events in the same order, and the theorem asks for
+equality of traces (`ISSUES.md`, entry 24).
+
+### 2.6 Machine states, loading, halting
+
+```
+m ::= (pc, R, st)
+```
+
+`pc` indexes the code, `R` maps registers to values or marks them
+uninitialized, and `st` is the shared state. The loaded state of a
+program `p` from Core's initial state `st` is:
+
+- `r1 = loc(ctx, 0, tok)`, `r10 = loc(frame, 0, tok)`, every other
+  register uninitialized; in BIR the same with `v_ctx` and `v_fp`;
+- the frame uninitialized; the maps, packet, and context as in `st`;
+- the held stack empty, the trace empty, `pc = 0`.
+
+A state is halted when its instruction is `exit`, `r0` is a scalar,
+and the held stack is empty; its value is `r0` fitted to the kind's
+verdict width. A state with no successor that is not halted is
+stuck; section 5.3 lists the causes.
+
+## 3. Instructions
+
+The set is the part of the kernel's instruction set the templates
+need, cpu v3, with the v4 additions marked. Registers are `v_i` in
+BIR and `r0` to `r10` in bytecode; `cls` is the operation class,
+64 or 32 bits, which is the kernel's ALU and ALU32, JMP and JMP32
+distinction; `w` is an access or extension width.
+
+```
+alu(op, cls) d s          op in {add sub mul div mod and or xor lsh rsh arsh}
+alu_imm(op, cls) d k
+sdiv, smod                v4: alu with the signed variant of div, mod
+mov(cls) d s
+mov_imm(cls) d k
+movsx(cls, w) d s         v4: sign-extending move from w in {8, 16, 32}
+end(to, w) d              byte order: to in {be, le}, w in {16, 32, 64}
+ldx(w) d [s + off]        w in {8, 16, 32, 64}
+stx(w) [d + off] s
+st(w) [d + off] k
+ja L                      v4 adds the long form
+jcond(cmp, cls) a b L     cmp in {eq ne gt ge lt le sgt sge slt sle set}
+jcond_imm(cmp, cls) a k L
+lddw d k64
+lea d obj                 BIR only: the frame object's location
+mapref d m                the map handle, for the rows that take one
+mapval d m k              direct value access
+call h                    BIR: call h (s_1 .. s_5) -> d
+atomic(op, cls, fetch) [d + off] s     op in {add and or xor xchg cmpxchg}
+exit
+```
+
+Meaning, by class of instruction:
+
+- **ALU on scalars.** The operation of section 8.1 on the operands'
+  patterns at `cls` bits, the result written at `cls` bits and, for
+  32, zero-extended into the register. Division and modulo by zero
+  yield zero and the dividend; the shift amount is masked to `cls -
+  1`; `arsh` is arithmetic. This is what the kernel's fixups and
+  JITs implement.
+- **ALU on locations.** `add` and `sub` of a scalar to a location
+  move its offset; `sub` of two locations of one region yields their
+  offset difference as a scalar; `mov` copies a location. Every
+  other operation on a location is stuck.
+- **Loads and stores.** The base must be a location; the effective
+  location is the base moved by `off`; the access is admitted by the
+  region's rules of section 2.2 and by the token for the packet.
+- **Jumps.** Two scalars compare at `cls` bits, signed for the `s`
+  forms; two locations of one region compare by offset, and a
+  location compares with the immediate zero under `eq` and `ne`;
+  anything else is stuck.
+- **`lddw`, `mapref`, `mapval`, `lea`.** Constants and handles.
+  `mapref` yields a value only a builtin or a row with a map
+  parameter accepts.
+- **`call h`.** The builtin or kernel function of section 2.3 or
+  2.4, with arguments in `r1` to `r5` and the result in `r0`; `r1` to
+  `r5` are uninitialized after the call, `r6` to `r9` unchanged. In
+  BIR the operands are explicit and nothing is clobbered.
+- **`atomic`.** The read-modify-write at 32 or 64 bits on a location
+  into a map value or the frame; with `fetch`, the previous value
+  replaces the source register, and `cmpxchg` uses `r0` as the
+  kernel does.
+- **`exit`.** Halts as section 2.6 says, or is stuck.
+
+The number each row's kernel function carries, which the assembler
+needs, is a column of the call table read from the uapi header. The
+scope rows and every kfunc need a call by BTF id; no stage-1 program
+uses one, and the encoding is deferred with them.
+
+## 4. Widths in registers
+
+Registers are 64 bits and the source has four widths and two
+signednesses. The invariant that relates a local of type `int(s,w)`
+to the register that holds it is the 32-bit normal form:
+
+| type | register pattern |
+|---|---|
+| `int(s,64)` | the 64-bit pattern of the value |
+| `int(s,32)` | the 32-bit pattern, zero-extended |
+| `int(u,8)`, `int(u,16)` | the `w`-bit pattern, zero-extended |
+| `int(i,8)`, `int(i,16)` | the `w`-bit pattern sign-extended to 32 bits, then zero-extended |
+
+Under the invariant every operation is one instruction at `cls`
+chosen by the width, followed for the narrow widths by a
+normalization: `and_imm(32) d mask_w` for unsigned, and
+`movsx(32, w)` or the pair `lsh_imm(32) d (32 - w); arsh_imm(32) d
+(32 - w)` for signed. Comparisons need no normalization: unsigned
+narrow values compare as 32-bit unsigned, signed narrow values as
+32-bit signed. Two operations need more than the normalization:
+
+- a narrow shift masks its amount to `w - 1` first, since the
+  instruction masks to 31 and section 8.1 masks to `w - 1`;
+- signed division and modulo below v4 are a sequence around the
+  unsigned instructions that fixes the signs and the two special
+  cases of section 8.1; on v4 they are `sdiv` and `smod`.
+
+The casts of section 8.1 are the table below, which is the first
+obligation of Lemma L made concrete: every cast is one of the
+instructions the verifier tracks exactly.
+
+| from | to | instructions |
+|---|---|---|
+| any width | 64, from an unsigned source | none |
+| 32 or narrow signed | 64 | `movsx(64, 32)`, or `lsh 32; arsh 32` |
+| 64 | 32 | `mov(32) d s` |
+| narrow | 32 | none |
+| any | 16 or 8 unsigned | `and_imm(32) d mask_w` |
+| any | 16 or 8 signed | `movsx(32, w)`, or the shift pair at 32 |
+| `int(u,w)` | `int(i,w)`, `w` narrow | `movsx(32, w)`, or the shift pair |
+| `int(i,w)` | `int(u,w)`, `w` narrow | `and_imm(32) d mask_w` |
+| same width, 32 or 64 | the other signedness | none |
+| `bool` | any | none, or the mask |
+
+Byte order: `end(be, w)` is the swap on this little-endian machine,
+zero-extending for 16 and 32, and is what `bswap(w)` of LIR becomes.
+
+## 5. The step relation
+
+### 5.1 Form
+
+`Step K : m -> m'` is a function of `m` for each kernel `K`, so the
+machine is deterministic per kernel, and `Star (Step K)` is its
+reflexive transitive closure. A run is the sequence from the loaded
+state to a halted state.
+
+### 5.2 Selected rules
+
+```
+(Alu)
+    code[pc] = alu(op, cls) d s     R d = scalar a     R s = scalar b
+    ---------------------------------------------------------------
+    (pc, R, st) -> (pc + 1, R[d := norm_cls(op(a, b))], st)
+
+(Alu-loc)
+    code[pc] = alu(add, 64) d s     R d = loc(r, o, t)     R s = scalar b
+    ---------------------------------------------------------------------
+    (pc, R, st) -> (pc + 1, R[d := loc(r, o + signed(b), t)], st)
+
+(Ldx)
+    code[pc] = ldx(w) d [s + off]     R s = loc(r, o, t)
+    the access of w bits at loc(r, o + off, t) is admitted in st
+    ---------------------------------------------------------------
+    (pc, R, st) -> (pc + 1, R[d := the value read], st)
+
+(Stx)
+    code[pc] = stx(w) [d + off] s     R d = loc(r, o, t)     R s = v
+    the store of v at w bits at loc(r, o + off, t) is admitted in st
+    ---------------------------------------------------------------
+    (pc, R, st) -> (pc + 1, R, st[the bytes or the slot written])
+
+(Jcond)
+    code[pc] = jcond(cmp, cls) a b L     R a, R b comparable under cmp
+    -------------------------------------------------------------------
+    (pc, R, st) -> (if cmp holds then L else pc + 1, R, st)
+
+(Call-kernel)
+    code[pc] = call h     h a kernel row     the arguments fit the row
+    no held row forbids call, or h releases that row
+    K.helper h [v_i] st = ok v st'
+    ---------------------------------------------------------------
+    (pc, R, st) -> (pc + 1, R[r0 := r0(v), r1..r5 := uninit],
+                    st'[trace += ev, held pushed or popped per the row])
+    and with failed n st', r0 := signal(h, n)
+
+(Call-builtin)
+    code[pc] = call b     b a builtin     the arguments fit
+    ---------------------------------------------------------------
+    (pc, R, st) -> (pc + 1, R[r0 := the builtin's answer, r1..r5 := uninit],
+                    st[the builtin's effect])
+
+(Exit)
+    code[pc] = exit     R r0 = scalar v     held(st) = []
+    -------------------------------------------------------
+    (pc, R, st) is halted with v fitted to the verdict width
+```
+
+### 5.3 Stuck states
+
+A state that is not halted and has no successor is stuck. The causes
+are exactly these, and each is a check the verifier makes:
+
+1. an access outside its region, or of a width that crosses its end;
+2. an access through a packet location whose token is not current;
+3. a read of an uninitialized register or frame byte, or a byte read
+   of a spilled slot;
+4. a store of a location anywhere but an aligned frame slot;
+5. an ALU operation on a location other than the two of section 3;
+6. a comparison of a location with a scalar other than the immediate
+   zero, or of locations of different regions;
+7. a context access that is not a row of the kind's table, or a
+   write to a read-only row;
+8. a call whose argument does not fit its parameter kind, or a call
+   while a held row forbids it;
+9. a release whose argument is not the innermost held object, or a
+   lock acquired while a lock is held;
+10. an exit while the held stack is not empty, or with `r0` not a
+    scalar;
+11. a `pc` outside the code, or a jump to one.
+
+Division by zero, overflow, and shifts by any amount are not causes;
+they are total. The list is the model's whole trusted content: it
+says what the kernel refuses, and `lowering.md`'s theorem says the
+lowering never produces a run that reaches any of it.
+
+## 6. BIR
+
+A BIR program is one flat program per koit program, produced from
+closed LIR: a list of frame objects with sizes and alignments, a
+list of virtual registers with a class each, scalar or location, and
+an instruction array with labels. Well-formedness:
+
+- every register is written before it is read on every path, which
+  the flattening guarantees from LIR's `let` discipline;
+- every label is defined once and every jump targets a label;
+- `v_ctx` holds the context location from entry to exit and `v_fp`
+  the frame's, both read-only;
+- `lea d obj` names a declared object; the flattening assigns each
+  object its frame offset, packed from the top at 8-byte alignment,
+  and the allocation pass places spill slots below them; the sum
+  must fit in the frame or the program is rejected with its frame
+  size, decision 22;
+- a raise site is `mov v_reason, e; ja handler_k`, and the handler's
+  code follows the body at `handler_k`, reading `v_reason` as its
+  `reason`; the held-stack check of LIR's program rule is the
+  `exit` rule here, since the releases ran before the jump.
+
+The semantics of BIR is the machine of section 2 with `R` over
+virtual registers and no clobbering at calls. There is no separate
+BIR semantics to write: one machine, two register files.
+
+## 7. Bytecode
+
+Bytecode is BIR with these choices made:
+
+**Registers and the frame.** `r10` is the frame pointer, read-only;
+`r1` holds the context at entry and is copied to `r6` or spilled
+before the first call; `r1` to `r5` carry a call's arguments and are
+dead after it; `r0` is its result; `r6` to `r9` survive calls. The
+first allocation is naive: every virtual register lives in a spill
+slot below the frame objects, and each BIR instruction becomes loads
+of its operands into `r1` to `r3`, the instruction, and a store of
+the result. It is provable directly and it is what the verifier sees
+from clang at low optimization, so it is accepted. A linear-scan
+allocation over `r6` to `r9` comes later as an untrusted pass with a
+verified checker, the way CompCert validates its own.
+
+**Labels.** Jump targets become signed instruction offsets; the long
+jump of v4 is used when an offset exceeds 16 bits.
+
+**Encoding.** One 64-bit word per instruction, `opcode:8 dst:4 src:4
+off:16 imm:32`, two words for `lddw`, with the opcode tables of the
+kernel's `Documentation/bpf/standardization/instruction-set.rst`.
+Map references are `lddw` with the pseudo source register the
+loader recognizes, `BPF_PSEUDO_MAP_FD` for `mapref` and
+`BPF_PSEUDO_MAP_VALUE` for `mapval`, and a relocation naming the
+map. The decode-encode round trip is the one property of the encoder
+worth proving.
+
+**Loading.** Two loaders serve two purposes. The first is a few
+hundred lines over the `bpf` system call: create the maps, with BTF
+for a value that holds a spin lock, patch the map file descriptors
+into the relocations, load each program with the kind row's program
+type, and attach; it is the fast path to acceptance numbers and needs
+no ELF. The second writes the ELF object libbpf expects, with
+`.maps` and `.BTF`, so that a koit object loads through the stock
+toolchain; it is the path the paper's toolchain claim needs. Both are
+kernel-facing tooling in the sense of the plan's decision table:
+untrusted, no theorem.
+
+**BTF.** A map value with a slot field needs BTF for the kernel to
+find the lock, and the encoder must produce integers, arrays, and
+structs, and the struct named `bpf_spin_lock`. Programs need BTF
+only for kfunc calls and for line information, both later.
+
+**Sections and types.** From the kind row: the section name for
+ELF, the program type and expected attach type for the system call,
+the license from the unit.
+
+## 8. What the verifier must re-derive
+
+Acceptance is not part of the machine, and Lemma L is where the two
+meet. Stated on the templates of sections 3 and 4:
+
+- Every fact the checker used is a comparison on the path, because
+  every LIR `if` is a `jcond` and the lowering emits a test wherever
+  Core had a marker. Configuration constants are immediates.
+- Every cast is an instruction of the table in section 4.
+- The register an access indexes with is the register the comparison
+  tested. Under the naive allocation the value passes through a
+  spill slot between the test and the use, and the verifier carries
+  bounds through 8-byte spills and links the slot to the register it
+  was loaded into, on the kernels the plan targets; the measurement
+  of E6 decides whether the first allocation must keep the tested
+  value in a register until its last use.
+- A packet location's variable offset stays below the kernel's
+  maximum packet offset because the view rule demands it
+  (`ISSUES.md`, entry 21), so the pointer arithmetic that carves a
+  view is accepted and the comparison that follows sets the range.
+- Frame objects are 8-aligned and every access through them has the
+  natural alignment of its type; map values are 8-aligned by the
+  kernel; packet fields are at their natural offsets from `data`,
+  which the architectures the plan targets accept.
+- The naive allocation multiplies instruction counts by a small
+  constant, which the budgets of section 20's non-claims absorb for
+  the corpus; the counted loops carry their bound in a register the
+  verifier tracks, and a `for` loop's bound is a constant or a value
+  with a fact on the path.
+
+## 9. Validation against the kernel
+
+The machine is a model, and three checks tie it to the kernel, none
+of them a proof:
+
+1. **Differential runs.** `koitc run --bytecode` executes the machine
+   on the emitted program and compares its verdict, maps, packet, and
+   trace with `koitc run` on Core; then the same program under
+   `BPF_PROG_TEST_RUN` in a VM, with the same inputs, compared on
+   verdict, packet, and maps.
+2. **Instruction-level replay.** Yuan et al.'s mechanized in-kernel
+   semantics replays a program's registers against the kernel's
+   interpreter instruction by instruction; the same replay against
+   this machine's trace of register values checks the ALU, jump, and
+   memory rules on the instructions the templates emit.
+3. **The verifier's own answer.** A program the machine runs without
+   a stuck state should load; a rejection names either a re-derivation
+   the templates failed to make visible, which is Lemma L's business,
+   or a rule of the verifier the list of 5.3 lacks, which is a bug in
+   the model and is added to the list.
+
+A formal bridge from this machine to the concrete in-kernel model,
+a memory injection from locations to addresses, is possible later
+and is not needed for the paper.
+
+## 10. Decisions this draft embeds
+
+1. One machine for BIR and bytecode, and the same shared state as
+   Core: maps, packet, token, held stack, trace.
+2. Values are scalars or locations; null is the scalar zero;
+   pointers never become integers.
+3. The verifier's safety conditions are the stuck states, listed in
+   5.3, and the list is the model's trusted content.
+4. Context fields are abstract; `data` and `data_end` yield packet
+   locations; division and shifts are total as the kernel patches
+   them.
+5. Map operations are builtins with Core's semantics; every other
+   row goes through the kernel parameter, with the return convention
+   of 2.4 derived from the row's result type.
+6. The frame is 64 slots with the verifier's spill rules, and starts
+   uninitialized.
+7. The 32-bit normal form of section 4 and its cast table realize
+   Lemma L's first obligation.
+8. cpu v3 is the target; v4's `movsx`, `sdiv`, `smod`, `bswap`, and
+   long jump are used when selected.
+9. The first allocation is naive and provable; a validated allocator
+   comes later.
+10. Two loaders, system call first, ELF and BTF second; both
+    untrusted.
+11. The model is validated by differential runs, instruction replay,
+    and the verifier's own verdicts, and a rejection that 5.3 does not
+    predict is a model bug.

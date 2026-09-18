@@ -1,4 +1,6 @@
 .lake/
 spec/*
 !spec/language.md
+!spec/lir.md 
+!spec/bir.md
 PLAN.md
