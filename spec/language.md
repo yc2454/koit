@@ -193,7 +193,11 @@ validated empirically; it is outside this definition.
 - **P2, no unmarked failure.** Every operation that can fail at runtime
   is marked at its site, and every failure reaches a handler declared
   once per program. The compiler never inserts control flow the source
-  does not show.
+  does not show, except a branch the verifier requires on a path the
+  kernel's contract makes unreachable, such as the null test after an
+  array-map lookup whose index is in range; such a branch ends in the
+  kind's default failure verdict, so that a violation of the contract
+  stays visible.
 - **P3, scalars are values, aggregates are places.** Structs and arrays
   are never copied implicitly; binding one names its location.
 - **P4, no implicit conversions.** Width, signedness, and byte order
@@ -608,8 +612,9 @@ unsigned integer type is accepted and evaluated in that type.
 `csum_fold` pure; `copy(dst, src)` for `dst: ref T` and `src` a `ref T`
 or `view T`, with the write effect of `dst`; `fill(dst, byte)`;
 `printk(fmt, args...)` with effect `call`, at most three arguments;
-`hton`, `ntoh`; `T.size`. Atomic updates on a scalar place `p` of an
-integer type in a map value or on the stack: `atomic_add(p, v)`,
+`hton`, `ntoh`; `T.size`. Atomic updates on a scalar place `p` of a
+32- or 64-bit integer type in a map value or on the stack, since the
+instruction set has no narrower atomic operation: `atomic_add(p, v)`,
 `atomic_and(p, v)`, `atomic_or(p, v)`, `atomic_xor(p, v)`,
 `atomic_xchg(p, v)`, and `atomic_cmpxchg(p, old, new)`, which yield the
 previous value; they are single instructions with no `call` effect and
@@ -940,13 +945,14 @@ knows only the columns:
 | nullable at entry | whether a place may be absent until coerced (kernel-memory extension) |
 | trusted | whether the kernel vouches for the pointer (kernel-memory extension) |
 | guard | the token or resource a place carries |
+| max offset | for a region of dynamic extent, the largest offset a view may lie under, since the verifier bounds a pointer's variable offset before it sees the test; the packet's is the kernel's maximum packet offset, 65535 |
 
 Stage-1 rows: the stack, static, read-write, initialized, no guard; map
 values, static, read-write, zero-filled, no guard; the context, static,
 writable per field from the kind table, no guard; the packet, by view,
 readable, writable in the kinds whose row says `rw`, guarded by its
-layout token. A store through a view in a kind whose packet is
-read-only is a type error at the store.
+layout token, max offset 65535. A store through a view in a kind whose
+packet is read-only is a type error at the store.
 
 ## 13. Programs, contexts, verdicts
 
@@ -1425,8 +1431,16 @@ not what it holds.
     and the elaboration reads p.f once into x
 
 (View)
+    G;F |- e <= int(u,w)
+    F |= e + size(T) <= max offset of the region
     facts(view(e, T), h) = {off(h) = e}
     h joins K.V in the then-branch
+    The demand is the verifier's: it bounds a packet pointer's
+    variable offset before it reads the comparison that follows, so an
+    offset the facts do not bound is a program that does not load. A
+    constant offset is entailed trivially; a loop-carried one needs a
+    `check` at the head of the body. The byte read `pkt[off]` demands
+    the same with size 1.
 
 (Lookup)
     facts(lookup(m, k), r) = {}
@@ -1613,21 +1627,34 @@ policy, `fails`. Refinements are checked, not searched for.
 A run acts on a state `st` with the frame `sigma`, the names in scope
 bound to a value, to a place, or marked moved; the map store `mu`;
 the packet `B` with its layout token; the held set, innermost first,
-each entry with the name it binds and the object it releases; and the
-negative return of the last helper that failed, which `errno` reads.
-Values are scalars: a fixed-width integer reduced to its type's range,
-a byte-order value, a boolean, or the location of a place. A literal
-or an untyped constant carries no width until it meets an operand or a
-place, as it takes its type from the context in section 18. Places are
-bytes in a region: a map slot, the packet, a struct literal's frame,
-or an object the kernel handed out. Arithmetic is the total function
-of section 8.1.
+each entry with the name it binds and the object it releases; the
+negative return of the last helper that failed, which `errno` reads;
+and the trace, the kernel calls made so far in order, each with its
+row, its arguments, and its answer, and each `printk` with its format
+and arguments. Values are scalars: a fixed-width integer reduced to
+its type's range, a byte-order value, a boolean, or the location of a
+place. A byte-order value is the bit pattern as stored, so `hton` and
+`ntoh` are byte swaps and equality compares patterns. A location
+carries its region, its offset, and the layout token it was made
+under; a location into the packet is usable only while its token is
+the current one. A literal or an untyped constant carries no width
+until it meets an operand or a place, as it takes its type from the
+context in section 18. Places are bytes in a region: a map slot, the
+packet, a struct literal's frame, or an object the kernel handed out.
+Memory is little-endian, as on the architectures the lowering
+targets. Arithmetic is the total function of section 8.1. The frame a
+field predicate is evaluated in, at a marked load, is built from the
+fields of the place: the loaded field bound to its value and every
+scalar sibling to the value at the place.
 
 Helpers are nondeterministic relations constrained by their
 contracts. The semantics takes them as a parameter: a kernel `K` says,
 for each row of the call table and its evaluated arguments, what the
 call does, a result and a new state, or a failure with the negative
-return the `helper` reason defaults to. A kernel is within its
+return the `helper` reason defaults to. How the failure reaches the
+program is a rule of the lowering read off the row's result type: a
+negative return for a scalar result, null for a location; a row that
+needs an exception gets a column then. A kernel is within its
 contracts when it never errs, yields a value exactly when the row's
 signature has a result, changes the packet or its token only when the
 row has the `resize` effect, and fails only when the row is fallible.
@@ -1929,13 +1956,27 @@ written:
     build; a `config` with no value at all is an error (entry 18).
 45. The store record `p = e` is kept for stack places only; a store to
     a shared place leaves no fact (entry 19).
-Revision of 2026-09-18, from `ISSUES.md` entry 20:
+Revisions of 2026-09-18, from `ISSUES.md` entries 20 to 24:
 46. The dynamic semantics is a big-step relation over a machine,
     parameterized by a kernel that stands for the helpers' choices and
     is trusted to its contracts; the frames of the earlier small-step
     account are the enclosing rules; T1 quantifies over every such
     kernel and states existence of a halting derivation and absence
     of `err` (sections 19, 20).
+47. A view carve and a byte read demand that the window lies under
+    the region's max offset, a column of the region table, 65535 for
+    the packet; the lowering adds no bound test (entry 21).
+48. P2 admits a branch the verifier requires on a path the kernel's
+    contract makes unreachable, ending in the kind's default failure
+    verdict (entry 22).
+49. The atomic updates take a place of a 32- or 64-bit integer type
+    (entry 23).
+50. The machine of section 19.1 is aligned with the lowering's target:
+    byte-order values are bit patterns, memory is little-endian, the
+    layout token travels with the location, the state carries a trace
+    of kernel calls and `printk` events, the predicate frame of a
+    marked load is built from the fields, and a kernel function's
+    failure signal follows its result type (entry 24).
 
 Open questions, with the default the checker implements until decided:
 

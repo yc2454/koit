@@ -3,4 +3,5 @@ spec/*
 !spec/language.md
 !spec/lir.md 
 !spec/bir.md
+!spec/lowering.md
 PLAN.md
