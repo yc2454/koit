@@ -678,7 +678,7 @@ def verdictName (row : KindRow) (v : Val) : String :=
 succeeds with `REDIRECT`; the resizes grow with zero bytes and fail
 past the packet's end; a socket lookup finds a socket; the clock
 advances a microsecond per call; the checksums are the one's
-complement of the kernel. -/
+complement of the kernel, with the kernel's own `csum_add` and `csum_fold`. -/
 def synthetic : Kernel where
   helper row args st :=
     let ints := args.map fun v => (v.toInt?).getD 0
@@ -711,10 +711,12 @@ def synthetic : Kernel where
     | "ktime", _ =>
       let st := { st with clock := st.clock + 1000 }
       .ok (some (Val.u64 st.clock)) st
+    -- `csum_add`: a 32-bit add with end-around carry; `csum_fold`:
+    -- folded twice and complemented, as include/net/checksum.h has them
     | "csum_add", [c, a] =>
-      let s := toNatMod c 32 + toNatMod a 32
-      let s := (s % 65536) + (s / 65536)
-      .ok (some (Val.u32 s)) st
+      let a := toNatMod a 32
+      let s := (toNatMod c 32 + a) % 2 ^ 32
+      .ok (some (Val.u32 (if s < a then s + 1 else s))) st
     | "csum_fold", [c] =>
       let s := toNatMod c 32
       let s := (s % 65536) + (s / 65536)

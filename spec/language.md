@@ -112,6 +112,14 @@ Revision folded on 2026-09-18 from `ISSUES.md`:
    rules, and T1 quantifies over every kernel within its contracts
    (entry 20; sections 19, 20).
 
+Revisions folded on 2026-09-19 from `ISSUES.md` entries 25 to 27:
+
+1. Two fact rules the lowering's view-offset demand needed: an
+   increment bound at a loop head and the preservation of what a
+   killed equation said of its other side (section 18.4).
+2. The machine's trace and held stack in the form every level of the
+   lowering shares (section 19.1).
+
 Reading guide. Sections 2 to 17 are the surface language and can become
 the manual. Sections 18 to 20 are the formal part. Section 23 gives the
 program template and examples.
@@ -1376,13 +1384,27 @@ it names. `kill(F, p)` removes every fact mentioning a place that is
 possibly equal unless both are literals that differ; and, since the
 checker does not compute aliasing between them, a store through a
 `ref` parameter removes every fact about every `ref` parameter of the
-function, and a store through a view every fact about every view. Any
+function, and a store through a view every fact about every view.
+When a fact `kill` removes mentions another stack place, as `voff =
+off` mentions `voff` when `off` is stored to, what was known of that
+place, its bounds and known bits, is kept as facts of its own, since
+the store did not change it; and a store `x = e` whose `e` reads `x`
+itself, `x += c`, records the bounds the state had for `e` before the
+store in place of the circular equation. Any
 `call` removes every fact about a place off the stack: a map value,
 the context, the packet, a `ref` parameter, a kernel object. `inv(F,
 s)` removes the facts about what `s` may assign, including every place
 passed to a call in `s`, and every fact about a place off the stack,
 then restores the refinements of the locals in scope, which every
-store re-establishes. `meet(F1, F2)` keeps the facts present in both
+store re-establishes; and, when the loop's iteration count is known,
+a constant for `repeat` and the cap for `for`, an unsigned stack
+local that `s` changes only by `x += e`, each increment outside the
+nested loops and each addend bounded above before the loop by values
+`s` does not change, keeps the bound `x <= x_0 + count * sum of the
+addends' bounds` and its lower bound when the total stays within its
+type, since it cannot wrap; the verifier re-derives the same bound by
+walking the loop to its count, so the fact is one it will see (P9).
+`meet(F1, F2)` keeps the facts present in both
 and, for each variable, the hull of what each side knew about it as
 new facts, so that `x < 5` on one path and `x < 7` on the other leave
 `x <= 6`; a path that has exited contributes nothing. Facts about a
@@ -1631,7 +1653,11 @@ each entry with the name it binds and the object it releases; the
 negative return of the last helper that failed, which `errno` reads;
 and the trace, the kernel calls made so far in order, each with its
 row, its arguments, and its answer, and each `printk` with its format
-and arguments. Values are scalars: a fixed-width integer reduced to
+and arguments, an untyped argument settled to `u64`; a held spin lock
+carries the lock's place as its object, as a record or a socket
+carries its own. A row with no effects that reads the context, such as
+`pkt.len`, goes through the kernel like any other, so that the trace
+lists every row called. Values are scalars: a fixed-width integer reduced to
 its type's range, a byte-order value, a boolean, or the location of a
 place. A byte-order value is the bit pattern as stored, so `hton` and
 `ntoh` are byte swaps and equality compares patterns. A location
@@ -1977,6 +2003,20 @@ Revisions of 2026-09-18, from `ISSUES.md` entries 20 to 24:
     of kernel calls and `printk` events, the predicate frame of a
     marked load is built from the fields, and a kernel function's
     failure signal follows its result type (entry 24).
+Revisions of 2026-09-19, from `ISSUES.md` entries 25 to 27, at the
+end of the session that lowered Core to LIR:
+51. A loop head keeps a bound on a local its body only increments,
+    and a store keeps what a dropped equation said of its other side
+    and what the state knew of a self-referring value, as 18.4 now
+    states; the section 23 examples stand unchanged under decision 47
+    (entry 25).
+52. The trace settles `printk`'s untyped arguments, a held lock's
+    object is its place, and a row with no effects is still a kernel
+    call, so that every level of the lowering compares equal on the
+    shared state (entry 26).
+53. The evaluator's failures carry the state they left: a map
+    written before a `fail` stays written when the handler runs, as
+    the rules always said (entry 27, a correction of the evaluator).
 
 Open questions, with the default the checker implements until decided:
 

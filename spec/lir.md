@@ -95,7 +95,7 @@ operators    op ::= + | - | * | / | % | & | '|' | ^ | << | >>
 
 statements    s ::= skip | s ; s
                   | let x : T = e | x := e
-                  | store(w) a e
+                  | store(w) a e | ctx f <- e
                   | frame x : n [as S]
                   | if c s s
                   | block s | loop s | br n
@@ -109,7 +109,7 @@ builtins      b ::= lookup m | update m | delete m
                   | reserve m n | submit | discard
                   | lock | unlock | enter R | leave R
                   | copy n | fill n | printk "fmt"
-                  | atomic op(w) [fetch]
+                  | atomic op(s,w) [fetch]
 
 functions     F ::= fn f (x : T, ...) [-> T [?]] [fails] { s }
 handlers      H ::= on k => s
@@ -129,10 +129,11 @@ Reading notes.
 - `load(w) a` reads `w` bits at the address; `store(w) a e` writes
   them. There is no load or store of an aggregate; `copy n` and
   `fill n` move `n` bytes.
-- `ctx f` reads the context field `f` at the width of its row.
-  `pkt_data` and `pkt_end` are the packet's bounds as locations, read
-  from the context each time they are mentioned; they exist in packet
-  kinds only.
+- `ctx f` reads the context field `f` at the width of its row, and
+  `ctx f <- e` stores to a field the row marks writable, `mark` in a
+  `tc` program. `pkt_data` and `pkt_end` are the packet's bounds as
+  locations, read from the context each time they are mentioned; they
+  exist in packet kinds only.
 - `mapval m + k` is the location `k` bytes into the value of a map
   that pass A marked for direct access: an `array[1]` map. Every
   other map is reached through `lookup`.
@@ -143,7 +144,8 @@ Reading notes.
   `loop` constructs, counting from the innermost; a `br` that reaches
   a `loop` restarts it, one that reaches a `block` leaves it.
 - `return e` leaves the function or program with `e`; `return` with
-  no value leaves a function declared `-> T ?` with absence.
+  no value leaves a function declared `-> T ?` with absence, or a
+  function without a result early.
 - `raise k e` leaves with the failure kind `k` and the reason `e`,
   an `int(u,32)`. The releases owed at the site precede it.
 - `call f(...)`: `unwind s` runs when `f` raises, before the failure
@@ -153,7 +155,14 @@ Reading notes.
 - A builtin or kernel function is called by the name of its row. A
   fallible kernel function answers with the value the row's
   convention gives on failure, a negative number or the scalar zero
-  (`bir.md`, section 2.5), and the lowering tests it.
+  (`bir.md`, section 2.5), and the lowering tests it. The result of a
+  kernel function is bound at `int(i,64)` when the row yields a
+  scalar or nothing, and at `ptr` when it yields a location; the
+  lowering casts a scalar result to the row's type after the test. A
+  row with no effects, `pkt.len`, is a kernel function all the same,
+  so that the trace lists it at every level.
+- `atomic op(s,w)` carries the signedness of the place, which the
+  previous value it yields has.
 - `on k => s` is the handler of kind `k`; the six are present after
   defaults. Its body sees the local `reason`.
 
@@ -358,8 +367,9 @@ also the statement that the lowering's releases are right.
 ### 5.3 What is shared with Core, and what is not
 
 Shared verbatim: the maps, the packet and its token, the kernel
-objects, the ring buffers, the trace, and the held stack's rows and
-objects. Related, not shared: Core's frame binds names to values or
+objects, the ring buffers, the trace, whose `printk` events carry
+their untyped arguments settled to `u64`, and the held stack's rows
+and objects, a spin lock's object being the lock's place. Related, not shared: Core's frame binds names to values or
 places with a token, LIR's binds names to values that may be
 locations with a token; the pass-B relation maps one to the other.
 Dropped: Core's `errno`, which LIR keeps in an ordinary local written
@@ -391,7 +401,8 @@ the order of effects is Core's.
 | `return e`, a verdict | `return e` |
 | `if c s1 s2`, `c` constant | the live branch alone |
 | `size T`, `config`, verdict and prelude constants, `hton k` | immediates |
-| `x = atomic op p e...` | `x = atomic op(w) fetch (a, e...)` |
+| `x = atomic op p e...` | `x = atomic op(s,w) fetch (a, e...)`; on a scalar local, a read and a store, since a local is the program's alone |
+| `ctx.f := e` | `ctx f <- e` |
 | `let _ = call f(...)` | `call f(...) unwind { ... }` |
 | `errno` | the local `err` the failing call's test wrote |
 
@@ -444,7 +455,12 @@ r = lookup m (key); if r == 0 { return ABORTED_OF_KIND }; ...
 The dead branch returns the kind's own failure verdict, so that a
 violation of the model, should the kernel ever answer null, is
 observable through the kernel's exception tracepoint rather than
-silent. The pass-B theorem does not see this branch: the source's
+silent; inside a function, which has no kind, it is an early return
+of zero, or a bare `return` for a function without a result or with
+`T ?`. Per-CPU arrays are reached this way whatever their capacity,
+since the kernel's direct value access exists for plain array maps
+only. The key of such a lookup is a 4-byte frame holding the index
+cast to `u32`, the width the kernel's array maps take. The pass-B theorem does not see this branch: the source's
 derivation takes the in-range path, the machine's `lookup` answers
 with a location, and the branch is not taken. Principle P2 is
 amended to allow it (`ISSUES.md`, entry 22). Kernels that mark array
@@ -553,5 +569,10 @@ shows clang needs them; they are printer policy, recorded in
 12. Byte-order values are bit patterns and memory is little-endian
     (entry 24).
 13. `errno` is a local written by the test after a failing call.
+15. Folded 2026-09-19 from `ISSUES.md` entry 26: the context store,
+    the signedness of an atomic update, the dead branch inside a
+    function, the 4-byte key frame, per-CPU arrays by lookup, kernel
+    results bound at `int(i,64)` or `ptr`, and `pkt.len` as a kernel
+    call.
 14. The C printer is outside every theorem and may re-sugar control
     and add acceptance idioms.
