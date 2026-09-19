@@ -153,8 +153,10 @@ def regionRows : List RegionRow := [
     note := "array slots and hash lookups; zero-filled; valid for the whole run" },
   { name := "ctx", dynamic := false, writable := false, initialized := true,
     guard := none, note := "fields per kind, table 2; writability per field" },
+  -- `MAX_PACKET_OFF`, include/linux/filter.h: the largest offset the
+  -- verifier admits for a packet pointer
   { name := "pkt", dynamic := true, writable := true, initialized := true,
-    guard := some .layout,
+    guard := some .layout, maxOffset := some 0xFFFF,
     note := "views; writable per kind; the layout token is dropped by `resize`" }
 ]
 

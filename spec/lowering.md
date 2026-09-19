@@ -459,6 +459,51 @@ for the related-work sentence. Acceptance idioms it adds for clang,
 such as `barrier_var` after a coercion, are recorded here as they
 are found and never enter LIR.
 
+Printer policy as of session 6 (2026-09-19), each a choice of the
+printer and not of any pass:
+
+- `block`, `loop`, and `br` are a label after the block, `for (;;)`
+  with a label at the head of its body, and `goto`; no re-sugaring
+  into `for` with `break` and `continue` yet.
+- A `fails` or `T ?` function returns an `int` status: 0 for a value,
+  written through an out-parameter, 1 for absence, `2 + k` for a
+  failure of kind `k` with the reason written through a `u32 *`
+  parameter. A call site tests the status: a program body runs the
+  `unwind` and jumps through a `switch` on the kind to the handler; a
+  function runs its `unwind` and returns the status.
+- A `raise` in a program body is `reason = e; goto handler_k;`; the
+  handlers are labeled tails of the program's C function, each in
+  its own block, ending in `return`.
+- A map read by direct value access is looked up once at the
+  program's entry by the key zero with a null test that returns the
+  kind's failure verdict, since C has no direct value access for a
+  declared map; `mapval m + k` is then an offset from that pointer.
+- A `frame` is an 8-aligned zeroed object of the source type and a
+  `void *` pointing at it, so that every mention of the frame's name
+  is the pointer LIR means.
+- Kernel functions go through templates that add the arguments the
+  helpers take and the source does not name: `bpf_redirect`'s flags,
+  the context of the resizes and the socket lookups, the tuple size
+  and `BPF_F_CURRENT_NETNS`; in `tc` programs `pkt.adjust_tail` and
+  `pkt.adjust_head` compute `bpf_skb_change_tail`'s new length and
+  `bpf_skb_change_head`'s headroom from the delta, which the corpus
+  does not exercise. `pkt.len` prints as the subtraction of the
+  context fields.
+- Arithmetic goes through the shim `tests/emit/koit.h`: every `+ -
+  * & | ^` is computed unsigned at the width and cast, division,
+  modulo, and shifts through `koit_div_T`, `koit_mod_T`,
+  `koit_shl_T`, `koit_shr_T`, which implement section 8.1 of the
+  definition; casts are C casts between fixed-width types.
+- A koit name that is a C keyword, or one the printer uses itself,
+  gets a trailing underscore.
+- The shim declares the helpers by their uapi numbers and the
+  context structs with the uapi offsets, since the kernel tree on
+  this machine has no generated `bpf_helper_defs.h`; session 8's
+  generator replaces it.
+- Clang is run with `-fno-builtin`, since its loop idiom recognition
+  otherwise turns a byte loop into a `memset` call the BPF backend
+  cannot emit.
+
 ## 10. The trusted base
 
 | trusted | for | how it is checked |

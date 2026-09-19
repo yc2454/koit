@@ -32,7 +32,7 @@ open Koit.Prelude (KindRow CallRow ResourceRow AcqArg Sig)
 abbrev Res (α : Type) := Except Abort α
 
 /-- A primitive of the machine applied in a state. -/
-def prim (f : M α) (st : State) : Res (α × State) := f.run st
+def prim (f : M α) (st : State) : Res (α × State) := f.exec st
 
 /-- The binding a helper's result makes: a place for an owned
 reference, a value otherwise. -/
@@ -73,10 +73,10 @@ inductive EvalExpr (K : Kernel) : State → Expr → Res Val → State → Prop
   | lit {st s v t} : EvalExpr K st (.lit s v t) (.ok (Val.lit v)) st
   | char {st s c} : EvalExpr K st (.char s c) (.ok (Val.mkInt false 8 c.toNat)) st
   | bool {st s b} : EvalExpr K st (.bool s b) (.ok (.bool b)) st
-  | varVal {st s x v tok} :
-      st.local? x = some (.val v, tok) → EvalExpr K st (.var s x) (.ok v) st
-  | varPlace {st s x l tok} :
-      st.local? x = some (.place l, tok) → EvalExpr K st (.var s x) (.ok (.loc l)) st
+  | varVal {st s x v} :
+      st.local? x = some (.val v) → EvalExpr K st (.var s x) (.ok v) st
+  | varPlace {st s x l} :
+      st.local? x = some (.place l) → EvalExpr K st (.var s x) (.ok (.loc l)) st
   /-- A constant of the unit, at its declared type or `poly`. -/
   | varConst {st s x d r st'} :
       st.local? x = none → st.env.consts.find? (·.name == x) = some d →
@@ -112,9 +112,12 @@ inductive EvalExpr (K : Kernel) : State → Expr → Res Val → State → Prop
       EvalExpr K st l (.ok a) st1 → EvalExpr K st1 r (.ok b) st2 →
       meetInts a b = some (sg, w, x, y, poly) →
       EvalExpr K st (.cmp s op l r) (.ok (.bool (compare op x y))) st2
-  | cmpBe {st s op l r w w' x y st1 st2} :
+  /-- (CmpBe): two patterns at one width, a constant of no width yet
+  swapped into the other's. -/
+  | cmpBe {st s op l r w w' x y x' y' st1 st2} :
       EvalExpr K st l (.ok (.be w x)) st1 → EvalExpr K st1 r (.ok (.be w' y)) st2 →
-      EvalExpr K st (.cmp s op l r) (.ok (.bool (compare op x y))) st2
+      meetBe w x w' y = some (x', y') →
+      EvalExpr K st (.cmp s op l r) (.ok (.bool (compare op x' y'))) st2
   | cmpAbortL {st s op l r e st1} :
       EvalExpr K st l (.error e) st1 → EvalExpr K st (.cmp s op l r) (.error e) st1
   | cmpAbortR {st s op l r a e st1 st2} :
@@ -158,14 +161,19 @@ inductive EvalExpr (K : Kernel) : State → Expr → Res Val → State → Prop
       EvalExpr K st (.cast s e t) (.ok (Val.mkInt sg w (if b then 1 else 0))) st1
   | castAbort {st s e t a st1} :
       EvalExpr K st e (.error a) st1 → EvalExpr K st (.cast s e t) (.error a) st1
+  /-- (Hton): the byte swap of a typed operand; a constant of no type
+  yet waits for its width. -/
   | hton {st s e sg w x poly st1} :
       EvalExpr K st e (.ok (.int sg w x poly)) st1 →
-      EvalExpr K st (.hton s e) (.ok (.be (if poly then 0 else 64) (toNatMod x 64))) st1
+      EvalExpr K st (.hton s e)
+        (.ok (if poly then .be 0 (toNatMod x 64) else .be w (Val.bswap w (toNatMod x w)))) st1
   | htonAbort {st s e a st1} :
       EvalExpr K st e (.error a) st1 → EvalExpr K st (.hton s e) (.error a) st1
+  /-- (Ntoh): the byte swap back to a host-order integer. -/
   | ntoh {st s e w x st1} :
       EvalExpr K st e (.ok (.be w x)) st1 →
-      EvalExpr K st (.ntoh s e) (.ok (Val.mkInt false (if w == 0 then 64 else w) x)) st1
+      EvalExpr K st (.ntoh s e)
+        (.ok (if w == 0 then Val.mkInt false 64 x else Val.mkInt false w (Val.bswap w x))) st1
   | ntohAbort {st s e a st1} :
       EvalExpr K st e (.error a) st1 → EvalExpr K st (.ntoh s e) (.error a) st1
   /-- (Read): a scalar place loaded. -/
@@ -178,8 +186,8 @@ inductive EvalExpr (K : Kernel) : State → Expr → Res Val → State → Prop
       prim (sizeOf t) st = .ok (n, st) → EvalExpr K st (.size s t) (.ok (Val.lit n)) st
   /-- (Move): the reference, with the name dead and the scope's release
   cancelled. -/
-  | move {st s x l tok} :
-      st.local? x = some (.place l, tok) →
+  | move {st s x l} :
+      st.local? x = some (.place l) →
       EvalExpr K st (.move s x) (.ok (.loc l))
         { st.rebind x .moved with held := st.held.filter (·.name != some x) }
   | call {st s f args v st1} :
@@ -202,13 +210,13 @@ inductive EvalConst (K : Kernel) : State → ConstDecl → Res Val → State →
 
 /-- The place a place expression denotes. -/
 inductive EvalPlace (K : Kernel) : State → Place → Res PlaceRef → State → Prop
-  | varLocal {st s x v tok} :
-      st.local? x = some (.val v, tok) → EvalPlace K st (.var s x) (.ok (.local x)) st
+  | varLocal {st s x v} :
+      st.local? x = some (.val v) → EvalPlace K st (.var s x) (.ok (.local x)) st
   /-- (PDeref) and (PGuard): a name for a place, whose token, for a
   view, is the packet's current one. -/
-  | varPlace {st s x l tok} :
-      st.local? x = some (.place l, tok) →
-      (l.region = .pkt → tok = st.layout) →
+  | varPlace {st s x l} :
+      st.local? x = some (.place l) →
+      (l.region = .pkt → l.tok = st.layout) →
       EvalPlace K st (.var s x) (.ok (.mem l)) st
   | ctx {st s p f} :
       p = .var s "ctx" → EvalPlace K st (.field s p f) (.ok (.ctx f)) st
@@ -280,7 +288,7 @@ inductive Call (K : Kernel) : State → Span → String → List Arg → Res (Op
   | helper {st s f args row params ret vs v st1 st2} :
       st.env.fn? f = none → st.env.prelude.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 → K.helper row vs st1 = .ok v st2 →
-      Call K st s f args (.ok v) st2
+      Call K st s f args (.ok v) (st2.record (.call row.name vs (.ok v)))
   | helperArgsAbort {st s f args row params ret a st1} :
       st.env.fn? f = none → st.env.prelude.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.error a) st1 → Call K st s f args (.error a) st1
@@ -341,7 +349,7 @@ inductive Builtin (K : Kernel) : State → Span → String → List Arg → Res 
   | printk {st s s' fmt rest vs st1} :
       EvalArgs K st [] rest (.ok vs) st1 →
       Builtin K st s "printk" (.val (.str s' fmt) :: rest) (.ok none)
-        { st1 with log := st1.log ++ [fmtArgs fmt vs] }
+        (st1.record (.print fmt (vs.map settle)))
 
 /-- A function of the unit: the arguments bound in a fresh frame, the
 body run, its `return` the result, the caller's frame restored. -/
@@ -360,26 +368,26 @@ inductive ExecFn (K : Kernel) : State → Fn → List Arg → Res (Option Val) �
 
 /-- The frame of a call from its parameters and arguments. -/
 inductive Frame (K : Kernel) :
-    State → List Param → List Arg → Res (List (String × Binding × Nat)) → State → Prop
+    State → List Param → List Arg → Res (List (String × Binding)) → State → Prop
   | nil {st ps} : Frame K st ps [] (.ok []) st
   | place {st p ps q l rest frame st1 st2 tn} :
       prim (norm p.ty) st = .ok (tn, st) → (tn matches .ref .. | .view ..) →
       EvalPlace K st q (.ok (.mem l)) st1 → Frame K st1 ps rest (.ok frame) st2 →
-      Frame K st (p :: ps) (.place q :: rest) (.ok ((p.name, .place l, st.layout) :: frame)) st2
+      Frame K st (p :: ps) (.place q :: rest) (.ok ((p.name, .place l) :: frame)) st2
   | own {st p ps e l rest frame st1 st2 tn} :
       prim (norm p.ty) st = .ok (tn, st) → (tn matches .own ..) →
       EvalExpr K st e (.ok (.loc l)) st1 → Frame K st1 ps rest (.ok frame) st2 →
-      Frame K st (p :: ps) (.val e :: rest) (.ok ((p.name, .place l, st.layout) :: frame)) st2
+      Frame K st (p :: ps) (.val e :: rest) (.ok ((p.name, .place l) :: frame)) st2
   | scalar {st p ps e v v' rest frame st1 st2 tn} :
       prim (norm p.ty) st = .ok (tn, st) → ¬ (tn matches .ref .. | .view .. | .own ..) →
       EvalExpr K st e (.ok v) st1 → prim (coerceTo tn v) st1 = .ok (v', st1) →
       Frame K st1 ps rest (.ok frame) st2 →
-      Frame K st (p :: ps) (.val e :: rest) (.ok ((p.name, .val v', st.layout) :: frame)) st2
+      Frame K st (p :: ps) (.val e :: rest) (.ok ((p.name, .val v') :: frame)) st2
   | scalarPlace {st p ps q r v v' rest frame st1 st2 tn} :
       prim (norm p.ty) st = .ok (tn, st) → ¬ (tn matches .ref .. | .view .. | .own ..) →
       EvalPlace K st q (.ok r) st1 → prim (loadPlace r) st1 = .ok (v, st1) →
       prim (coerceTo tn v) st1 = .ok (v', st1) → Frame K st1 ps rest (.ok frame) st2 →
-      Frame K st (p :: ps) (.place q :: rest) (.ok ((p.name, .val v', st.layout) :: frame)) st2
+      Frame K st (p :: ps) (.place q :: rest) (.ok ((p.name, .val v') :: frame)) st2
   | abortVal {st p ps e a rest st1} :
       EvalExpr K st e (.error a) st1 → Frame K st (p :: ps) (.val e :: rest) (.error a) st1
   | abortPlace {st p ps q a rest st1} :
@@ -389,12 +397,14 @@ inductive Frame (K : Kernel) :
 an abort. -/
 inductive ExecFall (K : Kernel) :
     State → Fallible → Res (Option (Option Binding)) → State → Prop
-  /-- (View): the window lies in the packet. -/
+  /-- (View): the window lies in the packet; the location carries the
+  layout token it was carved under. -/
   | viewOk {st s off t o ov n st1} :
       EvalExpr K st off (.ok o) st1 → o.toInt? = some ov → prim (sizeOf t) st1 = .ok (n, st1) →
       0 ≤ ov → ov.toNat + n ≤ st1.packet.size →
       ExecFall K st (.view s off t)
-        (.ok (some (some (.place { region := .pkt, off := ov.toNat, ty := t })))) st1
+        (.ok (some (some (.place { region := .pkt, off := ov.toNat, ty := t,
+                                   tok := st1.layout })))) st1
   | viewShort {st s off t o ov n st1} :
       EvalExpr K st off (.ok o) st1 → o.toInt? = some ov → prim (sizeOf t) st1 = .ok (n, st1) →
       (ov < 0 ∨ ov.toNat + n > st1.packet.size) →
@@ -415,26 +425,30 @@ inductive ExecFall (K : Kernel) :
       ExecFall K st (.lookup s m k) (.ok none) st1
   /-- (LoadW): the field's predicate of the value loaded, with the
   siblings read from the place. -/
-  | loadw {st s q f fields pred v ok frame l st1 st2 st3} :
+  | loadw {st s q f fields pred v ok frame fl l st1 st3} :
       EvalPlace K st q (.ok (.mem l)) st1 →
-      prim (loadPlace (.mem l)) st1 = .ok (v, st1) →
+      prim (fieldOf l.ty f) st1 = .ok ((fl.off - l.off, fl.ty), st1) →
+      fl.region = l.region → fl.tok = l.tok →
+      prim (loadPlace (.mem fl)) st1 = .ok (v, st1) →
       prim (norm l.ty) st1 = .ok (.struct s fields, st1) →
       (fields.find? (·.name == f)).bind (·.pred) = some pred →
-      SiblingFrame K st1 l fields f v frame st2 →
-      EvalExpr K { st2 with locals := frame } pred (.ok ok) st3 →
+      prim (siblingFrame l fields f v) st1 = .ok (frame, st1) →
+      EvalExpr K { st1 with locals := frame } pred (.ok ok) st3 →
       ExecFall K st (.loadw s (.field s q f))
         (.ok (if ok.truthy then some (some (.val v)) else none))
-        { st3 with locals := st2.locals }
+        { st3 with locals := st1.locals }
   /-- A fallible helper: the kernel's answer, with `errno` on a
   failure. -/
   | callOk {st s f args row params ret vs v st1 st2} :
       st.env.prelude.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 → K.helper row vs st1 = .ok v st2 →
-      ExecFall K st (.call s f args) (.ok (some (v.map bindingOf))) st2
+      ExecFall K st (.call s f args) (.ok (some (v.map bindingOf)))
+        (st2.record (.call row.name vs (.ok v)))
   | callFailed {st s f args row params ret vs errno st1 st2} :
       st.env.prelude.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 → K.helper row vs st1 = .failed errno st2 →
-      ExecFall K st (.call s f args) (.ok none) { st2 with errno }
+      ExecFall K st (.call s f args) (.ok none)
+        ({ st2 with errno }.record (.call row.name vs (.failed errno)))
   | callBuiltinOk {st s f args row v st1} :
       st.env.prelude.call? f = some row → row.sig = .builtin →
       Builtin K st s f args (.ok v) st1 →
@@ -463,11 +477,11 @@ inductive ExecFall (K : Kernel) :
   | coerceAbort {st s e t a st1} :
       EvalExpr K st e (.error a) st1 → ExecFall K st (.coerce s e t) (.error a) st1
   /-- (Hold-in) for a lock: the slot's place, then the resource held. -/
-  | acquirePlace {st s r f ty p row slot pr st1} :
+  | acquirePlace {st s r f ty p row slot l st1} :
       st.env.prelude.resource? r = some row → row.arg = .place slot →
-      EvalPlace K st p (.ok pr) st1 →
+      EvalPlace K st p (.ok (.mem l)) st1 →
       ExecFall K st (.acquire s r f ty [.place p]) (.ok (some none))
-        { st1 with held := { row, name := none } :: st1.held }
+        { st1 with held := { row, name := none, obj := some l } :: st1.held }
   | acquireScope {st s r f ty row} :
       st.env.prelude.resource? r = some row → row.arg = .scope →
       ExecFall K st (.acquire s r f ty []) (.ok (some none))
@@ -500,19 +514,6 @@ inductive ExecFall (K : Kernel) :
       st.env.prelude.resource? r = some row → row.arg = .call → f ≠ "reserve" →
       ExecFall K st (.call s f args) (.ok none) st1 →
       ExecFall K st (.acquire s r f none args) (.ok none) st1
-
-/-- The frame a field predicate is evaluated in: the field bound to
-the value loaded and every scalar sibling to its value at the
-place. -/
-inductive SiblingFrame (K : Kernel) :
-    State → Loc → List Field → String → Val → List (String × Binding × Nat) → State → Prop
-  | mk {st l fields f v frame} :
-      (∀ g ∈ fields, g.name ≠ f →
-        ∃ o gv, prim (fieldOf l.ty g.name) st = .ok ((o, g.ty), st) ∧
-          prim (loadPlace (.mem { l with off := l.off + o, ty := g.ty })) st = .ok (gv, st) ∧
-          (g.name, .val gv, st.layout) ∈ frame) →
-      (f, .val v, st.layout) ∈ frame →
-      SiblingFrame K st l fields f v frame st
 
 /-- `K ⊢ ⟨s, st⟩ ⇓ o, st'`: one statement. -/
 inductive ExecStmt (K : Kernel) : State → Stmt → Outcome → State → Prop
@@ -732,7 +733,7 @@ inductive ExecProgram (K : Kernel) : State → Program → ProgOut → State →
   | handled {st p k reason h v v' st1 st2} :
       ExecBlock K st p.body (.raise k reason) st1 →
       p.handlers.find? (·.kind == k) = some h →
-      ExecBlock K { st1 with locals := [("reason", .val (Val.u32 reason), 0)], held := [] }
+      ExecBlock K { st1 with locals := [("reason", .val (Val.u32 reason))], held := [] }
         h.body (.ret (some v)) st2 →
       prim (coerceTo st.kind.verdictTy v) st2 = .ok (v', st2) →
       ExecProgram K st p (.halt v') st2
@@ -747,7 +748,7 @@ inductive ExecProgram (K : Kernel) : State → Program → ProgOut → State →
   | handlerErr {st p k reason h o st1 st2} :
       ExecBlock K st p.body (.raise k reason) st1 →
       p.handlers.find? (·.kind == k) = some h →
-      ExecBlock K { st1 with locals := [("reason", .val (Val.u32 reason), 0)], held := [] }
+      ExecBlock K { st1 with locals := [("reason", .val (Val.u32 reason))], held := [] }
         h.body o st2 → (∀ v, o ≠ .ret (some v)) →
       ExecProgram K st p (.err "the handler does not return a verdict") st2
 

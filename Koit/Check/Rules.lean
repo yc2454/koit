@@ -279,10 +279,13 @@ end
 
 /-- What a fallible operation binds, the base premises. -/
 inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
-  /-- (View): the offset is a `u64`, the type packet-representable. -/
-  | view {env K s off t row sz} :
+  /-- (View): the offset is a `u64`, the type packet-representable,
+  and the window lies under the region's maximum offset. -/
+  | view {env K s off t row sz al} :
       env.kind = some row → row.hasPkt → Check env K off tU64 →
-      env.notRepresentable t false = .ok none → env.layout t = .ok sz →
+      env.notRepresentable t false = .ok none → env.layout t = .ok (sz, al) →
+      (∀ P, viewOffsetBound env s off sz = some P →
+        Entails (scope env K) K.facts P) →
       FallibleOk env K (.view s off t)
         { ty := some (.view s t), origin := .pkt }
   /-- (Lookup). -/
@@ -430,14 +433,14 @@ inductive StmtOk :
   /-- (Repeat): the body under the loop head's facts. -/
   | loop {env K s n body Fb E Eb} :
       checkCount env K "the count of `repeat`" n = .ok () →
-      BlockOk env (loopCtx K (loopHead env (scope env K) K.facts body))
-        body Fb Eb →
+      BlockOk env (loopCtx K (loopHead env (scope env K) K.facts body
+        (loopIters env n))) body Fb Eb →
       loopMovedOk K s Fb "the next iteration" = .ok () →
       stmtEffects env K (.loop s n body) = .ok E →
       checkPreserved env K s E = .ok () →
       checkHeld env K s E = .ok () →
-      StmtOk env K (.loop s n body) env (loopAfter env K body Fb) []
-        (E.union Eb)
+      StmtOk env K (.loop s n body) env
+        (loopAfter env K body Fb (loopIters env n)) [] (E.union Eb)
   /-- (For): the index is a `u64` with `lo <= i < hi` in the body; the
   cap is the bound's largest value under the facts. -/
   | «for» {env K s x lo hi body Fb E Eb} :
@@ -448,8 +451,8 @@ inductive StmtOk :
       stmtEffects env K (.«for» s x lo hi body) = .ok E →
       checkPreserved env K s E = .ok () →
       checkHeld env K s E = .ok () →
-      StmtOk env K (.«for» s x lo hi body) env (loopAfter env K body Fb) []
-        (E.union Eb)
+      StmtOk env K (.«for» s x lo hi body) env
+        (loopAfter env K body Fb (some (forCap env K hi))) [] (E.union Eb)
   | brk {env K s} :
       K.inLoop → loopMovedOk K s K.facts "the code after the loop" = .ok () →
       StmtOk env K (.brk s) env K.facts.bot [] {}
@@ -537,7 +540,8 @@ inductive StmtOk :
   place's facts go; its write is the effect. -/
   | atomic {env K s x op p args info tn E} :
       PlaceOf env K p info → info.mutable → env.norm info.ty = .ok tn →
-      tn.isIntTy → (info.origin = .stack ∨ ∃ m, info.origin = .map m) →
+      tn.isIntTy → atomicWidth tn →
+      (info.origin = .stack ∨ ∃ m, info.origin = .map m) →
       args.length = (if op = .cmpxchg then 2 else 1) →
       (∀ a ∈ args, Check env K a tn) →
       stmtEffects env K (.atomic s x op p args) = .ok E →

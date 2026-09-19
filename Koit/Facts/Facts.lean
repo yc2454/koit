@@ -392,12 +392,6 @@ def offsetOf (F : Facts) (h : String) : Option Expr :=
     | .off h' e => if h' == h then some e else none
     | _ => none
 
-/-- After a store to `p`: every fact about a place the store may
-change goes. -/
-def kill (sc : Scope) (F : Facts) (p : Place) : Facts :=
-  let p := F.resolve p
-  F.dropWhereKept fun q => overlaps sc p q
-
 /-- After a call: every fact about a place off the stack goes, since
 the callee or the kernel may write it. -/
 def killShared (sc : Scope) (F : Facts) : Facts :=
@@ -416,11 +410,6 @@ def dropNames (F : Facts) (names : List String) : Facts :=
   { F with aliases := F.aliases.filter fun (x, _) => !names.contains x,
            moved := F.moved.filter fun (x, _) => !names.contains x,
            dead := F.dead.filter fun (x, _) => !names.contains x }
-
-/-- At a loop head: the facts about what the body assigns and about
-shared places go; the body's own facts are added by the loop rule. -/
-def inv (sc : Scope) (F : Facts) (assigned : List Place) : Facts :=
-  assigned.foldl (kill sc) (F.killShared sc)
 
 /-- The negation of a condition, pushed to the comparisons. -/
 partial def negate : Expr → Expr
@@ -455,23 +444,6 @@ def atomOf (sc : Scope) (p : Place) : Expr :=
     | some (_, .int ..) | some (_, .bool) => .var s x
     | _ => .read s p
   | p => .read p.span p
-
-/-- After `p = e`: the facts about `p` go, then `p = e` is recorded
-when `p` lies on the stack, `e` does not read what the store changed,
-and `e` is in the fragment over stack places. A store to a shared
-place leaves no fact: another party may write the place before it is
-read again, and the lowering reloads it. -/
-def record (sc : Scope) (F : Facts) (p : Place) (e : Expr) : Facts :=
-  let p := F.resolve p
-  let e := F.resolveExpr e
-  let F := F.kill sc p
-  match sc.place p with
-  | some (.stack, _) =>
-    if e.atoms.any (fun q => overlaps sc p q) then F
-    else if factForm sc true e then
-      F.add (.pred (.cmp e.span .eq (atomOf sc p) e))
-    else F
-  | _ => F
 
 end Facts
 
@@ -676,6 +648,61 @@ def factsOf (sc : Scope) (p : Place) : AV → List Fact
   | .bool .yes => [.pred (atomOf sc p)]
   | .bool .no => [.pred (.not noSpan (atomOf sc p))]
   | _ => []
+
+/-- After a store to `p`: every fact about a place the store may
+change goes. The fact `kill` drops may have been the only source of
+what was known about another stack place, as `voff = off` is for
+`voff` when `off` is stored to; that knowledge, the bounds and known
+bits the state had for the place, is kept as facts of its own, since
+the place itself is unchanged by the store. The state is built here
+before the drop, so `kill` is defined after the state. -/
+def kill (sc : Scope) (F : Facts) (p : Place) : Facts :=
+  let p := F.resolve p
+  let changed (q : Place) : Bool := overlaps sc p q
+  let dropped := F.facts.filter fun fact =>
+    match fact with
+    | .off _ e => e.atoms.any changed
+    | _ => fact.mentions changed
+  let F' := F.dropWhereKept changed
+  if dropped.isEmpty then F' else
+  let before := F.state sc
+  let others := (dropped.flatMap Fact.atoms).filter fun q =>
+    !changed q && match sc.place q with
+      | some (.stack, .int ..) => true
+      | _ => false
+  let others := others.foldl (fun acc q =>
+    if hasPlace acc q then acc else acc ++ [q]) []
+  others.foldl (fun F q => (factsOf sc q (lookup sc before q)).foldl add F) F'
+
+/-- After `p = e`: the facts about `p` go, then `p = e` is recorded
+when `p` lies on the stack, `e` does not read what the store changed,
+and `e` is in the fragment over stack places. When `e` reads `p`
+itself, as `x += c` does, the equation would be circular; what is
+kept instead is what the state before the store knew of the value
+of `e`, its bounds and its known bits, since that value is what the
+store writes. A store to a shared place leaves no fact: another party
+may write the place before it is read again, and the lowering reloads
+it. -/
+def record (sc : Scope) (F : Facts) (p : Place) (e : Expr) : Facts :=
+  let p := F.resolve p
+  let e := F.resolveExpr e
+  let before := F.state sc
+  let F := F.kill sc p
+  match sc.place p with
+  | some (.stack, _) =>
+    if e.atoms.any (fun q => overlaps sc p q) then
+      match eval sc before e with
+      | .int a => (factsOf sc p (.int a)).foldl Facts.add F
+      | _ => F
+    else if factForm sc true e then
+      F.add (.pred (.cmp e.span .eq (atomOf sc p) e))
+    else F
+  | _ => F
+
+/-- At a loop head: the facts about what the body assigns and about
+shared places go; the body's own facts are added by the loop rule. -/
+def inv (sc : Scope) (F : Facts) (assigned : List Place) : Facts :=
+  assigned.foldl (kill sc) (F.killShared sc)
 
 /-- The facts after two paths join: what both paths established,
 and, for each place, the hull of what each knew. A path that has

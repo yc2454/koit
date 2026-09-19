@@ -9,3 +9,4 @@ import KoitTests.Held
 import KoitTests.Move
 import KoitTests.Guards
 import KoitTests.Interp
+import KoitTests.Lower

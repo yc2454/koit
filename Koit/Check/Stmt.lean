@@ -288,15 +288,75 @@ def guardCtx (env : Env) (K : Ctx) (s : Stmt) : M Ctx := do
   | none => return K
 
 
+/-- The increments `x += e` of a block outside its nested loops, each
+with its target and its addend. -/
+partial def increments : List Stmt → List (String × Expr)
+  | [] => []
+  | s :: rest =>
+    (match s with
+     | .assign _ (.var _ x) (.arith _ .add (.read _ (.var _ y)) e) =>
+       if x == y then [(x, e)] else []
+     | .ite _ _ t e => increments t ++ increments e
+     | .«try» _ _ _ t e _ => increments t ++ increments e
+     | .hold _ _ _ _ b e => increments b ++ (e.map increments).getD []
+     | _ => []) ++ increments rest
+
+/-- The bounds a loop of at most `iters` iterations keeps on an
+unsigned stack local that its body changes only by `x += e`, each
+increment outside the nested loops and each addend bounded above in
+the state before the loop by a value the body does not change: the
+local starts below its bound and gains at most the sum of the
+addends' bounds per iteration, so, when the total stays within the
+type, it never wraps and never exceeds the start plus `iters` times
+that sum. The verifier re-derives the same bound by walking the
+loop to its count, so the fact is one it will see. -/
+def incrementBounds (sc : Scope) (F : Facts) (body : List Stmt)
+    (iters : Nat) : List Fact :=
+  let st := F.state sc
+  let assigned := assignedIn body
+  let incs := increments body
+  let targets := (incs.map (·.1)).eraseDups
+  targets.flatMap fun x =>
+    let p : Place := .var Koit.Facts.noSpan x
+    let mine := incs.filter (·.1 == x)
+    -- every assignment to `x` in the body is one of its increments
+    if (assigned.filter fun q => q.root == some x).length != mine.length
+    then [] else
+    match sc.place p, Koit.Facts.lookup sc st p with
+    | some (.stack, .int false w), .int a =>
+      let ubs := mine.map fun (_, e) =>
+        if e.atoms.any (fun q => assigned.any (Koit.Facts.overlaps sc q ·))
+        then none else
+        match Koit.Facts.eval sc st e with
+        | .int b => if !b.isEmpty && b.lo ≥ 0 then some b.hi else none
+        | .poly v => if v ≥ 0 then some v else none
+        | _ => none
+      if ubs.any (·.isNone) || a.isEmpty then [] else
+      let hi := a.hi + iters * (ubs.filterMap id).foldl (· + ·) 0
+      if hi > Koit.Facts.typeHi false w then [] else
+      Facts.factsOf sc p
+        (.int (Koit.Facts.Abs.reduce { Koit.Facts.Abs.top false w with
+                                         lo := a.lo, hi }))
+    | _, _ => []
+
 /-- The facts at a loop head: what the body may write is dropped,
-with every shared place, and the refinements in scope hold again; if
-the body resizes the packet, every view in scope is dead. -/
-def loopHead (env : Env) (sc : Scope) (F : Facts) (body : List Stmt) :
-    Facts :=
-  let F := (refinementFacts env).foldl Facts.add (F.inv sc (assignedIn body))
+with every shared place, the refinements in scope hold again, and a
+local the body only increments keeps the bound of `incrementBounds`
+when the loop's iteration count `iters` is known; if the body resizes
+the packet, every view in scope is dead. -/
+def loopHead (env : Env) (sc : Scope) (F : Facts) (body : List Stmt)
+    (iters : Option Nat) : Facts :=
+  let F' := (refinementFacts env).foldl Facts.add (F.inv sc (assignedIn body))
+  let F' := match iters with
+    | some n => (incrementBounds sc F body n).foldl Facts.add F'
+    | none => F'
   match resizeIn env body with
-  | some (sp, f) => F.killViews (viewsInScope env) sp f
-  | none => F
+  | some (sp, f) => F'.killViews (viewsInScope env) sp f
+  | none => F'
+
+/-- The iteration count of `repeat n`, when `n` is constant. -/
+def loopIters (env : Env) (n : Expr) : Option Nat :=
+  (env.evalConst n).map (·.toNat)
 
 /-! ### Bindings -/
 
@@ -463,6 +523,12 @@ where
       demand env K e.span s!"the result of `{f}`" (pred.subst r e)
     | none => check env K e t
 
+/-- Whether a head-normal integer type has a width the atomic
+instructions exist at. -/
+def atomicWidth : Ty → Bool
+  | .int _ _ w => w == 32 || w == 64
+  | _ => false
+
 /-- The acquiring function of a `hold`, for messages. -/
 def acqName : Fallible → String
   | .acquire _ _ f .. => f
@@ -626,8 +692,9 @@ def forLocal (s : Span) (x : String) : Local :=
 cap recorded and `lo <= i < hi`. -/
 def forEntry (env : Env) (K : Ctx) (s : Span) (x : String) (lo hi : Expr)
     (body : List Stmt) : Facts :=
-  let Fh := loopHead env (scope env K) K.facts body
-  let Fh := { Fh with caps := Fh.caps ++ [(s, forCap env K hi)] }
+  let cap := forCap env K hi
+  let Fh := loopHead env (scope env K) K.facts body (some cap)
+  let Fh := { Fh with caps := Fh.caps ++ [(s, cap)] }
   let sc' := scope (env.bind (forLocal s x)) K
   (Fh.assume sc' (.cmp s .le lo (.var s x))).assume sc'
     (.cmp s .lt (.var s x) hi)
@@ -644,8 +711,9 @@ def loopCtx (K : Ctx) (F : Facts) : Ctx :=
   { K with inLoop := true, loopMoved := K.facts.moved.map (·.1), facts := F }
 
 /-- After a loop: the head's facts, with the caps the body gathered. -/
-def loopAfter (env : Env) (K : Ctx) (body : List Stmt) (Fb : Facts) : Facts :=
-  { loopHead env (scope env K) K.facts body with caps := Fb.caps }
+def loopAfter (env : Env) (K : Ctx) (body : List Stmt) (Fb : Facts)
+    (iters : Option Nat) : Facts :=
+  { loopHead env (scope env K) K.facts body iters with caps := Fb.caps }
 
 /-- The facts a `hold` body starts from: the acquisition's kills when
 it is a kernel call. -/
@@ -1025,9 +1093,11 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
   | .loop _ n body =>
     -- (Repeat)
     checkCount env K "the count of `repeat`" n
-    let (Fb, Eb) ← checkStmts env (loopCtx K (loopHead env sc F body)) body
+    let iters := loopIters env n
+    let (Fb, Eb) ← checkStmts env (loopCtx K (loopHead env sc F body iters))
+      body
     loopMovedOk K s.span Fb "the next iteration"
-    return (env, loopAfter env K body Fb, [], Eb)
+    return (env, loopAfter env K body Fb iters, [], Eb)
   | .«for» span x lo hi body =>
     -- (For): the cap is the bound's largest value under the facts, or
     -- the top of its type; the body has `lo <= i < hi`
@@ -1036,7 +1106,7 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     let (Fb, Eb) ← checkStmts (env.bind (forLocal span x))
       (loopCtx K (forEntry env K span x lo hi body)) body
     loopMovedOk K span Fb "the next iteration"
-    return (env, loopAfter env K body Fb, [], Eb)
+    return (env, loopAfter env K body Fb (some (forCap env K hi)), [], Eb)
   | .brk span =>
     unless K.inLoop do err span "`break` outside a loop"
     loopMovedOk K span F "the code after the loop"
@@ -1125,6 +1195,10 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     unless tn.isIntTy do
       err span s!"atomic updates apply to an integer place; `{p.print}` is a \
         `{info.ty.print}`"
+    -- the instruction set has no narrower atomic operation
+    unless atomicWidth tn do
+      err span s!"an atomic update needs a 32- or 64-bit place; `{p.print}` \
+        is a `{info.ty.print}`"
     match info.origin with
     | .stack | .map _ => pure ()
     | _ =>

@@ -2,10 +2,13 @@ import Koit
 
 /-!
 `koitc`, the koit command line: `lex`, `parse`, `print`, `desugar`,
-`check`, `run`. `run` checks the unit, then interprets every program
-of it in order, or the one named, over a packet given in hex and
-zero-filled maps, and prints each verdict, the lines `printk` wrote,
-and the map state.
+`check`, `run`, `lower`, `emit`. `run` checks the unit, then
+interprets every program of it in order, or the one named, over a
+packet given in hex and zero-filled maps, and prints each verdict,
+the lines `printk` wrote, and the map state; with `--lir` it runs the
+lowered unit instead, so that the two runs can be compared. `lower`
+prints the LIR of a checked unit, inlined with `--inline`; `emit`
+prints the C the printer makes of it.
 -/
 
 open Koit Koit.Syntax
@@ -23,7 +26,11 @@ def usage : String := String.intercalate "\n"
    "          --packet HEX     the input packet (default: empty)",
    "          --program NAME   this program only",
    "          --ctx FIELD=N    a context field's value (default: 0)",
-   "          --fuel N         the step budget (default: 100000)"] ++ "\n"
+   "          --fuel N         the step budget (default: 100000)",
+   "          --lir [--inline] run the lowered unit instead of Core",
+   "  lower   check FILE, then print its LIR; --inline removes the",
+   "          functions",
+   "  emit    check FILE, then print the C of its LIR"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
 def readSource (path : String) : IO String := do
@@ -89,6 +96,8 @@ structure RunOpts where
   program : Option String := none
   ctx     : List (String × Nat) := []
   fuel    : Nat := 100000
+  lir     : Bool := false
+  inline  : Bool := false
   file    : Option String := none
 
 partial def runOpts : List String → RunOpts → Option RunOpts
@@ -105,8 +114,29 @@ partial def runOpts : List String → RunOpts → Option RunOpts
       runOpts rest { o with ctx := o.ctx ++ [(f, n)] }
     | _ => none
   | "--fuel" :: n :: rest, o => do runOpts rest { o with fuel := ← n.toNat? }
+  | "--lir" :: rest, o => runOpts rest { o with lir := true }
+  | "--inline" :: rest, o => runOpts rest { o with inline := true }
   | [file], o => if file.startsWith "--" then none else some { o with file := some file }
   | _, _ => none
+
+/-- A checked unit lowered through passes A and B, and I when asked. -/
+def lowerUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
+    (inline : Bool) : Except String LIR.CompUnit := do
+  let lir ← Lower.lower pre (Lower.fold pre core checked)
+  let lir := if inline then Lower.inline lir else lir
+  LIR.wf pre lir |>.mapError (s!"the lowered unit is not well-formed: " ++ ·)
+  return lir
+
+/-- A checked unit, or its diagnostic. -/
+def checkFile (file : String) (pre : Prelude) :
+    IO (Option (Core.CompUnit × Check.Checked)) := do
+  let some u ← parseFile file | return none
+  let core := Core.desugar pre u
+  match Check.checkUnit pre core with
+  | .ok checked => return some (core, checked)
+  | .error d =>
+    IO.eprintln s!"{file}:{d}"
+    return none
 
 def run (args : List String) : IO UInt32 := do
   match args with
@@ -158,23 +188,47 @@ def run (args : List String) : IO UInt32 := do
     let some opts := runOpts rest {} | do IO.eprint usage; return 2
     let some file := opts.file | do IO.eprint usage; return 2
     let some pre ← preludeFor opts.kernel | return 2
-    let some u ← parseFile file | return 1
-    let core := Core.desugar pre u
-    match Check.checkUnit pre core with
-    | .error d =>
-      IO.eprintln s!"{file}:{d}"
+    let some (core, checked) ← checkFile file pre | return 1
+    let result ← if opts.lir then
+        match lowerUnit pre core checked opts.inline with
+        | .ok lir => pure (LIR.runUnit pre core lir opts.packet opts.ctx opts.program opts.fuel)
+        | .error m => pure (.error m)
+      else pure (Sem.runUnit pre core opts.packet opts.ctx opts.program opts.fuel)
+    match result with
+    | .ok (reports, maps) =>
+      for r in reports do
+        for l in r.log do IO.println s!"{r.program}: printk: {l}"
+        IO.println s!"{r.program}: {r.verdict}"
+      for l in maps do IO.println l
+      return 0
+    | .error m =>
+      IO.eprintln s!"{file}: run: {m}"
       return 1
-    | .ok _ =>
-      match Sem.runUnit pre core opts.packet opts.ctx opts.program opts.fuel with
-      | .ok (reports, maps) =>
-        for r in reports do
-          for l in r.log do IO.println s!"{r.program}: printk: {l}"
-          IO.println s!"{r.program}: {r.verdict}"
-        for l in maps do IO.println l
-        return 0
-      | .error m =>
-        IO.eprintln s!"{file}: run: {m}"
-        return 1
+  | "lower" :: rest => do
+    let (inline, rest) := match rest with
+      | "--inline" :: rest => (true, rest)
+      | rest => (false, rest)
+    let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let some pre ← preludeFor tag | return 2
+    let some (core, checked) ← checkFile file pre | return 1
+    match lowerUnit pre core checked inline with
+    | .ok lir =>
+      IO.print lir.print
+      return 0
+    | .error m =>
+      IO.eprintln s!"{file}: {m}"
+      return 1
+  | "emit" :: rest => do
+    let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let some pre ← preludeFor tag | return 2
+    let some (core, checked) ← checkFile file pre | return 1
+    match lowerUnit pre core checked false with
+    | .ok lir =>
+      IO.print (Lower.emitC pre lir)
+      return 0
+    | .error m =>
+      IO.eprintln s!"{file}: {m}"
+      return 1
   | _ => do
     IO.eprint usage
     return 2

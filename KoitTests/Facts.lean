@@ -77,9 +77,16 @@ private def facts (ps : List Expr) : Facts :=
 -- a store kills the facts about its place and records the store
 #guard (Facts.record sc (facts [lt (v "x") (n 5)]) (.var sp "x") (n 9)).print
   == ["x == 9"]
--- a store whose value reads the place records nothing
-#guard (Facts.record sc (facts [lt (v "x") (n 5)]) (.var sp "x")
-  (add (v "x") (n 1))).print == []
+-- a store whose value reads the place keeps what was known of the
+-- value: `x < 5` before `x = x + 1` leaves `1 <= x <= 5`
+#guard let m := (Facts.record sc (facts [lt (v "x") (n 5)]) (.var sp "x")
+    (add (v "x") (n 1))).print
+  m.contains "x >= 1" && m.contains "x <= 5" && !m.contains "x < 5"
+#guard (Facts.record sc {} (.var sp "x") (add (v "x") (n 1))).print == []
+-- a store that kills an equation keeps what the other side knew
+#guard let m := (Facts.record sc (facts [lt (v "x") (n 5), eq (v "y") (v "x")])
+    (.var sp "x") (n 9)).print
+  m.contains "y <= 4" && m.contains "x == 9" && !m.contains "y == x"
 -- a call keeps stack facts
 #guard ((facts [lt (v "x") (n 5)]).killShared sc).print == ["x < 5"]
 -- the meet keeps what both know and the hull of the rest

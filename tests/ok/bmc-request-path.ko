@@ -59,6 +59,8 @@ program bmc_rx : xdp fail pass
   var done = false
   // C: one tail call into bmc_hash_keys per key
   for k in 0..MAX_KEYS {
+    // C: the same test, before the pointer arithmetic on `off`
+    check off < MAX_PKT
     var h: u32 = 2166136261
     var n: u64 where n <= MAX_KEY + 1 = 0
     for i in 0..MAX_KEY + 1 {

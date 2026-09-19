@@ -168,6 +168,19 @@ def demandMsg (site : String) (P : Expr) : String :=
   s!"{site} demands `{P.printPred}`; the facts here do not entail it: \
     establish it with `check`, or read the value with a marked load"
 
+/-- The bound a view's window must lie under: `e + size(T) <= max`,
+with `max` the packet region's largest offset, when the row has one.
+The verifier bounds a packet pointer's variable offset before it
+reads the comparison that follows, so an offset the facts do not
+bound is a program that does not load; a constant offset is entailed
+trivially, and a loop-carried one needs a `check` at the head of the
+body. -/
+def viewOffsetBound (env : Env) (span : Span) (off : Expr) (sz : Nat) :
+    Option Expr :=
+  (env.prelude.region? "pkt").bind fun row => row.maxOffset.map fun mx =>
+    .cmp span .le (.arith span .add off (.lit span sz (toString sz)))
+      (.lit span mx (toString mx))
+
 /-- `pkt` exists in the packet kinds only. -/
 def requirePkt (env : Env) (span : Span) : M Unit :=
   match env.kind with
@@ -495,6 +508,13 @@ partial def demand (env : Env) (K : Ctx) (span : Span) (site : String)
   unless Koit.Facts.entails (scope env K) K.facts P do
     err span (demandMsg site P)
 
+/-- (View): the window of `size(T)` bytes at `off` lies under the
+packet's maximum offset. -/
+partial def viewOffsetDemand (env : Env) (K : Ctx) (span : Span) (off : Expr)
+    (sz : Nat) : M Unit := do
+  if let some P := viewOffsetBound env span off sz then
+    demand env K span "the view offset" P
+
 /-- The index demands along a place: `i < n` for every `p[i]` and
 `m[i]`, from the innermost place out. -/
 partial def placeDemands (env : Env) (K : Ctx) (p : Place) : M Unit := do
@@ -774,7 +794,8 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
     if let some why ← env.notRepresentable t false then
       err s s!"`{t.print}` is not packet-representable: it contains {why} \
        "
-    let _ ← env.layout t
+    let (sz, _) ← env.layout t
+    viewOffsetDemand env K s off sz
     return { ty := some (.view s t), origin := .pkt }
   | .lookup s m k =>
     let (kt, vt) ← hashTypes env s m

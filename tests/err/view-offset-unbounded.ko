@@ -1,0 +1,20 @@
+// expect: the view offset demands `off + 14 <= 65535`
+// A view carved at an offset the facts do not bound: the verifier
+// bounds a packet pointer's variable offset before it sees the test
+// that follows, so the carve demands the window under the packet's
+// maximum offset. Here `off` grows by a value the loop head cannot
+// bound, a header field read in the body, so a `check` is needed.
+type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
+type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
+                 ttl: u8, protocol: u8, csum: be16,
+                 saddr: be32, daddr: be32 }
+
+program p : xdp fail drop {
+  var off = 0
+  repeat 4 {
+    let eth = pkt.view<EthHdr>(off)?
+    let ip = pkt.view<Ipv4Hdr>(off + EthHdr.size)?
+    off += ((ip.vihl & 0xf) as u64) * 4 + ntoh(ip.len) as u64
+  }
+  pass
+}

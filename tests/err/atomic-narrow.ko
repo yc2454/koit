@@ -1,0 +1,9 @@
+// expect: an atomic update needs a 32- or 64-bit place; `c.n` is a `u8`
+// The instruction set has atomic operations at 32 and 64 bits only.
+map counters : array[1] of { n: u8, m: u64 }
+
+program p : syscall {
+  let c = counters[0]
+  atomic_add(c.m, 1)
+  atomic_add(c.n, 1)
+}

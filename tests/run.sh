@@ -19,16 +19,31 @@
 #                   `koitc run` output must be the rest of that comment
 #                   block, each expected line after `// `
 #
-# KOIT_STAGE=lex, parse (the default), check, or run selects how far
-# the run goes; run includes check. The err files in LATER, empty since
-# session 5, are skipped at the check stage. At the run stage every ok
-# file must also run to a verdict on an empty packet.
+# KOIT_STAGE=lex, parse (the default), check, run, lower, or emit
+# selects how far the run goes; each stage includes the ones before
+# it. The err files in LATER, empty since session 5, are skipped at
+# the check stage. At the run stage every ok file must also run to a
+# verdict on an empty packet. At the lower stage every ok and run
+# unit must lower, with and without inlining, and `koitc run --lir`
+# must print what `koitc run` prints, before and after inlining. At
+# the emit stage every ok and run unit must emit C and, when clang
+# with the BPF target is present, that C must build.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
 lake build koitc >/dev/null || { echo "build failed"; exit 2; }
 KOITC=.lake/build/bin/koitc
 STAGE=${KOIT_STAGE:-parse}
+CLANG=${KOIT_CLANG:-/opt/homebrew/opt/llvm/bin/clang}
+# the stages in order, so that a stage includes the ones before it
+rank() {
+  case "$1" in
+    lex) echo 0 ;; parse) echo 1 ;; check) echo 2 ;; run) echo 3 ;;
+    lower) echo 4 ;; emit) echo 5 ;; *) echo 1 ;;
+  esac
+}
+RANK=$(rank "$STAGE")
+at_least() { [ "$RANK" -ge "$(rank "$1")" ]; }
 LATER=""
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -73,7 +88,7 @@ for f in tests/ok/*.ko tests/err/*.ko tests/parse/*.ko tests/corpus/*.ko tests/r
   pass=$((pass + 1))
 done
 
-if [ "$STAGE" = check ] || [ "$STAGE" = run ]; then
+if at_least check; then
   for f in tests/ok/*.ko; do
     if "$KOITC" check "$f" >"$TMP/out" 2>&1; then
       pass=$((pass + 1))
@@ -101,7 +116,7 @@ if [ "$STAGE" = check ] || [ "$STAGE" = run ]; then
   done
 fi
 
-if [ "$STAGE" = run ]; then
+if at_least run; then
   for f in tests/ok/*.ko; do
     if "$KOITC" run "$f" >"$TMP/out" 2>&1; then
       pass=$((pass + 1))
@@ -122,6 +137,66 @@ if [ "$STAGE" = run ]; then
     else
       pass=$((pass + 1))
     fi
+  done
+fi
+
+# the lowering: `lower` and `lower --inline` succeed, and the LIR
+# runs print what the Core run prints
+if at_least lower; then
+  for f in tests/ok/*.ko tests/run/*.ko; do
+    [ -e "$f" ] || continue
+    opts=$(sed -n '1s|^// run: ||p' "$f")
+    if ! "$KOITC" lower "$f" >"$TMP/out" 2>&1; then
+      failed lower "$f"; continue
+    fi
+    if ! "$KOITC" lower --inline "$f" >"$TMP/out" 2>&1; then
+      failed inline "$f"; continue
+    fi
+    # shellcheck disable=SC2086
+    "$KOITC" run $opts "$f" >"$TMP/core" 2>&1
+    # shellcheck disable=SC2086
+    if ! "$KOITC" run --lir $opts "$f" >"$TMP/out" 2>&1; then
+      failed run-lir "$f"; continue
+    fi
+    if ! cmp -s "$TMP/core" "$TMP/out"; then
+      echo "    core:"; sed 's/^/      /' "$TMP/core"
+      failed lir-differs "$f"; continue
+    fi
+    # shellcheck disable=SC2086
+    if ! "$KOITC" run --lir --inline $opts "$f" >"$TMP/out" 2>&1; then
+      failed run-inlined "$f"; continue
+    fi
+    if ! cmp -s "$TMP/core" "$TMP/out"; then
+      echo "    core:"; sed 's/^/      /' "$TMP/core"
+      failed inlined-differs "$f"; continue
+    fi
+    pass=$((pass + 1))
+  done
+fi
+
+# the C: every unit emits, and clang builds it for the BPF target
+if at_least emit; then
+  if [ -x "$CLANG" ] && "$CLANG" -target bpf -x c -c /dev/null -o /dev/null 2>/dev/null; then
+    HAVE_CLANG=1
+  else
+    HAVE_CLANG=""
+    echo "note: no clang with the BPF target at $CLANG; emitted C is not built"
+  fi
+  for f in tests/ok/*.ko tests/run/*.ko; do
+    [ -e "$f" ] || continue
+    if ! "$KOITC" emit "$f" >"$TMP/unit.c" 2>"$TMP/out"; then
+      failed emit "$f"; continue
+    fi
+    if [ -n "$HAVE_CLANG" ]; then
+      # -fno-builtin keeps clang from turning a byte loop into a memset
+      # call, which the BPF backend has no way to emit
+      if ! "$CLANG" -O2 -g -target bpf -fno-builtin -Wall -Wno-unused-label \
+          -Wno-unused-variable -Wno-unused-but-set-variable -Werror -I tests/emit \
+          -c "$TMP/unit.c" -o "$TMP/unit.o" >"$TMP/out" 2>&1; then
+        failed clang "$f"; continue
+      fi
+    fi
+    pass=$((pass + 1))
   done
 fi
 

@@ -1,0 +1,536 @@
+import Koit.Lower.LIR
+import Koit.Core.Machine
+
+/-!
+The printer P, from LIR with functions to C: one C construct per LIR
+construct, through the total-arithmetic shim `koit.h`, so that no C
+undefined behavior is reachable, and readable enough to be compared
+with the source. It is outside every theorem: the C path is the
+portable one through clang and libbpf, validated per program like
+everything the compiler emits.
+
+Printer policy, recorded here as the design document asks: `block`,
+`loop`, and `br` are labels and `goto`; a `fails` or `T ?` function
+returns a status, 0 for a value, 1 for absence, 2 plus the kind for a
+failure with the reason in an out-parameter, and a call site tests
+it; a `raise` in a program body sets `reason` and jumps to the
+handler of its kind; a map read by direct value access is looked up
+once at entry with a null test that returns the kind's failure
+verdict, since C has no direct value access for a declared map; a
+frame is an aligned object and a pointer to it; the kernel functions
+are called through the templates of `kernelCall`, which add the
+arguments the helpers take and the source does not name.
+-/
+
+namespace Koit.Lower
+
+open Koit.Core (Kind)
+
+namespace C
+
+/-- Lines of output with a counter for labels. -/
+abbrev PM := StateM Nat
+
+def freshLabel (base : String) : PM String := do
+  let n ← get
+  set (n + 1)
+  return s!"{base}_{n}"
+
+def ity (s : Bool) (w : Nat) : String := (if s then "s" else "u") ++ toString w
+
+/-- The names C reserves, and the ones the printer itself uses: a koit
+name among them gets a trailing underscore. -/
+def cReserved : List String :=
+  ["auto", "break", "case", "char", "const", "continue", "default", "do",
+   "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline",
+   "int", "long", "register", "restrict", "return", "short", "signed",
+   "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned",
+   "void", "volatile", "while", "NULL", "out", "ctx", "koit_st", "koit_kind",
+   "koit_zero", "koit_irq_flags", "u8", "u16", "u32", "u64", "s8", "s16",
+   "s32", "s64"]
+
+def cname (x : String) : String :=
+  if cReserved.contains x || x.startsWith "koit_" || x.startsWith "bpf_" then x ++ "_" else x
+
+def cty : LIR.Ty → String
+  | .int s w => ity s w
+  | .ptr => "void *"
+
+/-- The C type of a Core data type, in a declarator for `name`. -/
+partial def cdecl (types : List Core.TypeDecl) (t : Core.Ty) (name : String) : String :=
+  match t with
+  | .int _ s w => s!"{ity s w} {name}"
+  | .be _ w => s!"u{w} {name}"
+  | .bool _ => s!"u8 {name}"
+  | .slot _ "spinlock" => s!"struct bpf_spin_lock {name}"
+  | .slot _ n => s!"u8 {name}[0] /* {n} */"
+  | .named _ n =>
+    match types.find? (·.name == n) with
+    | some d =>
+      match d.ty with
+      | .struct .. => s!"struct {cname n} {name}"
+      | t' => cdecl types t' name
+    | none => s!"struct {cname n} {name}"
+  | .struct _ fields =>
+    "struct { " ++ String.join (fields.map fun f => cdecl types f.ty (cname f.name) ++ "; ") ++
+      "} " ++ name
+  | .array _ elem n =>
+    let len := match n with
+      | .lit _ v _ => toString v
+      | e => e.print
+    cdecl types elem s!"{name}[{len}]"
+  | .refined _ _ base _ => cdecl types base name
+  | t => s!"void *{name} /* {t.print} */"
+
+/-- A literal with the suffix its width needs. -/
+def clit (w : Nat) (k : Nat) : String :=
+  if w == 64 then s!"{k}ULL" else if w == 32 then s!"{k}U" else s!"((u{w}){k})"
+
+mutual
+
+partial def cexpr : LIR.Expr → String
+  | .lit w k => clit w k
+  | .var x => cname x
+  | .arith op s w l r =>
+    let a := cexpr l
+    let b := cexpr r
+    let u := s!"u{w}"
+    let t := ity s w
+    match op with
+    | .add => s!"(({t})(({u})({a}) + ({u})({b})))"
+    | .sub => s!"(({t})(({u})({a}) - ({u})({b})))"
+    | .mul => s!"(({t})(({u})({a}) * ({u})({b})))"
+    | .band => s!"(({t})(({u})({a}) & ({u})({b})))"
+    | .bor => s!"(({t})(({u})({a}) | ({u})({b})))"
+    | .bxor => s!"(({t})(({u})({a}) ^ ({u})({b})))"
+    | .div => s!"koit_div_{t}({a}, {b})"
+    | .mod => s!"koit_mod_{t}({a}, {b})"
+    | .shl => s!"koit_shl_{t}({a}, {b})"
+    | .shr => s!"koit_shr_{t}({a}, {b})"
+  | .cast s w s' w' e => s!"(({ity s' w'})({ity s w})({cexpr e}))"
+  | .bswap w e => s!"__builtin_bswap{w}({cexpr e})"
+  | .load s w a => s!"(*({ity s w} *)({caddr a}))"
+  | .ctx f => s!"ctx->{f}"
+  | .addr a => caddr a
+
+partial def caddr : LIR.Addr → String
+  | .var x => cname x
+  | .plus a k => s!"((u8 *)({caddr a}) + {k})"
+  | .index a e k => s!"((u8 *)({caddr a}) + ({cexpr e}) * {k})"
+  | .pktData => "((void *)(long)ctx->data)"
+  | .pktEnd => "((void *)(long)ctx->data_end)"
+  | .mapval m k => s!"((u8 *)({cname m}__val) + {k})"
+
+end
+
+def isPtrExpr : LIR.Expr → Bool
+  | .addr _ => true
+  | _ => false
+
+def ccond (Γ : List (String × LIR.Ty)) (c : LIR.Cond) : String :=
+  let ptrSide (e : LIR.Expr) : Bool :=
+    isPtrExpr e || match e with
+      | .var x => Γ.lookup x == some .ptr
+      | _ => false
+  let isZero : LIR.Expr → Bool
+    | .lit _ 0 => true
+    | _ => false
+  if ptrSide c.l && isZero c.r then
+    (if c.op == .eq then s!"!({cexpr c.l})" else s!"({cexpr c.l}) != NULL")
+  else if ptrSide c.l || ptrSide c.r then
+    s!"((u8 *)({cexpr c.l}) {c.op.spelling} (u8 *)({cexpr c.r}))"
+  else
+    let t := ity c.signed c.w
+    s!"(({t})({cexpr c.l}) {c.op.spelling} ({t})({cexpr c.r}))"
+
+/-- The type of an expression under the printer's environment, for
+`printk`'s formats. -/
+def exprTy (Γ : List (String × LIR.Ty)) : LIR.Expr → LIR.Ty
+  | .lit w _ => .int false w
+  | .var x => (Γ.lookup x).getD .u64
+  | .arith _ s w .. => .int s w
+  | .cast _ _ s' w' _ => .int s' w'
+  | .bswap w _ => .int false w
+  | .load s w _ => .int s w
+  | .ctx _ => .u32
+  | .addr _ => .ptr
+
+/-- The status protocol of a `fails` or `T ?` function: 0 for a value,
+1 for absence, `2 + k` for a failure of kind `k`. -/
+def kindIndex : Kind → Nat
+  | .short_packet => 0 | .missing => 1 | .invariant => 2 | .bound => 3
+  | .helper => 4 | .program => 5
+
+/-- Whether a function uses the status protocol. -/
+def statusFn (f : LIR.Fn) : Bool := f.fails || f.opt
+
+/-- The C context type and the kernel functions' templates per kind:
+the arguments the helpers take beyond the source's. -/
+def ctxType : String → String
+  | "xdp" => "struct xdp_md"
+  | "tc" => "struct __sk_buff"
+  | _ => "void"
+
+/-- The C call of a kernel function row, by the row's name. -/
+def kernelCall (kind : String) (h : String) (args : List String) : String :=
+  let a (i : Nat) := (args[i]?).getD "0"
+  match h with
+  | "redirect" => s!"bpf_redirect({a 0}, 0)"
+  | "pkt.adjust_head" =>
+    if kind == "xdp" then s!"bpf_xdp_adjust_head(ctx, {a 0})"
+    else s!"bpf_skb_change_head(ctx, {a 0}, 0)"
+  | "pkt.adjust_tail" =>
+    if kind == "xdp" then s!"bpf_xdp_adjust_tail(ctx, {a 0})"
+    else s!"bpf_skb_change_tail(ctx, {a 0}, 0)"
+  | "pkt.len" => "((u64)((long)ctx->data_end - (long)ctx->data))"
+  | "sk_lookup_tcp" =>
+    s!"bpf_sk_lookup_tcp(ctx, {a 0}, sizeof(struct koit_sock_tuple), BPF_F_CURRENT_NETNS, 0)"
+  | "sk_lookup_udp" =>
+    s!"bpf_sk_lookup_udp(ctx, {a 0}, sizeof(struct koit_sock_tuple), BPF_F_CURRENT_NETNS, 0)"
+  | "sk_release" => s!"bpf_sk_release({a 0})"
+  | "ktime" => "bpf_ktime_get_ns()"
+  | "csum_add" => s!"koit_csum_add({a 0}, {a 1})"
+  | "csum_fold" => s!"koit_csum_fold({a 0})"
+  | h => s!"{h}({", ".intercalate args})"
+
+/-- The C calls that enter and leave a scope resource. -/
+def scopeCall (r : Core.Resource) (enter : Bool) : String :=
+  match r.name, enter with
+  | "rcu", true => "bpf_rcu_read_lock()"
+  | "rcu", false => "bpf_rcu_read_unlock()"
+  | "preempt", true => "bpf_preempt_disable()"
+  | "preempt", false => "bpf_preempt_enable()"
+  | "irq", true => "bpf_local_irq_save(&koit_irq_flags)"
+  | "irq", false => "bpf_local_irq_restore(&koit_irq_flags)"
+  | n, true => s!"koit_enter_{n}()"
+  | n, false => s!"koit_leave_{n}()"
+
+/-- What the printer knows while printing a body. -/
+structure PCtx where
+  types  : List Core.TypeDecl
+  fns    : List LIR.Fn
+  kind   : String
+  /-- Inside a function using the status protocol. -/
+  status : Bool
+  /-- Inside a program body or handler. -/
+  program : Bool
+  /-- The default verdict, for the dead branches of direct maps. -/
+  defaultVerdict : String
+  /-- Labels of the enclosing constructs, innermost first. -/
+  labels : List String := []
+  Γ      : List (String × LIR.Ty) := []
+
+def ind (n : Nat) : String := String.ofList (List.replicate n ' ')
+
+def fmtOf : LIR.Ty → String
+  | .int true 64 => "%lld"
+  | .int false 64 => "%llu"
+  | .int true _ => "%d"
+  | .int false _ => "%u"
+  | .ptr => "%p"
+
+/-- `printk`'s `{}` rewritten to the format of each argument. -/
+def cfmt (fmt : String) (tys : List LIR.Ty) : String :=
+  let parts := fmt.splitOn "{}"
+  let rec go : List String → List LIR.Ty → String
+    | [], _ => ""
+    | [p], _ => p
+    | p :: ps, t :: ts => p ++ fmtOf t ++ go ps ts
+    | p :: ps, [] => p ++ "{}" ++ go ps []
+  go parts tys
+
+mutual
+
+partial def cstmts (c : PCtx) (n : Nat) : List LIR.Stmt → PM (List String × PCtx)
+  | [] => return ([], c)
+  | s :: rest => do
+    let (ls, c') ← cstmt c n s
+    let (rs, c'') ← cstmts c' n rest
+    return (ls ++ rs, c'')
+
+/-- One statement as lines at indentation `n`, and the environment
+after it. -/
+partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx) := do
+  let line (t : String) : List String := [ind n ++ t]
+  let bind (x : String) (t : LIR.Ty) : PCtx := { c with Γ := (x, t) :: c.Γ }
+  match s with
+  | .«let» _ x t e =>
+    return (line s!"{cty t}{if t == .ptr then "" else " "}{cname x} = {cexpr e};", bind x t)
+  | .assign _ x e => return (line s!"{cname x} = {cexpr e};", c)
+  | .store _ w a e => return (line s!"*(u{w} *)({caddr a}) = {cexpr e};", c)
+  | .ctxStore _ f e => return (line s!"ctx->{f} = {cexpr e};", c)
+  | .frame _ x sz src =>
+    let obj := match src with
+      | some t => cdecl c.types t s!"{cname x}__obj"
+      | none => s!"u8 {cname x}__obj[{sz}]"
+    return (line s!"{obj} __attribute__((aligned(8))) = \{0};" ++
+            line s!"void *{cname x} = &{cname x}__obj;", bind x .ptr)
+  | .ite _ cnd t e =>
+    let (tl, _) ← cstmts c (n + 4) t
+    let (el, _) ← cstmts c (n + 4) e
+    if e.isEmpty then
+      return (line s!"if ({ccond c.Γ cnd}) \{" ++ tl ++ line "}", c)
+    else
+      return (line s!"if ({ccond c.Γ cnd}) \{" ++ tl ++ line "} else {" ++ el ++ line "}", c)
+  | .block _ body =>
+    let l ← freshLabel "L"
+    let (bl, _) ← cstmts { c with labels := l :: c.labels } (n + 4) body
+    return (line "{" ++ bl ++ line "}" ++ line s!"{l}: ;", c)
+  | .loop _ body =>
+    let l ← freshLabel "L"
+    let (bl, _) ← cstmts { c with labels := l :: c.labels } (n + 4) body
+    return (line "for (;;) {" ++ line s!"{l}: ;" ++ bl ++ line "}", c)
+  | .br _ k =>
+    match c.labels[k]? with
+    | some l => return (line s!"goto {l};", c)
+    | none => return (line s!"/* br {k} outside its constructs */", c)
+  | .ret _ none =>
+    if c.status then return (line "return 1;", c) else return (line "return;", c)
+  | .ret _ (some e) =>
+    if c.status then return (line s!"*out = {cexpr e}; return 0;", c)
+    else return (line s!"return {cexpr e};", c)
+  | .raise _ k e =>
+    if c.program then
+      return (line s!"reason = {cexpr e}; goto handler_{k.spelling};", c)
+    else
+      return (line s!"*reason = {cexpr e}; return {2 + kindIndex k};", c)
+  | .call _ x f args u a =>
+    let cargs := args.map cexpr
+    let some d := c.fns.find? (·.name == f)
+      | return (line s!"/* unknown function {f} */", c)
+    if !statusFn d then
+      match x, d.ret with
+      | some x, some t =>
+        return (line s!"{cty t}{if t == .ptr then "" else " "}{cname x} = {cname f}({", ".intercalate cargs});",
+                bind x t)
+      | _, _ => return (line s!"{cname f}({", ".intercalate cargs});", c)
+    -- the status protocol
+    let (decl, outArg, c') := match x, d.ret with
+      | some x, some t =>
+        (line s!"{cty t}{if t == .ptr then "" else " "}{cname x};", [s!"&{cname x}"], bind x t)
+      | _, _ => ([], [], c)
+    let reasonArg := if d.fails then [if c.program then "&reason" else "reason"] else []
+    let call := s!"{cname f}({", ".intercalate (cargs ++ outArg ++ reasonArg)})"
+    let (ul, _) ← cstmts c' (n + 8) (u.getD [])
+    let propagate := if c.program then
+        line (ind 8 ++ "koit_kind = koit_st - 2; goto handler_dispatch;")
+      else line (ind 8 ++ "return koit_st;")
+    let failPart := if d.fails then
+        line (ind 4 ++ "if (koit_st > 1) {") ++ ul ++ propagate ++ line (ind 4 ++ "}")
+      else []
+    let (al, _) ← cstmts c' (n + 8) (a.getD [])
+    let absentPart := if d.opt then
+        line (ind 4 ++ "if (koit_st == 1) {") ++ al ++ line (ind 4 ++ "}")
+      else []
+    return (decl ++ line "{" ++ line (ind 4 ++ s!"int koit_st = {call};") ++
+            failPart ++ absentPart ++ line "}", c')
+  | .builtin _ x b args =>
+    let cargs := args.map cexpr
+    let a (i : Nat) := (cargs[i]?).getD "0"
+    let res (t : LIR.Ty) (call : String) : List String × PCtx :=
+      match x with
+      | some x => (line s!"{cty t}{if t == .ptr then "" else " "}{cname x} = {call};", bind x t)
+      | none => (line s!"{call};", c)
+    match b with
+    | .lookup m => return res .ptr s!"bpf_map_lookup_elem(&{cname m}, {a 0})"
+    | .update m =>
+      return res .i64 s!"(s64)bpf_map_update_elem(&{cname m}, {a 0}, {a 1}, BPF_ANY)"
+    | .delete m => return res .i64 s!"(s64)bpf_map_delete_elem(&{cname m}, {a 0})"
+    | .reserve m sz => return res .ptr s!"bpf_ringbuf_reserve(&{cname m}, {sz}, 0)"
+    | .submit => return (line s!"bpf_ringbuf_submit({a 0}, 0);", c)
+    | .discard => return (line s!"bpf_ringbuf_discard({a 0}, 0);", c)
+    | .lock => return (line s!"bpf_spin_lock({a 0});", c)
+    | .unlock => return (line s!"bpf_spin_unlock({a 0});", c)
+    | .enter r => return (line s!"{scopeCall r true};", c)
+    | .leave r => return (line s!"{scopeCall r false};", c)
+    | .copy sz => return (line s!"__builtin_memcpy({a 0}, {a 1}, {sz});", c)
+    | .fill sz => return (line s!"__builtin_memset({a 0}, {a 1}, {sz});", c)
+    | .printk fmt =>
+      let tys := args.map (exprTy c.Γ)
+      let casts := (args.zip tys).map fun (e, t) =>
+        match t with
+        | .int _ 64 => s!"(long long)({cexpr e})"
+        | .int true _ => s!"(int)({cexpr e})"
+        | .int false _ => s!"(unsigned)({cexpr e})"
+        | .ptr => cexpr e
+      return (line s!"bpf_printk({Core.strLit (cfmt fmt tys)}{String.join (casts.map (", " ++ ·))});", c)
+    | .atomic op s w fetch =>
+      let p := s!"({ity s w} *)({a 0})"
+      let call := match op with
+        | .add => s!"__sync_fetch_and_add({p}, {a 1})"
+        | .band => s!"__sync_fetch_and_and({p}, {a 1})"
+        | .bor => s!"__sync_fetch_and_or({p}, {a 1})"
+        | .bxor => s!"__sync_fetch_and_xor({p}, {a 1})"
+        | .xchg => s!"__sync_lock_test_and_set({p}, {a 1})"
+        | .cmpxchg => s!"__sync_val_compare_and_swap({p}, {a 1}, {a 2})"
+      if fetch then return res (.int s w) call
+      else return (line s!"(void){call};", c)
+  | .kernel _ x h args =>
+    let call := kernelCall c.kind h (args.map cexpr)
+    match x with
+    | some x =>
+      let t := match h with
+        | "sk_lookup_tcp" | "sk_lookup_udp" => LIR.Ty.ptr
+        | _ => .i64
+      if t == .ptr then return (line s!"void *{cname x} = {call};", bind x t)
+      else return (line s!"s64 {cname x} = (s64){call};", bind x t)
+    | none => return (line s!"{call};", c)
+
+end
+
+/-- The direct maps a program mentions, for the lookups at entry. -/
+partial def directMapsIn (direct : List String) : List LIR.Stmt → List String
+  | [] => []
+  | s :: rest =>
+    let inExpr : LIR.Expr → List String := fun e =>
+      let str := e.print
+      direct.filter fun m => (str.splitOn s!"mapval {m} +").length > 1
+    let own := match s with
+      | .«let» _ _ _ e | .assign _ _ e | .ctxStore _ _ e | .ret _ (some e) | .raise _ _ e => inExpr e
+      | .store _ _ a e => inExpr (.addr a) ++ inExpr e
+      | .ite _ c t e => inExpr c.l ++ inExpr c.r ++ directMapsIn direct t ++ directMapsIn direct e
+      | .block _ b | .loop _ b => directMapsIn direct b
+      | .call _ _ _ args u a =>
+        args.flatMap inExpr ++ directMapsIn direct (u.getD []) ++ directMapsIn direct (a.getD [])
+      | .builtin _ _ _ args | .kernel _ _ _ args => args.flatMap inExpr
+      | _ => []
+    own ++ directMapsIn direct rest
+
+def cfn (types : List Core.TypeDecl) (fns : List LIR.Fn) (f : LIR.Fn) : PM String := do
+  let params := f.params.map fun p =>
+    if p.ty == .ptr then s!"void *{cname p.name}" else s!"{cty p.ty} {cname p.name}"
+  let extra := (match f.ret with
+      | some t => if statusFn f then [s!"{cty t}{if t == .ptr then "" else " "}*out"] else []
+      | none => []) ++ (if f.fails then ["u32 *reason"] else [])
+  let ret := if statusFn f then "int" else match f.ret with
+    | some t => cty t
+    | none => "void"
+  let c : PCtx := { types, fns, kind := "", status := statusFn f, program := false,
+                    defaultVerdict := "0", Γ := f.params.map fun p => (p.name, p.ty) }
+  let (body, _) ← cstmts c 4 f.body
+  let ps := if (params ++ extra).isEmpty then "void" else ", ".intercalate (params ++ extra)
+  return s!"static __always_inline {ret} {cname f.name}({ps})\n\{\n" ++
+    "\n".intercalate body ++ "\n}\n"
+
+def cprogram (pre : Prelude) (u : LIR.CompUnit) (p : LIR.Program) : PM String := do
+  let row := pre.kind? p.kind
+  let hasPkt := (row.map (·.hasPkt)).getD false
+  let vt := match row.map (·.verdictTy) with
+    | some (.int _ s w) => LIR.Ty.int s w
+    | _ => .u32
+  let dflt : Nat := match row with
+    | some row =>
+      match row.defaultExit with
+      | .verdict name => (row.verdicts.lookup name).getD 0
+      | .value v => Sem.toNatMod v (LIR.Ty.width vt)
+    | none => 0
+  let dv := clit (LIR.Ty.width vt) dflt
+  let c : PCtx := { types := u.types, fns := u.fns, kind := p.kind, status := false,
+                    program := true, defaultVerdict := dv, Γ := [("reason", .u32)] }
+  let ctxTy := ctxType p.kind
+  let direct := (directMapsIn u.direct (p.body ++ p.handlers.flatMap (·.body))).eraseDups
+  let lookups := direct.flatMap fun m =>
+    [s!"    void *{cname m}__val = bpf_map_lookup_elem(&{cname m}, &koit_zero);",
+     s!"    if (!{cname m}__val) return {dv};"]
+  let (body, _) ← cstmts c 8 p.body
+  let mut handlers : List String := []
+  for h in p.handlers do
+    let (hb, _) ← cstmts c 8 h.body
+    handlers := handlers ++ [s!"handler_{h.kind.spelling}: \{"] ++ hb ++ ["    }"]
+  let dispatch := ["handler_dispatch:", "    switch (koit_kind) {"] ++
+    (Kind.all.map fun k => s!"    case {kindIndex k}: goto handler_{k.spelling};") ++
+    ["    }", s!"    return {dv};"]
+  let _ := hasPkt
+  return s!"SEC(\"{(row.map (·.section_)).getD p.kind}\")\n" ++
+    s!"int {cname p.name}({ctxTy} *ctx)\n\{\n" ++
+    "    u32 reason = 0; int koit_kind = 0; u32 koit_zero = 0;\n" ++
+    "    (void)reason; (void)koit_kind; (void)koit_zero;\n" ++
+    "\n".intercalate lookups ++ (if lookups.isEmpty then "" else "\n") ++
+    "    {\n" ++ "\n".intercalate body ++ "\n    }\n" ++
+    "\n".intercalate (handlers ++ dispatch) ++ "\n}\n"
+
+/-- The named struct types in an order that defines each before its
+first use. -/
+partial def orderedTypes (types : List Core.TypeDecl) : List Core.TypeDecl :=
+  let rec names : Core.Ty → List String
+    | .named _ n => [n]
+    | .struct _ fs => fs.flatMap fun f => names f.ty
+    | .array _ e _ => names e
+    | .refined _ _ b _ => names b
+    | _ => []
+  let rec go (done pending : List Core.TypeDecl) (fuel : Nat) : List Core.TypeDecl :=
+    match fuel with
+    | 0 => done ++ pending
+    | fuel + 1 =>
+      let ready := pending.filter fun d => (names d.ty).all fun n =>
+        done.any (·.name == n) || !pending.any (·.name == n)
+      if ready.isEmpty then done ++ pending
+      else go (done ++ ready) (pending.filter fun d => !ready.any (·.name == d.name)) fuel
+  go [] types types.length
+
+def cmap (types : List Core.TypeDecl) (d : Core.MapDecl) : String :=
+  let count (n : Core.Expr) : String := match n with
+    | .lit _ v _ => toString v
+    | e => e.print
+  let valueName := s!"koit_{d.name}_v"
+  let keyName := s!"koit_{d.name}_k"
+  let mname := cname d.name
+  let typeDef (name : String) (t : Core.Ty) : String :=
+    match t with
+    | .named .. | .int .. | .be .. | .bool .. => ""
+    | t => s!"struct {name} \{ " ++
+        (match t with
+         | .struct _ fs => String.join (fs.map fun f => cdecl types f.ty (cname f.name) ++ "; ")
+         | t => cdecl types t "v" ++ "; ") ++ "};\n"
+  let typeRef (name : String) (t : Core.Ty) : String :=
+    match t with
+    | .named _ n => s!"struct {cname n}"
+    | .int _ s w => ity s w
+    | .be _ w => s!"u{w}"
+    | .bool _ => "u8"
+    | _ => s!"struct {name}"
+  match d.kind with
+  | .array n v =>
+    typeDef valueName v ++
+    s!"struct \{ __uint(type, BPF_MAP_TYPE_ARRAY); __uint(max_entries, {count n}); \
+      __type(key, u32); __type(value, {typeRef valueName v}); } {mname} SEC(\".maps\");\n"
+  | .percpu n v =>
+    typeDef valueName v ++
+    s!"struct \{ __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries, {count n}); \
+      __type(key, u32); __type(value, {typeRef valueName v}); } {mname} SEC(\".maps\");\n"
+  | .hash n k v =>
+    typeDef keyName k ++ typeDef valueName v ++
+    s!"struct \{ __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, {count n}); \
+      __type(key, {typeRef keyName k}); __type(value, {typeRef valueName v}); } {mname} \
+      SEC(\".maps\");\n"
+  | .ringbuf n =>
+    s!"struct \{ __uint(type, BPF_MAP_TYPE_RINGBUF); __uint(max_entries, {count n}); } \
+      {mname} SEC(\".maps\");\n"
+
+end C
+
+/-- The C of a unit's LIR, before inlining. -/
+def emitC (pre : Prelude) (u : LIR.CompUnit) : String :=
+  let types := C.orderedTypes (u.types.filter fun d => match d.ty with
+    | .struct _ (_ :: _) => true
+    | _ => false)
+  let typeDefs := types.map fun d =>
+    match d.ty with
+    | .struct _ fs =>
+      s!"struct {C.cname d.name} \{\n" ++
+        String.join (fs.map fun f => "    " ++ C.cdecl u.types f.ty (C.cname f.name) ++ ";\n") ++ "};\n"
+    | _ => ""
+  let go : C.PM (List String × List String) := do
+    let fns ← u.fns.mapM (C.cfn u.types u.fns)
+    let progs ← u.programs.mapM (C.cprogram pre u)
+    return (fns, progs)
+  let ((fns, progs), _) := go.run 0
+  "/* emitted by koitc from LIR; the total-arithmetic shim is koit.h */\n" ++
+  "#include \"koit.h\"\n\n" ++
+  String.join (typeDefs.map (· ++ "\n")) ++
+  String.join (u.maps.map fun d => C.cmap u.types d ++ "\n") ++
+  String.join (fns.map (· ++ "\n")) ++
+  String.join (progs.map (· ++ "\n")) ++
+  s!"char _license[] SEC(\"license\") = \"{u.license.getD "GPL"}\";\n"
+
+end Koit.Lower

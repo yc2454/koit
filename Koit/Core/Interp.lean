@@ -33,9 +33,9 @@ partial def evalExpr (K : Kernel) : Expr → M Val
   | .var s x => do
     let st ← get
     match st.local? x with
-    | some (.val v, _) => return v
-    | some (.place l, _) => return .loc l
-    | some (.moved, _) => fail s!"`{x}` is used after `move`"
+    | some (.val v) => return v
+    | some (.place l) => return .loc l
+    | some .moved => fail s!"`{x}` is used after `move`"
     | none =>
       let env := st.env
       if let some d := env.consts.find? (·.name == x) then evalConst K d
@@ -58,9 +58,17 @@ partial def evalExpr (K : Kernel) : Expr → M Val
     let a ← evalExpr K l
     let b ← evalExpr K r
     match a, b with
-    | .be _ x, .be _ y => return .bool (compare op x y)
-    | .be w x, .int _ _ y true => return .bool (compare op x (toNatMod y (max w 64)))
-    | .int _ _ x true, .be w y => return .bool (compare op (toNatMod x (max w 64)) y)
+    | .be w x, .be w' y =>
+      match meetBe w x w' y with
+      | some (x', y') => return .bool (compare op x' y')
+      | none => fail s!"`{op.spelling}` on {a.print} and {b.print}"
+    | .be w _, .int _ _ y true | .int _ _ y true, .be w _ =>
+      -- a byte-order value against an untyped integer, which is
+      -- `hton` of itself at the value's width
+      let w := if w == 0 then 64 else w
+      match fitBe w (.int false 64 y true), fitBe w a with
+      | .be _ y', .be _ x' => return .bool (compare op x' y')
+      | _, _ => fail s!"`{op.spelling}` on {a.print} and {b.print}"
     | _, _ =>
       match meetInts a b with
       | some (_, _, x, y, _) => return .bool (compare op x y)
@@ -83,18 +91,21 @@ partial def evalExpr (K : Kernel) : Expr → M Val
     | _, _ => fail s!"a cast of {v.print} to `{t.print}`"
   | .hton _ e => do
     match ← evalExpr K e with
-    | .int _ _ x poly => return .be (if poly then 0 else 64) (toNatMod x 64)
+    | .int _ w x poly =>
+      if poly then return .be 0 (toNatMod x 64)
+      else return .be w (Val.bswap w (toNatMod x w))
     | v => fail s!"`hton` of {v.print}"
   | .ntoh _ e => do
     match ← evalExpr K e with
-    | .be w x => return Val.mkInt false (if w == 0 then 64 else w) x
+    | .be 0 x => return Val.mkInt false 64 x
+    | .be w x => return Val.mkInt false w (Val.bswap w x)
     | v => fail s!"`ntoh` of {v.print}"
   | .read _ p => do loadPlace (← evalPlace K p)
   | .size _ t => do return Val.lit (← sizeOf t)
   | .move _ x => do
     let st ← get
     match st.local? x with
-    | some (.place l, _) =>
+    | some (.place l) =>
       -- the sink now owns it: the scope's release is cancelled
       set ((st.rebind x .moved) |> fun st =>
         { st with held := st.held.filter (·.name != some x) })
@@ -119,14 +130,14 @@ partial def evalPlace (K : Kernel) : Place → M PlaceRef
   | .var _ x => do
     let st ← get
     match st.local? x with
-    | some (.val _, _) => return .local x
-    | some (.place l, tok) =>
+    | some (.val _) => return .local x
+    | some (.place l) =>
       -- a view outlives its token only in a program the checker
       -- rejects
-      if l.region == .pkt && tok != st.layout then
+      if l.region == .pkt && l.tok != st.layout then
         fail s!"view `{x}` is used after a resize"
       return .mem l
-    | some (.moved, _) => fail s!"`{x}` is used after `move`"
+    | some .moved => fail s!"`{x}` is used after `move`"
     | none => fail s!"`{x}` is not a place"
   | .field s p f => do
     match p with
@@ -213,7 +224,7 @@ partial def callAny (K : Kernel) (s : Span) (f : String) (args : List Arg) :
     | .fn params _ =>
       let vs ← evalArgs K args params
       match K.helper row vs (← get) with
-      | .ok v st' => set st'; return v
+      | .ok v st' => set (st'.record (.call row.name vs (.ok v))); return v
       | .failed errno _ =>
         fail s!"`{f}` failed with {errno} at a call the program did not mark"
       | .err m => fail m
@@ -223,20 +234,19 @@ partial def callAny (K : Kernel) (s : Span) (f : String) (args : List Arg) :
 body run, its `return` the value. -/
 partial def callFn (K : Kernel) (d : Fn) (args : List Arg) : M (Option Val) := do
   useFuel
-  let mut frame : List (String × Binding × Nat) := []
-  let tok := (← get).layout
+  let mut frame : List (String × Binding) := []
   for (p, a) in d.params.zip args do
     match ← norm p.ty, a with
     | .ref .., .place q | .view .., .place q =>
       match ← evalPlace K q with
-      | .mem l => frame := (p.name, .place l, tok) :: frame
+      | .mem l => frame := (p.name, .place l) :: frame
       | _ => fail s!"`{q.print}` is not an aggregate place"
     | .own .., .val e =>
       match ← evalExpr K e with
-      | .loc l => frame := (p.name, .place l, tok) :: frame
+      | .loc l => frame := (p.name, .place l) :: frame
       | _ => fail s!"`{p.name}` takes an owned reference"
-    | t, .val e => frame := (p.name, .val (← coerceTo t (← evalExpr K e)), tok) :: frame
-    | t, .place q => frame := (p.name, .val (← coerceTo t (← loadPlace (← evalPlace K q))), tok) :: frame
+    | t, .val e => frame := (p.name, .val (← coerceTo t (← evalExpr K e))) :: frame
+    | t, .place q => frame := (p.name, .val (← coerceTo t (← loadPlace (← evalPlace K q)))) :: frame
     | _, .map .. => pure ()
   let saved := (← get).locals
   modify fun st => { st with locals := frame }
@@ -298,7 +308,7 @@ partial def builtin (K : Kernel) (s : Span) (f : String) (args : List Arg) :
     else throw (.raise .helper (toNatMod (-2) 32))
   | "printk", .val (.str _ fmt) :: rest =>
     let vs ← evalArgs K rest
-    modify fun st => { st with log := st.log ++ [fmtArgs fmt vs] }
+    modify fun st => st.record (.print fmt (vs.map settle))
     return none
   | _, _ =>
     let _ := s
@@ -327,7 +337,8 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
     let n ← sizeOf t
     let st ← get
     if ov < 0 || ov.toNat + n > st.packet.size then return none
-    return some (some (.place { region := .pkt, off := ov.toNat, ty := t }))
+    return some (some (.place { region := .pkt, off := ov.toNat, ty := t,
+                                tok := st.layout }))
   | .lookup _ m k => do
     let st ← get
     let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
@@ -349,14 +360,8 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
           | some pred =>
             -- the predicate with the field the value loaded and every
             -- sibling read from the place
-            let tok := (← get).layout
             let saved := (← get).locals
-            let mut frame : List (String × Binding × Nat) := [(f, .val v, tok)]
-            for g in fields do
-              if g.name != f && (← norm g.ty).isScalar then
-                let (o, _) ← fieldOf l.ty g.name
-                let gv ← loadPlace (.mem { l with off := l.off + o, ty := g.ty })
-                frame := (g.name, .val gv, tok) :: frame
+            let frame ← siblingFrame l fields f v
             modify fun st => { st with locals := frame }
             let ok ← evalExpr K pred
             modify fun st => { st with locals := saved }
@@ -381,11 +386,14 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
         let vs ← evalArgs K args params
         match K.helper row vs (← get) with
         | .ok v st' =>
-          set st'
+          set (st'.record (.call row.name vs (.ok v)))
           return some (v.map fun v => match v with
             | .loc l => .place l
             | v => .val v)
-        | .failed errno st' => set st'; helperFailed errno; return none
+        | .failed errno st' =>
+          set (st'.record (.call row.name vs (.failed errno)))
+          helperFailed errno
+          return none
         | .err m => fail m
     | none => fail s!"unknown function `{f}`"
   | .callopt _ f args => do
@@ -409,10 +417,13 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
     let some row := env.prelude.resource? r | fail s!"no row for `{r}`"
     match row.arg with
     | .place _ =>
-      let _ ← match args with
-        | [.place p] => evalPlace K p
+      let l ← match args with
+        | [.place p] =>
+          match ← evalPlace K p with
+          | .mem l => pure l
+          | _ => fail s!"`{f}` takes a place in a map value"
         | _ => fail s!"`{f}` takes one place"
-      modify fun st => { st with held := { row, name := none } :: st.held }
+      modify fun st => { st with held := { row, name := none, obj := some l } :: st.held }
       return some none
     | .scope =>
       modify fun st => { st with held := { row, name := none } :: st.held }
@@ -616,13 +627,13 @@ def runProgram (K : Kernel) (st : State) (p : Program) : Except String Halt := d
       | .raise k reason =>
         let some h := p.handlers.find? (·.kind == k)
           | fail s!"no handler for `{k}`"
-        modify fun st => { st with locals := [("reason", .val (Val.u32 reason), 0)],
+        modify fun st => { st with locals := [("reason", .val (Val.u32 reason))],
                                    held := [] }
         match ← execBlock K h.body with
         | .ret (some v) => coerceTo st.kind.verdictTy v
         | _ => fail s!"the handler for `{k}` fell off its end"
       | .err m => throw (.err m)
-  match handled.run st with
+  match handled.exec st with
   | .ok (v, st') => return { verdict := v, state := st' }
   | .error (.err m) => throw m
   | .error (.raise k _) => throw s!"an unhandled failure of kind `{k}`"

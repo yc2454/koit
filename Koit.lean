@@ -25,3 +25,11 @@ import Koit.Check.Rules
 import Koit.Core.Machine
 import Koit.Core.Semantics
 import Koit.Core.Interp
+import Koit.Lower.LIR
+import Koit.Lower.LIRSem
+import Koit.Lower.LIRInterp
+import Koit.Lower.Fold
+import Koit.Lower.Lower
+import Koit.Lower.Inline
+import Koit.Lower.CPrint
+import Koit.Lower.Rules

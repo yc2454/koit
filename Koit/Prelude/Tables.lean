@@ -157,6 +157,12 @@ structure RegionRow where
   kernel. -/
   initialized : Bool
   guard : Option Guard
+  /-- For a region of dynamic extent, the largest offset a view may
+  lie under: the verifier bounds a pointer's variable offset before
+  it sees the test that follows, so an offset the facts do not bound
+  is a program that does not load. The packet's is the kernel's
+  maximum packet offset. -/
+  maxOffset : Option Nat := none
   note : String
   deriving Repr, Inhabited
 
@@ -232,6 +238,9 @@ def type? (p : Prelude) (name : String) : Option TypeDecl :=
 
 def slot? (p : Prelude) (name : String) : Option SlotRow :=
   p.slots.find? (·.name == name)
+
+def region? (p : Prelude) (name : String) : Option RegionRow :=
+  p.regions.find? (·.name == name)
 
 end Koit.Prelude
 

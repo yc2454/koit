@@ -40,14 +40,22 @@ inductive Region where
   | kernel (id : Nat)
   deriving BEq, Repr, Inhabited
 
-/-- A place: a region, an offset in it, and the type of what is
-there. -/
+/-- A place: a region, an offset in it, the type of what is there,
+and, for the packet, the layout token the location was made under,
+so that a location into the packet is usable only while its token is
+the current one. -/
 structure Loc where
   region : Region
   off    : Nat
   ty     : Ty
+  tok    : Nat := 0
   deriving Repr, Inhabited
 
+/-- Values. A byte-order value is its stored bit pattern, the number
+read little-endian from the bytes as they lie in memory, so that
+`hton` and `ntoh` are byte swaps and equality compares patterns; the
+width `0` marks `hton` of a constant of no type yet, whose pattern
+is fixed when it meets a place or an operand. -/
 inductive Val where
   | int (signed : Bool) (w : Nat) (v : Int) (poly : Bool := false)
   | be (w : Nat) (v : Nat)
@@ -74,9 +82,18 @@ def u64 (v : Nat) : Val := mkInt false 64 v
 def u32 (v : Nat) : Val := mkInt false 32 v
 def lit (v : Nat) : Val := mkInt false 64 v true
 
+/-- The bytes of the pattern `x` of width `w` reversed: `hton` and
+`ntoh` on this little-endian machine. -/
+def bswap (w : Nat) (x : Nat) : Nat :=
+  (List.range (w / 8)).foldl (fun acc i => acc * 256 + (x >>> (8 * i)) % 256) 0
+
+/-- A byte-order value printed as the number it holds in network
+order, swapping the stored pattern back. -/
 def print : Val → String
   | .int _ _ v _ => toString v
-  | .be w v => s!"be{w}(0x{String.ofList ((Nat.toDigits 16 v).map Char.toUpper)})"
+  | .be w v =>
+    let n := if w == 0 then v else bswap w v
+    s!"be{w}(0x{String.ofList ((Nat.toDigits 16 n).map Char.toUpper)})"
   | .bool b => toString b
   | .loc l => s!"place at {repr l.region} + {l.off}"
 
@@ -166,21 +183,42 @@ def blit (b : ByteArray) (off : Nat) (bs : List UInt8) : ByteArray :=
 
 def zeros (n : Nat) : ByteArray := ByteArray.mk (Array.replicate n 0)
 
-/-- A scalar value decoded from bytes by its normalized type. -/
+/-- A scalar value decoded from bytes by its normalized type; a
+byte-order value is the pattern as stored. -/
 def decode (t : Ty) (bs : List UInt8) : Option Val :=
   match t with
   | .int _ s w => some (Val.mkInt s w (ofLe bs))
-  | .be _ w => some (.be w (ofBe bs))
+  | .be _ w => some (.be w (ofLe bs))
   | .bool _ => some (.bool (bs.any (· != 0)))
   | _ => none
+
+/-- A byte-order value fitted to a place of width `w`: a pattern
+keeps its low bytes, a constant of no width yet is swapped into
+place, and an untyped integer is `hton` of itself. -/
+def fitBe (w : Nat) : Val → Val
+  | .be 0 x => .be w (Val.bswap w (toNatMod x w))
+  | .be _ x => .be w (toNatMod x w)
+  | .int _ _ x _ => .be w (Val.bswap w (toNatMod x w))
+  | v => v
+
+/-- Two byte-order operands at one pattern width: a constant of no
+width yet takes the other's. -/
+def meetBe (w : Nat) (x : Nat) (w' : Nat) (y : Nat) : Option (Nat × Nat) :=
+  if w == 0 && w' == 0 then some (x, y)
+  else if w == 0 then some (Val.bswap w' (toNatMod x w'), y)
+  else if w' == 0 then some (x, Val.bswap w (toNatMod y w))
+  else if w == w' then some (x, y)
+  else none
 
 /-- A scalar value encoded for a place of normalized type `t`, a
 `poly` value taking the place's width. -/
 def encode (t : Ty) (v : Val) : Option (List UInt8) :=
   match t, v with
   | .int _ s w, .int _ _ x _ => some (leBytes (toNatMod (wrap s w x) w) (w / 8))
-  | .be _ w, .be _ x => some (beBytes x (w / 8))
-  | .be _ w, .int _ _ x true => some (beBytes (toNatMod x w) (w / 8))
+  | .be _ w, .be _ _ | .be _ w, .int _ _ _ true =>
+    match fitBe w v with
+    | .be _ x => some (leBytes x (w / 8))
+    | _ => none
   | .bool _, .bool b => some [if b then 1 else 0]
   | _, _ => none
 
@@ -210,6 +248,20 @@ inductive Binding where
   | moved
   deriving Repr, Inhabited
 
+/-- What the kernel answered a call with, as the trace records it. -/
+inductive CallOut where
+  | ok (v : Option Val)
+  | failed (errno : Int)
+  deriving Repr, Inhabited
+
+/-- One event of the trace: a kernel call with its row, its arguments,
+and its answer, or a `printk` with its format and arguments. What a
+run does outside the model is this list, in order. -/
+inductive Event where
+  | call (row : String) (args : List Val) (out : CallOut)
+  | print (fmt : String) (args : List Val)
+  deriving Repr, Inhabited
+
 /-- A held resource, innermost first in the state. -/
 structure HeldRes where
   row  : ResourceRow
@@ -231,15 +283,16 @@ structure State where
   stackBufs  : List (Nat × ByteArray) := []
   kernelObjs : List (Nat × ByteArray) := []
   nextId     : Nat := 0
-  /-- The frame's store. A view's binding remembers the layout token
-  it was carved under. -/
-  locals     : List (String × Binding × Nat) := []
+  /-- The frame's store: the names in scope, innermost first. -/
+  locals     : List (String × Binding) := []
   held       : List HeldRes := []
   /-- The negative return of the last helper that failed. -/
   errno      : Int := 0
   fuel       : Nat := 100000
   clock      : Nat := 0
-  log        : List String := []
+  /-- The kernel calls made so far and the `printk` events, in
+  order. -/
+  trace      : List Event := []
   deriving Inhabited
 
 namespace State
@@ -278,18 +331,22 @@ def bytesAt (st : State) (l : Loc) (n : Nat) : List UInt8 :=
 def writeAt (st : State) (l : Loc) (bs : List UInt8) : State :=
   st.setRegion l.region (blit (st.region l.region) l.off bs)
 
-def local? (st : State) (x : String) : Option (Binding × Nat) :=
+def local? (st : State) (x : String) : Option Binding :=
   (st.locals.find? (·.1 == x)).map (·.2)
 
 def bind (st : State) (x : String) (b : Binding) : State :=
-  { st with locals := (x, b, st.layout) :: st.locals }
+  { st with locals := (x, b) :: st.locals }
 
 def rebind (st : State) (x : String) (b : Binding) : State :=
-  { st with locals := st.locals.map fun (y, b', t) =>
-      if y == x then (y, b, t) else (y, b', t) }
+  { st with locals := st.locals.map fun (y, b') =>
+      if y == x then (y, b) else (y, b') }
 
 def fresh (st : State) : Nat × State :=
   (st.nextId, { st with nextId := st.nextId + 1 })
+
+/-- The trace with an event appended. -/
+def record (st : State) (ev : Event) : State :=
+  { st with trace := st.trace ++ [ev] }
 
 end State
 
@@ -375,7 +432,17 @@ inductive Abort where
   | err (msg : String)
   deriving Repr, Inhabited
 
-abbrev M := StateT State (Except Abort)
+/-- The evaluation monad: exceptions over state, so that a failure on
+its way to the program's handler carries the state it left, maps
+written and resources released, as the relation's rules do. -/
+abbrev M := ExceptT Abort (StateM State)
+
+/-- A primitive applied in a state: its result and the state after,
+or the abort. -/
+def M.exec (f : M α) (st : State) : Except Abort (α × State) :=
+  match (f.run).run st with
+  | (.ok v, st') => .ok (v, st')
+  | (.error e, _) => .error e
 
 def fail (msg : String) : M α := throw (.err msg)
 
@@ -412,8 +479,7 @@ partial def coerceTo (t : Ty) (v : Val) : M Val := do
   match ← norm t, v with
   | .int _ s w, .int _ _ x _ => return Val.mkInt s w x
   | .int _ s w, .bool b => return Val.mkInt s w (if b then 1 else 0)
-  | .be _ w, .be _ x => return .be w (toNatMod x w)
-  | .be _ w, .int _ _ x true => return .be w (toNatMod x w)
+  | .be _ w, .be _ _ | .be _ w, .int _ _ _ true => return fitBe w v
   | .refined _ _ base _, v => coerceTo base v
   | _, v => return v
 
@@ -421,7 +487,7 @@ partial def coerceTo (t : Ty) (v : Val) : M Val := do
 `u64`. -/
 def settle : Val → Val
   | .int _ _ x true => Val.mkInt false 64 x
-  | .be 0 x => .be 64 x
+  | .be 0 x => fitBe 64 (.be 0 x)
   | v => v
 
 /-- A place as the evaluator addresses it. -/
@@ -442,7 +508,7 @@ def dropTo (n : Nat) : M Unit := modify (·.dropLocalsTo n)
 opposed to an aggregate, which is passed by its location. -/
 def scalarRef (st : State) : PlaceRef → Bool
   | .mem l =>
-    match (norm l.ty).run st with
+    match (norm l.ty).exec st with
     | .ok (tn, _) => tn.isScalar
     | .error _ => false
   | _ => true
@@ -458,8 +524,8 @@ def loadPlace (r : PlaceRef) : M Val := do
   match r with
   | .local x =>
     match st.local? x with
-    | some (.val v, _) => return v
-    | some (.place l, _) => return .loc l
+    | some (.val v) => return v
+    | some (.place l) => return .loc l
     | _ => fail s!"`{x}` has no value"
   | .ctx f =>
     match st.ctx.lookup f with
@@ -477,13 +543,10 @@ def storePlace (r : PlaceRef) (v : Val) : M Unit := do
   match r with
   | .local x =>
     match st.local? x with
-    | some (.val old, _) =>
+    | some (.val old) =>
       let v := match old with
         | .int s w _ _ => Val.mkInt s w ((v.toInt?).getD 0)
-        | .be w _ => match v with
-          | .be _ x => Val.be w (toNatMod x w)
-          | .int _ _ x _ => Val.be w (toNatMod x w)
-          | _ => v
+        | .be w _ => fitBe w v
         | _ => v
       set (st.rebind x (.val v))
     | _ => fail s!"a store to `{x}`, which is not a scalar local"
@@ -499,6 +562,19 @@ def storePlace (r : PlaceRef) (v : Val) : M Unit := do
 def helperFailed (errno : Int) : M Unit :=
   modify fun st => { st with errno }
 
+/-- The frame a field predicate is evaluated in, at a marked load:
+the field bound to the value loaded and every scalar sibling to its
+value at the place, built from the fields in order. -/
+def siblingFrame (l : Loc) (fields : List Field) (f : String) (v : Val) :
+    M (List (String × Binding)) := do
+  let mut frame : List (String × Binding) := [(f, .val v)]
+  for g in fields do
+    if g.name != f && (← norm g.ty).isScalar then
+      let (o, _) ← fieldOf l.ty g.name
+      let gv ← loadPlace (.mem { l with off := l.off + o, ty := g.ty })
+      frame := (g.name, .val gv) :: frame
+  return frame
+
 /-- Bytes formatted for `printk`'s `{}`. -/
 def fmtArgs (fmt : String) (args : List Val) : String :=
   let parts := fmt.splitOn "{}"
@@ -508,5 +584,11 @@ def fmtArgs (fmt : String) (args : List Val) : String :=
     | p :: ps, a :: as => p ++ a.print ++ go ps as
     | p :: ps, [] => p ++ "{}" ++ go ps []
   go parts args
+
+/-- The lines `printk` wrote, read off the trace. -/
+def State.log (st : State) : List String :=
+  st.trace.filterMap fun
+    | .print fmt args => some (fmtArgs fmt args)
+    | _ => none
 
 end Koit.Sem
