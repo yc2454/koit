@@ -979,7 +979,12 @@ writability, its offset in the kernel's layout, which the lowering
 and the target machine read and no source-level surface shows
 (decision 55). A kind's row is one of six tables the prelude carries for a kernel:
 kinds, context fields per kind, calls with their signatures and effects
-and availability per kind, resources, regions, and slots. The `pkt`
+and availability per kind, resources, regions, and slots. A call row
+also carries its kernel implementation: a helper by number or a kfunc
+by name, with the layout of the kernel's arguments relative to koit's,
+or the mark that the kernel computes the row inline, as it does
+`pkt.len` and the checksum rows; the lowering and the target machine
+read it and no source-level surface shows it (decision 57). The `pkt`
 column says whether the packet exists and whether views into it may be
 written (`rw`, `ro`, none). The verdict range is the one the kernel
 enforces at every exit. A call, kind, or slot the target kernel lacks is
@@ -1663,9 +1668,12 @@ as the bytes the kernel received. The map store, the packet and its
 token, the kernel objects, the held set read as rows and objects,
 and the trace are the part of the state every level of the lowering
 shares as one definition; the frame, the named context, and `errno`
-are Core's own (decision 54). A row with no effects that reads the context, such as
-`pkt.len`, goes through the kernel like any other, so that the trace
-lists every row called. Values are scalars: a fixed-width integer reduced to
+are Core's own (decision 54). A row the kernel computes inline,
+`pkt.len` and the checksum rows, is one function of its arguments
+and the state at every level, makes no call, and leaves no trace
+event; every other row goes through the kernel and is traced, so
+that the trace lists the calls the kernel sees (decision 57). Values
+are scalars: a fixed-width integer reduced to
 its type's range, a byte-order value, a boolean, or the location of a
 place. A byte-order value is the bit pattern as stored, so `hton` and
 `ntoh` are byte swaps and equality compares patterns. A location
@@ -2021,8 +2029,9 @@ end of the session that lowered Core to LIR:
     (entry 25).
 52. The trace settles `printk`'s untyped arguments, a held lock's
     object is its place, and a row with no effects is still a kernel
-    call, so that every level of the lowering compares equal on the
-    shared state (entry 26).
+    call unless its implementation is inline, so that every level of
+    the lowering compares equal on the shared state (entry 26; the
+    inline exception by decision 57).
 53. The evaluator's failures carry the state they left: a map
     written before a `fail` stays written when the handler runs, as
     the rules always said (entry 27, a correction of the evaluator).
@@ -2040,6 +2049,13 @@ end of the session that lowered Core to LIR:
     operation LIR's release statements use, a kernel call for a row
     whose exit is one; nothing is held when a program returns or
     raises, else `err` (entry 36, 2026-09-19).
+57. Each call row carries the kernel's calling convention, a helper
+    number or kfunc name with the layout of the kernel's arguments
+    relative to koit's, or `inline`; the machine's bytecode instance
+    reads koit's arguments back by the layout, so the trace records
+    them at every level, and the inline rows are one untraced
+    function of the machine that pass D expands (entry 38,
+    2026-09-20).
 
 Open questions, with the default the checker implements until decided:
 

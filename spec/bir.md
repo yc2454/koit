@@ -136,7 +136,7 @@ consult the kernel parameter:
 | `lock`, `unlock` | the lock field's location in a map value | push, pop |
 | `enter R`, `leave R` | none | push, pop, for the scope rows |
 | `copy n`, `fill n` | locations, a byte | byte moves, expanded by the flattening |
-| `printk` | the format's location, up to three scalars | an event on the trace |
+| `printk fmt n` | `n` scalars; the format is on the instruction, and in bytecode the location and size of a frame object holding its bytes, filled at the call site by the flattening (entry 37) | an event on the trace with the format and the scalars |
 | `atomic op(w)` | a location, one or two scalars | the read-modify-write of section 8.5, at 32 or 64 bits |
 
 A key or value argument may lie in any readable region, and its
@@ -145,15 +145,32 @@ field of the value it lies in, which the map's declaration fixes.
 
 ### 2.4 The kernel parameter
 
-Every other row of the call table is a kernel function, and the
-machine consults the same `Kernel` as Core: `K.helper row args st`
-answers with a value and a state, or a failure with its negative
-return, and `KernelOk` is the same contract. The machine fits the
-argument registers to the row's parameter kinds before the call: a
-scalar parameter of width `w` takes a scalar reduced to `w`, a
-memory parameter takes a location whose region is one the row's
-region column admits, and anything else is stuck, which is the
-verifier's argument-type check. Afterwards:
+Every other row of the call table is a kernel function or an inline
+row. Its implementation column says which: a helper by its number
+in the uapi header, a kfunc by name, each with the layout of the
+kernel's arguments, or `inline`. A layout is the kernel's argument
+positions, each one of: koit's `i`-th argument, the context, a
+constant, the byte size of koit's `i`-th argument's place, or
+`printk`'s format; `bpf_sk_lookup_tcp`'s is `(ctx, arg 0, size 0,
+-1, 0)`, the current netns and no flags. A row whose helper differs
+by kind, the resizes in `xdp` and `tc`, carries an override per
+kind. Stage 1 transcribes the column from the uapi header; session
+8's generator produces it (entry 38).
+
+For a kernel function the machine consults the same `Kernel` as
+Core: `K.helper row args st` answers with a value and a state, or a
+failure with its negative return, and `KernelOk` is the same
+contract. The arguments `args` are koit's: in BIR they are the
+call's operands; in bytecode the machine reads `r1` to `r5` by the
+row's layout, koit's arguments from their positions and the context
+where the layout says, and is stuck when the register at a context
+position is not the context or a constant position does not hold
+its constant. The trace therefore records koit's arguments at every
+level. The machine fits the arguments to the row's parameter kinds
+before the call: a scalar parameter of width `w` takes a scalar
+reduced to `w`, a memory parameter takes a location whose region is
+one the row's region column admits, and anything else is stuck,
+which is the verifier's argument-type check. Afterwards:
 
 | the kernel answers | `r0` |
 |---|---|
@@ -170,6 +187,16 @@ A row with the `resize` effect may change the packet and its token,
 as `KernelOk` allows and nothing else may. A call while a held row
 forbids `call` is stuck, except the row's own release. Every call
 appends an event to the trace.
+
+An inline row, `pkt.len`, `csum_add`, `csum_fold`, is what the
+kernel computes without a call: the packet's length, the 32-bit add
+with end-around carry, the two folds and the complement. The machine
+computes it as one function of the arguments and the state at every
+level, Core included, without the kernel parameter and without a
+trace event, since the kernel makes no call; the trace lists the
+calls the kernel sees and every level still agrees on it. Pass D
+expands each into the kernel's own instruction sequence, and a lemma
+of pass D says the sequence computes the function (entry 38).
 
 ### 2.5 Protocol state and the trace
 
@@ -242,7 +269,8 @@ lddw d k64
 lea d obj                 BIR only: the frame object's location
 mapref d m                the map's handle, `handle m`
 mapval d m k              direct value access
-call h                    BIR: call h (s_1 .. s_5) -> d; bytecode: r1..r5 -> r0
+call h                    BIR: call h (s_1 .. s_5) -> d, koit's operands;
+                          bytecode: r1..r5 by the row's layout -> r0
 atomic(op, cls, fetch) [d + off] s     op in {add and or xor xchg cmpxchg}
 exit
 ```
@@ -279,10 +307,12 @@ Meaning, by class of instruction:
   kernel does.
 - **`exit`.** Halts as section 2.6 says, or is stuck.
 
-The number each row's kernel function carries, which the assembler
-needs, is a column of the call table read from the uapi header. The
-scope rows and every kfunc need a call by BTF id; no stage-1 program
-uses one, and the encoding is deferred with them.
+What `call h` encodes to is the row's implementation column of 2.4:
+a helper's number in the immediate; a kfunc's BTF id, which the
+encoder leaves as a relocation by name for the loader to resolve;
+and for an inline row no call at all but the expansion pass D makes.
+The scope rows' `enter` and `leave` are kfunc calls by the resource
+row's kernel names; no stage-1 program uses one.
 
 ## 4. Widths in registers
 
@@ -378,7 +408,9 @@ prints the cause (entry 33).
     (pc, R, st) -> (if cmp holds then L else pc + 1, R, st)
 
 (Call-kernel)
-    code[pc] = call h     h a kernel row     the arguments fit the row
+    code[pc] = call h     h a kernel row
+    [v_i] = koit's arguments, read by the row's layout in bytecode
+    the arguments fit the row
     no held row forbids call, or h releases that row
     K.helper h [v_i] st = ok v st'
     ---------------------------------------------------------------
@@ -391,6 +423,11 @@ prints the cause (entry 33).
     ---------------------------------------------------------------
     (pc, R, st) -> (pc + 1, R[r0 := the builtin's answer, r1..r5 := uninit],
                     st[the builtin's effect])
+
+(Call-inline)
+    code[pc] = call h     h an inline row     inline(h, [v_i], st) = v
+    ---------------------------------------------------------------
+    (pc, R, st) -> (pc + 1, R[r0 := v, r1..r5 := uninit], st)
 
 (Exit)
     code[pc] = exit     R r0 = scalar v     held(st) = []
@@ -480,6 +517,22 @@ from clang at low optimization, so it is accepted. A linear-scan
 allocation over `r6` to `r9` comes later as an untrusted pass with a
 verified checker, the way CompCert validates its own.
 
+**Kernel calls.** A call's registers are laid out as the row's
+implementation column says: koit's arguments at their positions,
+the context from `r6`, constants and sizes as immediates, `printk`'s
+format as the location and size of its frame object. An inline row
+becomes the kernel's own sequence: `data_end - data` for `pkt.len`,
+the add with a carry test and increment for `csum_add`, the two
+folds and the complement for `csum_fold` (entry 38).
+
+**Formats.** Each `printk` format, its holes converted to the
+kernel's conversions by the arguments' types, lives in a frame
+object the flattening reserves and fills at the call site with
+stores; the call passes `lea` of the object and its size. A
+read-only data map replaces the object when the ELF writer arrives,
+and the machine's trace event, the format and the scalars, is the
+same under both (entry 37).
+
 **Labels.** Jump targets become signed instruction offsets; the long
 jump of v4 is used when an offset exceeds 16 bits, and under v3 such
 a program is rejected.
@@ -496,9 +549,14 @@ loader recognizes, `BPF_PSEUDO_MAP_FD` for `mapref` and
 `BPF_PSEUDO_MAP_VALUE` for `mapval`, and a relocation naming the
 map. Since a handle is a value and the map is an operand of the
 call, one BIR call is one bytecode call and the encoder is a word
-layout; the decode-encode round trip is the one property of it worth
-proving, and LLVM's BPF disassembler on the words is its independent
-check until a kernel is available (entries 29, 35).
+layout. The object it produces is the words, the relocation list,
+map file descriptors, map values, and kfuncs by name, and a note per
+call naming the callee the model sees, since the words alone do not
+say which builtin a helper number stands for once its size and flags
+are in registers; the notes are not loaded. The decode-encode round
+trip on the object is the one property of the encoder worth proving,
+and LLVM's BPF disassembler on the words is its independent check
+until a kernel is available (entries 29, 35, 38).
 
 **Loading.** Two loaders serve two purposes. The first is a few
 hundred lines over the `bpf` system call: create the maps, with BTF
@@ -616,3 +674,14 @@ and is not needed for the paper.
 12. One instruction syntax over a register type and a jump-target
     type, one `Step` parameterized by the calling convention; BIR and
     bytecode are its instances (entry 34).
+13. `printk`'s format is metadata on the instruction at every level;
+    the direct backend stores its bytes in a frame object at the
+    call site until the ELF writer's read-only data exists (entry
+    37).
+14. The call table's implementation column carries the kernel's
+    calling convention, a helper number or kfunc name with the
+    layout of its arguments relative to koit's; the bytecode
+    instance reads koit's arguments back by it, so the trace is the
+    same at every level. The inline rows are one function of the
+    machine at every level, untraced, and pass D expands them; the
+    object is words, relocations, and notes (entry 38).

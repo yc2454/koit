@@ -19,8 +19,8 @@
 #                   `koitc run` output must be the rest of that comment
 #                   block, each expected line after `// `
 #
-# KOIT_STAGE=lex, parse (the default), check, run, lower, or emit
-# selects how far the run goes; each stage includes the ones before
+# KOIT_STAGE=lex, parse (the default), check, run, lower, shape, or
+# emit selects how far the run goes; each stage includes the ones before
 # it. The err files in LATER, empty since session 5, are skipped at
 # the check stage. At the run stage every ok file must also run to a
 # verdict on an empty packet. At the lower stage every ok and run
@@ -29,8 +29,11 @@
 # `koitc run --bir` must print it too on the flattened unit under cpu
 # v4, and under v3 unless the unit needs v4's signed division, and
 # `koitc run --bytecode` on the allocated unit under v4. At the
-# emit stage every ok and run unit must emit C and, when clang with
-# the BPF target is present, that C must build.
+# shape stage `koitc shape` must pass on every ok and run unit:
+# every test a conditional jump, every cast an instruction of the
+# table, every packet access and index under a test on its path. At
+# the emit stage every ok and run unit must emit C and, when clang
+# with the BPF target is present, that C must build.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
@@ -42,7 +45,7 @@ CLANG=${KOIT_CLANG:-/opt/homebrew/opt/llvm/bin/clang}
 rank() {
   case "$1" in
     lex) echo 0 ;; parse) echo 1 ;; check) echo 2 ;; run) echo 3 ;;
-    lower) echo 4 ;; emit) echo 5 ;; *) echo 1 ;;
+    lower) echo 4 ;; shape) echo 5 ;; emit) echo 6 ;; *) echo 1 ;;
   esac
 }
 RANK=$(rank "$STAGE")
@@ -202,6 +205,19 @@ if at_least lower; then
       failed bytecode-differs "$f"; continue
     fi
     pass=$((pass + 1))
+  done
+fi
+
+# the shape of the compiled code: the syntactic part of Lemma L on
+# every program
+if at_least shape; then
+  for f in tests/ok/*.ko tests/run/*.ko; do
+    [ -e "$f" ] || continue
+    if "$KOITC" shape "$f" >"$TMP/out" 2>&1; then
+      pass=$((pass + 1))
+    else
+      failed shape "$f"
+    fi
   done
 fi
 

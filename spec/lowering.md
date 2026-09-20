@@ -389,14 +389,19 @@ gets an 8-byte spill slot below the frame objects; `v_ctx` is copied
 from `r1` into `r6` at entry; each BIR instruction becomes loads of
 its operands from their slots into `r1` to `r3`, the instruction on
 those registers, and a store of the result to its slot; a `call`
-loads its operands into `r1` to `r5`, calls, and stores `r0`; `lea`
-becomes `mov r1, r10; add r1, off`. Labels become instruction
-offsets. If the slots and objects exceed 512 bytes the program is
-rejected with its frame size.
+lays its registers out by the row's implementation column, koit's
+operands at their positions from their slots, the context from
+`r6`, constants and sizes as immediates, a `printk` format as `lea`
+of its frame object and its size, then calls and stores `r0`; a
+call of an inline row becomes the kernel's own sequence of `bir.md`
+section 7 in place of the call; `lea` becomes `mov r1, r10; add r1,
+off`. Labels become instruction offsets. If the slots and objects
+exceed 512 bytes the program is rejected with its frame size.
 
 Encoding, E, is the word layout of `bir.md` section 7 with the
-kernel's opcode tables, and the relocation list for `mapref` and
-`mapval`.
+kernel's opcode tables, producing the object: the words, the
+relocation list for `mapref`, `mapval`, and kfunc calls by name,
+and a note per call naming the callee the model sees.
 
 ### 7.2 Theorem D and the encoding lemma
 
@@ -418,6 +423,10 @@ theorem encode_decode (O) : decode (encode O) = O
 
 The diagram is a plus simulation, each BIR step matched by one or
 more bytecode steps and no stuttering, so no measure is needed. The
+expansion of an inline row is one case of it, under a lemma that
+the kernel's sequence computes the machine's function of the row;
+`encode_decode` is stated on the object, since the words alone do
+not name the callee a helper number stands for (entry 38). The
 star-level statement of section 2.4 follows by induction on the
 `Star`. A later linear-scan allocator replaces the naive one as an
 untrusted function checked by a verified validator, and the theorem
@@ -459,11 +468,28 @@ output:
   scalar pass C adds to `data` has a bound the verifier re-derives
   from the branch that established it; no bound test is emitted.
 
-A small checker over BIR, `koitc shape`, tests L1 to L3 on every
-emitted program in the runner: each `jcond` that pass B emitted for a
-marker is present, each cast is in the table, and each access
-register is the register of the comparison that dominates it. It is
-a test, not a proof, and its failures are compiler bugs.
+A small checker, `koitc shape`, tests L1 to L3 on every compiled
+unit in the runner; it is a test, not a proof, and its failures are
+compiler bugs. L1 is counted through the levels: every Core body has
+at least one LIR test per marker, every closed LIR program has as
+many conditional jumps in its BIR as it has comparisons, matched by
+family and class, and the bytecode has the BIR's plus one per inline
+checksum add. L2 restates the cast table and requires, for each LIR
+cast, an instruction of its shape in the BIR, counted by shape,
+since BIR has no statement boundaries to pair them exactly. L3 is a
+forward analysis over BIR of what the verifier tracks: which
+registers hold packet pointers, by the instruction that added their
+variable part and a constant, which hold `data_end`, and which
+scalars carry a bound from a constant, a narrow load, a mask, or a
+comparison on their path. A packet access needs a comparison
+against `data_end` on a pointer with the same variable part,
+covering its bytes, on every path that reaches it, and a scalar
+added to a location needs a bound; the tested register of L3 is any
+register with the same variable part, as the verifier propagates a
+range to the pointers that share its id. The check's first run over
+the corpus found that a non-constant index into a view adds a
+variable to the view's pointer with no comparison after it (entry
+39).
 
 ## 9. The printer, P
 
@@ -507,8 +533,12 @@ printer and not of any pass:
   and `BPF_F_CURRENT_NETNS`; in `tc` programs `pkt.adjust_tail` and
   `pkt.adjust_head` compute `bpf_skb_change_tail`'s new length and
   `bpf_skb_change_head`'s headroom from the delta, which the corpus
-  does not exercise. `pkt.len` prints as the subtraction of the
-  context fields.
+  does not exercise. The inline rows print as C expressions,
+  `pkt.len` as the subtraction of the context fields. The templates
+  state the same convention the call table's implementation column
+  holds since entry 38; reading the column instead of the templates
+  is a cleanup owed, and the differential runs would catch a
+  divergence in the meantime.
 - Arithmetic goes through the shim `tests/emit/koit.h`: every `+ -
   * & | ^` is computed unsigned at the width and cast, division,
   modulo, and shifts through `koit_div_T`, `koit_mod_T`,
@@ -531,7 +561,7 @@ printer and not of any pass:
 | the machine's stuck-state list, `bir.md` 5.3 | that it is the verifier's list and the kernel's behavior | differential runs, instruction replay, and the verifier's verdicts (`bir.md` 9) |
 | the machine's builtins and the return convention | the kernel's map, ring, and lock semantics | the same |
 | the call table's effect, `own`, `T?`, region, and failure-signal columns | `KernelOk` and argument fitting | already trusted for the corollary of section 20.2 |
-| the context table and the helper numbers | context access and the assembler | generated from the kernel in session 8 |
+| the context table and the call table's implementation column, helper numbers, kfunc names, and argument layouts | context access and the kernel's calling convention | generated from the kernel in session 8; until then transcribed from the uapi header |
 | the encoder, the BTF encoder, the loaders | producing the object the kernel receives | `encode_decode`, and loading |
 | T1 and T2 | the source's safety and the existence of the run | stated; proofs in progress |
 | Lean and its kernel | everything | as for every mechanization |
@@ -607,6 +637,13 @@ belongs to session 8.
    (entry 29).
 7. Pass D is the naive allocation, proved as a plus simulation; a
    validated allocator later.
+7a. Pass D lays a kernel call's registers out by the call table's
+   implementation column and expands the inline rows into the
+   kernel's sequences under a lemma per row; the encoder produces
+   the object, words with relocations and notes, and `encode_decode`
+   is stated on it (entry 38).
+7b. `printk` formats are frame objects the flattening fills at the
+   call site, until the ELF writer's read-only data (entry 37).
 8. Lemma L's syntactic part is a property of the translations and a
    runner check; its semantic part stays P9's conjecture.
 9. Every level has an interpreter and the runner compares adjacent

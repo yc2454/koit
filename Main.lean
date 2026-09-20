@@ -2,13 +2,14 @@ import Koit
 
 /-!
 `koitc`, the koit command line: `lex`, `parse`, `print`, `desugar`,
-`check`, `run`, `lower`, `emit`. `run` checks the unit, then
+`check`, `run`, `lower`, `emit`, `shape`. `run` checks the unit, then
 interprets every program of it in order, or the one named, over a
 packet given in hex and zero-filled maps, and prints each verdict,
 the lines `printk` wrote, and the map state; with `--lir` it runs the
 lowered unit instead, so that the two runs can be compared. `lower`
 prints the LIR of a checked unit, inlined with `--inline`; `emit`
-prints the C the printer makes of it.
+prints the C the printer makes of it; `shape` compiles the unit and
+tests the syntactic part of Lemma L on every program.
 -/
 
 open Koit Koit.Syntax
@@ -35,7 +36,11 @@ def usage : String := String.intercalate "\n"
    "          functions; --bir prints the flattened unit, --bytecode",
    "          the allocated one",
    "  emit    check FILE, then print the C of its LIR; with --bytecode,",
-   "          the words of its programs in hex with their relocations"] ++ "\n"
+   "          the words of its programs in hex with their relocations",
+   "  shape   compile FILE and test the shape of every program: each",
+   "          test a conditional jump, each cast an instruction of the",
+   "          table, each packet access and index under a test on its",
+   "          path; --cpu v3|v4 as for run"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
 def readSource (path : String) : IO String := do
@@ -286,6 +291,23 @@ def run (args : List String) : IO UInt32 := do
       IO.print lir.print
       return 0
     | .error m =>
+      IO.eprintln s!"{file}: {m}"
+      return 1
+  | "shape" :: rest => do
+    let (cpu, rest) := match rest with
+      | "--cpu" :: "v4" :: rest => (BPF.Cpu.v4, rest)
+      | "--cpu" :: "v3" :: rest => (BPF.Cpu.v3, rest)
+      | rest => (BPF.Cpu.v3, rest)
+    let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let some pre ← preludeFor tag | return 2
+    let some (core, checked) ← checkFile file pre | return 1
+    match lowerUnit pre core checked false, Compile.compile pre cpu core checked with
+    | .ok openLir, .ok C =>
+      let reports := Compile.shapeUnit pre core openLir C
+      for r in reports do
+        for l in r.print do IO.println l
+      return (if Compile.shapeOk reports then 0 else 1)
+    | .error m, _ | _, .error m =>
       IO.eprintln s!"{file}: {m}"
       return 1
   | "emit" :: "--bytecode" :: rest => do
