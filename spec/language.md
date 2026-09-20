@@ -974,7 +974,10 @@ tables are generated from the kernel's context-access rules.
 | `tc` | `rw` | `mark: u32` writable, `priority: u32`, `ifindex: u32` | `OK SHOT UNSPEC PIPE REDIRECT` | `pass` = OK, `drop` = SHOT | `drop` | no |
 | `syscall` | none | opaque | `i32` | none | `-1` | yes |
 
-A kind's row is one of six tables the prelude carries for a kernel:
+The context table carries, besides each field's name, type, and
+writability, its offset in the kernel's layout, which the lowering
+and the target machine read and no source-level surface shows
+(decision 55). A kind's row is one of six tables the prelude carries for a kernel:
 kinds, context fields per kind, calls with their signatures and effects
 and availability per kind, resources, regions, and slots. The `pkt`
 column says whether the packet exists and whether views into it may be
@@ -2027,6 +2030,10 @@ end of the session that lowered Core to LIR:
     kernel object, a traced memory argument is bytes; Core's regions
     extend the shared ones with the struct literals' frames (entry
     30, 2026-09-19).
+55. The context table has an offset column for the lowering and the
+    machine, hidden from the source; the two packet rows `data` and
+    `data_end` yield locations and are not nameable (entry 31,
+    2026-09-19).
 
 Open questions, with the default the checker implements until decided:
 

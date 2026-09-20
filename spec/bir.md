@@ -1,7 +1,11 @@
 # BIR, the flat language, and the target machine
 
-Status: draft 1, 2026-09-18. The second intermediate language and the
-machine the theorems are stated against. BIR is bytecode with names:
+Status: draft 1, 2026-09-18; revised 2026-09-19 at the start of
+session 7 from `ISSUES.md` entries 28 to 35, before the target code.
+The second intermediate language and the machine the theorems are
+stated against. In the code the instruction set is `Koit/BPF/`, one
+`Instr` over a register type and a jump-target type; BIR and
+bytecode are its two instances (entry 34). BIR is bytecode with names:
 its registers are unbounded and its jumps go to labels. Bytecode is
 BIR with eleven registers, the frame reached through `r10`, and label
 offsets. Both run on the machine of section 2, which is eBPF with the
@@ -54,9 +58,15 @@ the per-program validation speak of one object.
 v ::= scalar n          a 64-bit pattern, n < 2^64
     | loc(r, off, tok)  a region, a signed offset, the token it was
                         made under
+    | handle m          a map, made by `mapref` and accepted only as
+                        the map argument of a builtin or a row
 ```
 
-A register holds one value. Null is `scalar 0`. A location's offset
+A register holds one value. Null is `scalar 0`. A handle is what the
+kernel's `lddw` with the pseudo map source yields: it is not a
+scalar and not a location, and any use of it other than as a map
+argument is stuck (entry 29). It exists so that one BIR call is one
+bytecode call. A location's offset
 may leave its region between the arithmetic that moves it and the
 access that uses it; only the access is checked. The token matters
 for the packet region only and is compared at every access.
@@ -85,8 +95,9 @@ bytes and zero-extends; a store writes them.
 its top. A slot is `spilled v`, one value, or `bytes b_0 .. b_7`,
 each byte initialized or not. The rules are the verifier's:
 
-- a store of a location is admitted only as 8 bytes at a slot
-  boundary, and makes the slot `spilled`; anywhere else it is stuck,
+- a store of a location or a handle is admitted only as 8 bytes at
+  a slot boundary, and makes the slot `spilled`; anywhere else it is
+  stuck,
   which is the rule that a pointer never leaks into a map, the
   packet, or a misaligned slot;
 - a store of a scalar makes bytes, and unspills the slot it touches;
@@ -96,10 +107,13 @@ each byte initialized or not. The rules are the verifier's:
 - the frame starts with every byte uninitialized.
 
 **The context** is a table of fields per kind, from the prelude: for
-each field its offset, its size, and whether it is readable and
-writable. A load or store at an offset and size that is not a row is
-stuck, which is the verifier's context-access check; the lowering
-never emits one, because context access goes through the kind row.
+each field its name, its type, its offset in bytes, and whether it
+is writable; the width is the type's. Every row is readable, since a
+field the source may not read is not a row, and a load or store at
+an offset and size that is not a row is stuck, which is the
+verifier's context-access check; the lowering never emits one,
+because context access goes through the kind row. The offset is the
+kernel's layout and reaches no developer-facing surface (entry 31).
 Two rows of a packet kind yield locations rather than scalars:
 `data` yields `loc(pkt, 0, tok)` and `data_end` yields
 `loc(pkt, len, tok)` with the current token, which is the kernel's
@@ -113,11 +127,11 @@ parameter:
 
 | builtin | arguments | meaning |
 |---|---|---|
-| `lookup m` | the key's location | an array kind: `loc(map(m, k), 0)` when `k` is below the capacity, else null; a hash kind: the entry's location or null; per-CPU arrays as arrays |
-| `update m` | the key's and the value's locations | insert or replace; a full hash map answers with the negative `E2BIG` |
-| `delete m` | the key's location | remove, or the negative `ENOENT` |
+| `lookup` | the map's handle, the key's location | an array kind: `loc(map(m, k), 0)` when `k` is below the capacity, else null; a hash kind: the entry's location or null; per-CPU arrays as arrays |
+| `update` | the handle, the key's and the value's locations | insert or replace; a full hash map answers with the negative `E2BIG` |
+| `delete` | the handle, the key's location | remove, or the negative `ENOENT` |
 | `mapval m + k` | none | `loc(map(m, 0), k)` for an `array[1]` map: direct value access |
-| `reserve m n` | none | a fresh kernel object of `n` bytes, held as a record, or null when the ring is full |
+| `reserve n` | the ring's handle | a fresh kernel object of `n` bytes, held as a record, or null when the ring is full |
 | `submit`, `discard` | the record | pop it; `submit` appends it to the ring |
 | `lock`, `unlock` | the lock field's location in a map value | push, pop |
 | `enter R`, `leave R` | none | push, pop, for the scope rows |
@@ -202,8 +216,11 @@ stuck; section 5.3 lists the causes.
 ## 3. Instructions
 
 The set is the part of the kernel's instruction set the templates
-need, cpu v3, with the v4 additions marked. Registers are `v_i` in
-BIR and `r0` to `r10` in bytecode; `cls` is the operation class,
+need, cpu v3, with the v4 additions marked. It is one syntax over two
+parameters, the register type and the jump-target type: registers
+are `v_i` and targets labels in BIR, `r0` to `r10` and signed
+offsets in bytecode, and the two differ in nothing else but the
+conventions of section 7 (entry 34). `cls` is the operation class,
 64 or 32 bits, which is the kernel's ALU and ALU32, JMP and JMP32
 distinction; `w` is an access or extension width.
 
@@ -223,9 +240,9 @@ jcond(cmp, cls) a b L     cmp in {eq ne gt ge lt le sgt sge slt sle set}
 jcond_imm(cmp, cls) a k L
 lddw d k64
 lea d obj                 BIR only: the frame object's location
-mapref d m                the map handle, for the rows that take one
+mapref d m                the map's handle, `handle m`
 mapval d m k              direct value access
-call h                    BIR: call h (s_1 .. s_5) -> d
+call h                    BIR: call h (s_1 .. s_5) -> d; bytecode: r1..r5 -> r0
 atomic(op, cls, fetch) [d + off] s     op in {add and or xor xchg cmpxchg}
 exit
 ```
@@ -290,9 +307,11 @@ narrow values compare as 32-bit unsigned, signed narrow values as
 
 - a narrow shift masks its amount to `w - 1` first, since the
   instruction masks to 31 and section 8.1 masks to `w - 1`;
-- signed division and modulo below v4 are a sequence around the
-  unsigned instructions that fixes the signs and the two special
-  cases of section 8.1; on v4 they are `sdiv` and `smod`.
+- signed division and modulo are `sdiv` and `smod` on v4; below v4
+  they need a sequence around the unsigned instructions that fixes
+  the signs and the two special cases of section 8.1, which is not
+  yet written, so under `--cpu v3` the compiler reports them as a
+  construct the target lacks (entry 32).
 
 The casts of section 8.1 are the table below, which is the first
 obligation of Lemma L made concrete: every cast is one of the
@@ -318,10 +337,15 @@ zero-extending for 16 and 32, and is what `bswap(w)` of LIR becomes.
 
 ### 5.1 Form
 
-`Step K : m -> m'` is a function of `m` for each kernel `K`, so the
-machine is deterministic per kernel, and `Star (Step K)` is its
-reflexive transitive closure. A run is the sequence from the loaded
-state to a halted state.
+`Step K : m -> m' | refused c` is a total function of `m` for each
+kernel `K`, so the machine is deterministic per kernel; `c` is the
+cause of the refusal, one constructor per item of 5.3 carrying the
+data that identifies the instance, and a step on a halted state is
+refused with the cause "halted". `Star (Step K)` is the reflexive
+transitive closure of the successful steps. A run is the sequence
+from the loaded state to a halted state. `Stuck m` is "not halted
+and refused", so the theorems speak of the predicate and the runner
+prints the cause (entry 33).
 
 ### 5.2 Selected rules
 
@@ -389,8 +413,9 @@ are exactly these, and each is a check the verifier makes:
    zero, or of locations of different regions;
 7. a context access that is not a row of the kind's table, or a
    write to a read-only row;
-8. a call whose argument does not fit its parameter kind, or a call
-   while a held row forbids it;
+8. a call whose argument does not fit its parameter kind, a handle
+   used other than as a map argument, or a call while a held row
+   forbids it;
 9. a release whose argument is not the innermost held object, or a
    lock acquired while a lock is held;
 10. an exit while the held stack is not empty, or with `r0` not a
@@ -406,8 +431,15 @@ lowering never produces a run that reaches any of it.
 
 A BIR program is one flat program per koit program, produced from
 closed LIR: a list of frame objects with sizes and alignments, a
-list of virtual registers with a class each, scalar or location, and
-an instruction array with labels. Well-formedness:
+list of virtual registers with a class each, scalar, location, or
+handle, and an instruction array with labels. The class is metadata
+for the allocation pass, not part of the instruction. The flattening
+reuses registers by LIR's block structure: a temporary made for an
+intermediate value is free again at the end of its statement, and
+two locals whose scopes are disjoint share a register, so the count
+is bounded by the locals in scope at once plus the temporaries of
+one statement, and the naive allocation of section 7 fits the corpus
+in the frame (entry 28). Well-formedness:
 
 - every register is written before it is read on every path, which
   the flattening guarantees from LIR's `let` discipline;
@@ -426,7 +458,11 @@ an instruction array with labels. Well-formedness:
 
 The semantics of BIR is the machine of section 2 with `R` over
 virtual registers and no clobbering at calls. There is no separate
-BIR semantics to write: one machine, two register files.
+BIR semantics to write: one `Step` over the one instruction syntax,
+parameterized by the convention, explicit call operands and `lea`
+admitted for BIR, the fixed five and clobbering for bytecode; the
+two are instances, and `alloc_correct` relates two instances of one
+function (entry 34).
 
 ## 7. Bytecode
 
@@ -445,7 +481,12 @@ allocation over `r6` to `r9` comes later as an untrusted pass with a
 verified checker, the way CompCert validates its own.
 
 **Labels.** Jump targets become signed instruction offsets; the long
-jump of v4 is used when an offset exceeds 16 bits.
+jump of v4 is used when an offset exceeds 16 bits, and under v3 such
+a program is rejected.
+
+**CPU version.** `--cpu v3|v4` selects, v3 the default, recorded in
+the object; v3 stands the shift pair in for `movsx` and `end` for
+`bswap`, and rejects signed division and modulo (entry 32).
 
 **Encoding.** One 64-bit word per instruction, `opcode:8 dst:4 src:4
 off:16 imm:32`, two words for `lddw`, with the opcode tables of the
@@ -453,8 +494,11 @@ kernel's `Documentation/bpf/standardization/instruction-set.rst`.
 Map references are `lddw` with the pseudo source register the
 loader recognizes, `BPF_PSEUDO_MAP_FD` for `mapref` and
 `BPF_PSEUDO_MAP_VALUE` for `mapval`, and a relocation naming the
-map. The decode-encode round trip is the one property of the encoder
-worth proving.
+map. Since a handle is a value and the map is an operand of the
+call, one BIR call is one bytecode call and the encoder is a word
+layout; the decode-encode round trip is the one property of it worth
+proving, and LLVM's BPF disassembler on the words is its independent
+check until a kernel is available (entries 29, 35).
 
 **Loading.** Two loaders serve two purposes. The first is a few
 hundred lines over the `bpf` system call: create the maps, with BTF
@@ -539,13 +583,16 @@ and is not needed for the paper.
    level, embedded by every level's state; each level extends the
    shared regions with its own; the builtins, the kernel call, and
    the protocol are one implementation every level calls (entry 30).
-2. Values are scalars or locations; null is the scalar zero;
-   pointers never become integers.
+2. Values are scalars, locations, or map handles; null is the
+   scalar zero; pointers never become integers; a handle is only ever
+   a map argument and spills like a location (entry 29).
 3. The verifier's safety conditions are the stuck states, listed in
-   5.3, and the list is the model's trusted content.
-4. Context fields are abstract; `data` and `data_end` yield packet
-   locations; division and shifts are total as the kernel patches
-   them.
+   5.3, and the list is the model's trusted content; `Step` names the
+   cause it refuses for, one constructor per item (entry 33).
+4. Context fields are abstract, a table of name, type, offset, and
+   writability per kind whose offsets no developer sees; `data` and
+   `data_end` yield packet locations; division and shifts are total
+   as the kernel patches them (entry 31).
 5. Map operations are builtins with Core's semantics; every other
    row goes through the kernel parameter, with the return convention
    of 2.4 derived from the row's result type.
@@ -553,12 +600,19 @@ and is not needed for the paper.
    uninitialized.
 7. The 32-bit normal form of section 4 and its cast table realize
    Lemma L's first obligation.
-8. cpu v3 is the target; v4's `movsx`, `sdiv`, `smod`, `bswap`, and
-   long jump are used when selected.
-9. The first allocation is naive and provable; a validated allocator
-   comes later.
+8. cpu v3 is the default, `--cpu v4` selects v4's `movsx`, `sdiv`,
+   `smod`, `bswap`, and long jump; signed division below v4 is
+   rejected until its sequence is written (entry 32).
+9. The first allocation is naive and provable, and the flattening
+   reuses virtual registers by block structure so that it fits
+   (entry 28); a validated allocator comes later.
 10. Two loaders, system call first, ELF and BTF second; both
     untrusted.
 11. The model is validated by differential runs, instruction replay,
     and the verifier's own verdicts, and a rejection that 5.3 does not
-    predict is a model bug.
+    predict is a model bug. Until the ELF writer and a kernel exist,
+    the Lean interpreter checks the passes and the disassembler
+    checks the encoder; neither checks the model (entry 35).
+12. One instruction syntax over a register type and a jump-target
+    type, one `Step` parameterized by the calling convention; BIR and
+    bytecode are its instances (entry 34).

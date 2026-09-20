@@ -1,7 +1,8 @@
 # The lowering: passes, theorems, and the plan of proof
 
 Status: draft 1, 2026-09-18, the third of the three documents that
-settle session 6 before code. `lir.md` defines the first intermediate
+settle session 6 before code; revised 2026-09-19 from `ISSUES.md`
+entries 28 to 35 at the start of session 7. `lir.md` defines the first intermediate
 language and `bir.md` the second together with the target machine.
 This one defines the passes between Core and bytecode, states what
 each preserves and how the statements compose into the compiler's
@@ -309,8 +310,12 @@ construct, the exit label of a block or the head label of a loop; an
 label; `raise k e` becomes a move of `e` into `v_reason` and a jump
 to `handler_k`; `return e` a move into `v_ret` and a jump to the
 program's exit sequence. Pure expressions become instruction
-sequences over fresh virtual registers, one per intermediate value,
-each ALU instruction at the class the width selects and each narrow
+sequences over virtual registers, one per intermediate value, taken
+from a pool that the end of each statement returns its temporaries
+to, and each LIR local gets a register that a later local of a
+disjoint scope may take over, so that the registers in use at any
+point are the locals in scope plus one statement's temporaries
+(entry 28); each ALU instruction at the class the width selects and each narrow
 result normalized as `bir.md` section 4 says; casts by the table
 there; `bswap` by `end`. Addresses become `alu` on a location
 register. `frame x : n` becomes a declared object and `lea`, with
@@ -327,9 +332,11 @@ are later selections with their own templates.
 
 `R_C st_L m` holds when `Agree` holds on the shared parts, the
 machine's `pc` is the label the derivation has reached, every LIR
-local of type `int(s,w)` bound to `v` is held by its virtual register
-in the 32-bit normal form of `v`, every local of type `ptr` bound to
-`loc(r, o, t)` is held as that location, except that a location into
+local in scope at that point of type `int(s,w)` bound to `v` is held
+by its virtual register in the 32-bit normal form of `v`, every such
+local of type `ptr` bound to `loc(r, o, t)` is held as that
+location, a local whose block has ended being unconstrained since
+its register may have been reused (entry 28), except that a location into
 an LIR stack region `stack(id)` is held as `loc(frame, base(id) + o,
 t)` with `base` the offset the flattening assigned to that frame
 object, and the frame's bytes at `base(id)` are the region's bytes.
@@ -592,10 +599,18 @@ belongs to session 8.
    Core has and only the dead branch of decision 48 beyond them.
 6. The one memory injection is pass C's placement of LIR stack
    regions in the frame.
+6a. Pass C reuses virtual registers by block structure and `R_C`
+   speaks of the locals in scope; pass D stays naive (entry 28).
+6b. A map is a value, the handle `mapref` yields, so that one BIR
+   call is one bytecode call and `encode_decode` holds as stated
+   (entry 29).
 7. Pass D is the naive allocation, proved as a plus simulation; a
    validated allocator later.
 8. Lemma L's syntactic part is a property of the translations and a
    runner check; its semantic part stays P9's conjecture.
 9. Every level has an interpreter and the runner compares adjacent
-   levels on the whole corpus.
+   levels on the whole corpus; the comparison against the kernel
+   under `BPF_PROG_TEST_RUN` waits for the ELF writer and CloudLab
+   in session 8, and LLVM's disassembler checks the encoder until
+   then (entry 35).
 10. Proofs by fragment, the picker first, passes D and C before B.
