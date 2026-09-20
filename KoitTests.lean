@@ -10,3 +10,4 @@ import KoitTests.Move
 import KoitTests.Guards
 import KoitTests.Interp
 import KoitTests.Lower
+import KoitTests.BPF

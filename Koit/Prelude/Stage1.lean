@@ -24,8 +24,11 @@ def xdpRow : KindRow :=
     sugar := [("pass", "PASS"), ("drop", "DROP"), ("tx", "TX"),
               ("abort", "ABORTED")],
     defaultExit := .verdict "ABORTED", sleep := false,
-    ctx := [{ name := "ingress_ifindex", ty := tU32, writable := false },
-            { name := "rx_queue_index", ty := tU32, writable := false }] }
+    -- the offsets of `struct xdp_md`
+    ctx := [{ name := "ingress_ifindex", ty := tU32, offset := 12, writable := false },
+            { name := "rx_queue_index", ty := tU32, offset := 16, writable := false }],
+    ctxBounds := [{ name := "data", offset := 0, isEnd := false },
+                  { name := "data_end", offset := 4, isEnd := true }] }
 
 /-- `TC_ACT_*`, include/uapi/linux/pkt_cls.h; `UNSPEC` is -1 as a
 `u32`. `struct __sk_buff` fields per `tc_cls_act_is_valid_access`, of
@@ -37,9 +40,12 @@ def tcRow : KindRow :=
                  ("PIPE", 3), ("REDIRECT", 7)],
     sugar := [("pass", "OK"), ("drop", "SHOT")],
     defaultExit := .verdict "SHOT", sleep := false,
-    ctx := [{ name := "mark", ty := tU32, writable := true },
-            { name := "priority", ty := tU32, writable := false },
-            { name := "ifindex", ty := tU32, writable := false }] }
+    -- the offsets of `struct __sk_buff`
+    ctx := [{ name := "mark", ty := tU32, offset := 8, writable := true },
+            { name := "priority", ty := tU32, offset := 32, writable := false },
+            { name := "ifindex", ty := tU32, offset := 40, writable := false }],
+    ctxBounds := [{ name := "data", offset := 76, isEnd := false },
+                  { name := "data_end", offset := 80, isEnd := true }] }
 
 /-- `BPF_PROG_TYPE_SYSCALL`: no packet, an `i32` result, opaque
 context, sleepable. -/

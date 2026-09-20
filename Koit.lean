@@ -35,6 +35,12 @@ import Koit.LIR.Wf
 import Koit.LIR.State
 import Koit.LIR.Semantics
 import Koit.LIR.Interp
+import Koit.BPF.Syntax
+import Koit.BPF.State
+import Koit.BPF.Semantics
+import Koit.BPF.Interp
+import Koit.BPF.Print
+import Koit.BPF.Wf
 import Koit.Compile.Fold
 import Koit.Compile.Lower
 import Koit.Compile.Inline

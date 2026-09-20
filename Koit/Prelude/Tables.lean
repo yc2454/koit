@@ -44,11 +44,27 @@ inductive DefaultExit where
   | value (v : Int)
   deriving Repr, Inhabited
 
-/-- Table 2, one context field. -/
+/-- Table 2, one context field the source can name: `ctx.f`. -/
 structure CtxField where
   name     : String
   ty       : Ty
+  /-- The field's offset in the kernel's context struct, in bytes,
+  which the lowering emits and the target machine checks; no
+  source-level surface shows it. The width is the type's. -/
+  offset   : Nat
   writable : Bool
+  deriving Repr, Inhabited
+
+/-- Table 2, the other rows of a packet kind's context: `data` and
+`data_end`, which the kernel converts to packet pointers when a
+program loads them. They are rows of the same table by offset, so
+that the machine admits the load, but the source never names them;
+it reaches the packet through views. -/
+structure CtxBound where
+  name   : String
+  offset : Nat
+  /-- The end of the packet rather than its start. -/
+  isEnd  : Bool
   deriving Repr, Inhabited
 
 structure KindRow where
@@ -71,6 +87,8 @@ structure KindRow where
   pktWritable : Bool := false
   sleep : Bool
   ctx : List CtxField
+  /-- The location-yielding rows of a packet kind's context. -/
+  ctxBounds : List CtxBound := []
   deriving Repr, Inhabited
 
 /-! ### Table 3, calls -/
