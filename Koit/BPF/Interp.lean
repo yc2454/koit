@@ -1,4 +1,5 @@
 import Koit.BPF.Semantics
+import Koit.Core.Interp
 
 /-!
 The executable form of the machine: `step` iterated under a fuel
@@ -39,6 +40,34 @@ def run (X : Env ρ τ) (K : Kernel) (m : State ρ) : Nat → Except Refusal (Ha
       match step X K m with
       | .ok m' => run X K m' fuel
       | .error c => .error { cause := c, pc := m.pc }
+
+/-- A unit's programs run in order over one map state on the machine,
+each from its own environment, reporting as Core's `runUnit` does so
+that the runner compares the levels line by line. -/
+def runUnit (pre : Prelude) (core : Core.CompUnit) (progs : List (Env ρ τ))
+    (packet : ByteArray) (ctx : List (String × Nat)) (only : Option String) (fuel : Nat) :
+    Except String (List Core.Sem.Report × List String) := do
+  let env : Check.Env := { prelude := pre, license := core.license.map (·.2),
+                           types := core.types, consts := core.consts,
+                           configs := core.configs, maps := core.maps, fns := core.fns,
+                           contracts := core.contracts }
+  let mut maps ← Core.Sem.initMaps env core
+  let mut reports : List Core.Sem.Report := []
+  for X in progs do
+    if only.isSome && only != some X.prog.name then continue
+    let st : Machine.State := { maps, packet }
+    match run X Machine.synthetic (load X st ctx) fuel with
+    | .ok h =>
+      maps := h.state.machine.maps
+      let (s, w) := match X.kind.verdictTy with
+        | .int _ s w => (s, w)
+        | _ => (false, 32)
+      reports := reports ++ [{ program := X.prog.name,
+                               verdict := Core.Sem.verdictName X.kind
+                                 (Core.Sem.Val.mkInt s w h.verdict),
+                               log := h.state.machine.log }]
+    | .error r => throw s!"`{X.prog.name}` {r.describe}"
+  return (reports, Core.Sem.printMaps env maps)
 
 /-- The run agrees with the relation: a halt it reaches is a `Star`
 to a halted state. Stated now, proved after the design settles. -/

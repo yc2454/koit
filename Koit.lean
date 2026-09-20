@@ -45,4 +45,5 @@ import Koit.Compile.Fold
 import Koit.Compile.Lower
 import Koit.Compile.Inline
 import Koit.Compile.CPrint
+import Koit.Compile.Flatten
 import Koit.Compile.Rules

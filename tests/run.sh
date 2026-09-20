@@ -24,10 +24,12 @@
 # it. The err files in LATER, empty since session 5, are skipped at
 # the check stage. At the run stage every ok file must also run to a
 # verdict on an empty packet. At the lower stage every ok and run
-# unit must lower, with and without inlining, and `koitc run --lir`
-# must print what `koitc run` prints, before and after inlining. At
-# the emit stage every ok and run unit must emit C and, when clang
-# with the BPF target is present, that C must build.
+# unit must lower, with and without inlining, `koitc run --lir` must
+# print what `koitc run` prints, before and after inlining, and
+# `koitc run --bir` must print it too on the flattened unit under cpu
+# v4, and under v3 unless the unit needs v4's signed division. At the
+# emit stage every ok and run unit must emit C and, when clang with
+# the BPF target is present, that C must build.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
@@ -169,6 +171,25 @@ if at_least lower; then
     if ! cmp -s "$TMP/core" "$TMP/out"; then
       echo "    core:"; sed 's/^/      /' "$TMP/core"
       failed inlined-differs "$f"; continue
+    fi
+    # the machine on the flattened unit: v4 must agree; v3 must agree
+    # or report the signed division the target lacks
+    # shellcheck disable=SC2086
+    if ! "$KOITC" run --bir --cpu v4 $opts "$f" >"$TMP/out" 2>&1; then
+      failed run-bir "$f"; continue
+    fi
+    if ! cmp -s "$TMP/core" "$TMP/out"; then
+      echo "    core:"; sed 's/^/      /' "$TMP/core"
+      failed bir-differs "$f"; continue
+    fi
+    # shellcheck disable=SC2086
+    if "$KOITC" run --bir --cpu v3 $opts "$f" >"$TMP/out" 2>&1; then
+      if ! cmp -s "$TMP/core" "$TMP/out"; then
+        echo "    core:"; sed 's/^/      /' "$TMP/core"
+        failed bir-v3-differs "$f"; continue
+      fi
+    elif ! grep -q "need cpu v4" "$TMP/out"; then
+      failed run-bir-v3 "$f"; continue
     fi
     pass=$((pass + 1))
   done

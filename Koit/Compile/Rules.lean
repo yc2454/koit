@@ -1,5 +1,6 @@
 import Koit.Compile.Lower
 import Koit.Compile.Inline
+import Koit.Compile.Flatten
 import Koit.LIR.Interp
 
 /-!
@@ -152,6 +153,35 @@ theorem inline_correct (pre : Prelude) (U : LIR.CompUnit) (K : Kernel) :
     ∀ st v st', LIR.Sem.ExecProgram K U.fns st P (.halt v) st' →
       ∃ st'', LIR.Sem.ExecProgram K [] st P' (.halt v) st'' ∧
               Agree st'.machine st''.machine := by
+  sorry
+
+/-! ### Theorem C -/
+
+/-- The verdict pattern of a Core value at its width, what the
+machine halts with. -/
+def verdictPattern : Val → Nat
+  | .int _ w x _ => Machine.toNatMod x w
+  | .be w x => Machine.toNatMod x w
+  | .bool b => if b then 1 else 0
+  | .loc _ => 0
+
+/-- The context values of an LIR state, as the machine loads them. -/
+def ctxValues (st : LIR.Sem.State) : List (String × Nat) :=
+  st.ctx.map fun (f, v) => (f, verdictPattern v)
+
+/-- Theorem C, `flatten_correct`: a halting run of a closed LIR
+program is matched by a run of the machine on its flattening, from
+the loaded state to a halted one with the same verdict, the shared
+state agreeing. `R_C`, the relation the induction carries, holds the
+locals in scope in their registers in normal form and LIR's stack
+regions in the frame at the objects' bases. -/
+theorem flatten_correct (pre : Prelude) (cpu : BPF.Cpu) (P : LIR.Program) (B : BPF.BIR)
+    (K : Kernel) :
+    flattenProgram pre cpu P = .ok B →
+    ∀ st v st', LIR.Sem.ExecProgram K [] st P (.halt v) st' →
+      ∀ X, birEnv pre st.env B = .ok X →
+        ∃ m, BPF.Star X K (BPF.load X st.machine (ctxValues st)) m ∧
+             BPF.Halted X m (verdictPattern v) ∧ Agree st'.machine m.machine := by
   sorry
 
 end Koit.Compile

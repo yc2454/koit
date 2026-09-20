@@ -28,8 +28,10 @@ def usage : String := String.intercalate "\n"
    "          --ctx FIELD=N    a context field's value (default: 0)",
    "          --fuel N         the step budget (default: 100000)",
    "          --lir [--inline] run the lowered unit instead of Core",
+   "          --bir            run the flattened unit on the machine",
+   "          --cpu v3|v4      the instruction set the machine offers",
    "  lower   check FILE, then print its LIR; --inline removes the",
-   "          functions",
+   "          functions; --bir prints the flattened unit",
    "  emit    check FILE, then print the C of its LIR"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
@@ -97,7 +99,9 @@ structure RunOpts where
   ctx     : List (String × Nat) := []
   fuel    : Nat := 100000
   lir     : Bool := false
+  bir     : Bool := false
   inline  : Bool := false
+  cpu     : BPF.Cpu := .v3
   file    : Option String := none
 
 partial def runOpts : List String → RunOpts → Option RunOpts
@@ -115,6 +119,9 @@ partial def runOpts : List String → RunOpts → Option RunOpts
     | _ => none
   | "--fuel" :: n :: rest, o => do runOpts rest { o with fuel := ← n.toNat? }
   | "--lir" :: rest, o => runOpts rest { o with lir := true }
+  | "--bir" :: rest, o => runOpts rest { o with bir := true }
+  | "--cpu" :: "v3" :: rest, o => runOpts rest { o with cpu := .v3 }
+  | "--cpu" :: "v4" :: rest, o => runOpts rest { o with cpu := .v4 }
   | "--inline" :: rest, o => runOpts rest { o with inline := true }
   | [file], o => if file.startsWith "--" then none else some { o with file := some file }
   | _, _ => none
@@ -126,6 +133,21 @@ def lowerUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
   let lir := if inline then Compile.inline lir else lir
   LIR.wf pre lir |>.mapError (s!"the lowered unit is not well-formed: " ++ ·)
   return lir
+
+/-- A checked unit flattened: passes A, B, I, and C, with the
+machine's environment for each program. -/
+def flattenUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
+    (cpu : BPF.Cpu) : Except String (List (BPF.Env BPF.VReg BPF.Label)) := do
+  let lir ← lowerUnit pre core checked true
+  let birs ← Compile.flatten pre cpu lir
+  let env : Check.Env := { prelude := pre, license := core.license.map (·.2),
+                           types := core.types, consts := core.consts,
+                           configs := core.configs, maps := core.maps, fns := core.fns,
+                           contracts := core.contracts }
+  birs.mapM fun B => do
+    let X ← Compile.birEnv pre env B
+    BPF.wf X |>.mapError (s!"the flattened `{B.name}` is not well-formed: " ++ ·)
+    return X
 
 /-- A checked unit, or its diagnostic. -/
 def checkFile (file : String) (pre : Prelude) :
@@ -189,7 +211,11 @@ def run (args : List String) : IO UInt32 := do
     let some file := opts.file | do IO.eprint usage; return 2
     let some pre ← preludeFor opts.kernel | return 2
     let some (core, checked) ← checkFile file pre | return 1
-    let result ← if opts.lir then
+    let result ← if opts.bir then
+        match flattenUnit pre core checked opts.cpu with
+        | .ok progs => pure (BPF.runUnit pre core progs opts.packet opts.ctx opts.program opts.fuel)
+        | .error m => pure (.error m)
+      else if opts.lir then
         match lowerUnit pre core checked opts.inline with
         | .ok lir => pure (LIR.Sem.runUnit pre core lir opts.packet opts.ctx opts.program opts.fuel)
         | .error m => pure (.error m)
@@ -208,9 +234,20 @@ def run (args : List String) : IO UInt32 := do
     let (inline, rest) := match rest with
       | "--inline" :: rest => (true, rest)
       | rest => (false, rest)
+    let (bir, rest) := match rest with
+      | "--bir" :: rest => (true, rest)
+      | rest => (false, rest)
     let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
     let some pre ← preludeFor tag | return 2
     let some (core, checked) ← checkFile file pre | return 1
+    if bir then
+      match flattenUnit pre core checked .v3 with
+      | .ok progs =>
+        for X in progs do IO.print (BPF.BIR.print X.prog)
+        return 0
+      | .error m =>
+        IO.eprintln s!"{file}: {m}"
+        return 1
     match lowerUnit pre core checked inline with
     | .ok lir =>
       IO.print lir.print
