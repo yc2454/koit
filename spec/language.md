@@ -1654,8 +1654,13 @@ negative return of the last helper that failed, which `errno` reads;
 and the trace, the kernel calls made so far in order, each with its
 row, its arguments, and its answer, and each `printk` with its format
 and arguments, an untyped argument settled to `u64`; a held spin lock
-carries the lock's place as its object, as a record or a socket
-carries its own. A row with no effects that reads the context, such as
+carries the lock's map slot and offset as its object, as a record or
+a socket carries its kernel object, and a memory argument is traced
+as the bytes the kernel received. The map store, the packet and its
+token, the kernel objects, the held set read as rows and objects,
+and the trace are the part of the state every level of the lowering
+shares as one definition; the frame, the named context, and `errno`
+are Core's own (decision 54). A row with no effects that reads the context, such as
 `pkt.len`, goes through the kernel like any other, so that the trace
 lists every row called. Values are scalars: a fixed-width integer reduced to
 its type's range, a byte-order value, a boolean, or the location of a
@@ -2017,6 +2022,11 @@ end of the session that lowered Core to LIR:
 53. The evaluator's failures carry the state they left: a map
     written before a `fail` stays written when the handler runs, as
     the rules always said (entry 27, a correction of the evaluator).
+54. The shared state of 19.1 is one definition with no location of
+    any level in it: a held object is a map slot and offset or a
+    kernel object, a traced memory argument is bytes; Core's regions
+    extend the shared ones with the struct literals' frames (entry
+    30, 2026-09-19).
 
 Open questions, with the default the checker implements until decided:
 

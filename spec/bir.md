@@ -63,7 +63,12 @@ for the packet region only and is compared at every access.
 
 ### 2.2 Memory
 
-The regions are Core's, with the frame added:
+The machine's memory, the part every level addresses alike, is three
+regions: map slots, the packet, and kernel objects. Each level adds
+its own: Core its numbered struct literals, BIR and bytecode the
+frame and the context. A location over a shared region means the
+same bytes at every level; a location over a level's own region
+exists at that level only (`ISSUES.md`, entry 30). The rows:
 
 | region | size | contents | made by |
 |---|---|---|---|
@@ -155,17 +160,24 @@ appends an event to the trace.
 ### 2.5 Protocol state and the trace
 
 The held stack is a list of entries `(row, object)`, innermost
-first, pushed and popped by the builtins and rows above. The packet
+first, pushed and popped by the builtins and rows above. The object
+is described without a location of any level: a lock by its map slot
+and offset, a record or a socket by its kernel object. The packet
 token is a counter changed only by rows with `resize`. The trace is
 a list of events:
 
 ```
-ev ::= call row [v_i] (ok v? | failed n) | print fmt [v_i]
+ev ::= call row [a_i] (ok v? | failed n) | print fmt [v_i]
+a   ::= a scalar | the bytes a memory argument pointed at
 ```
 
-Both are part of the shared state, so Core's run and the machine's
-append the same events in the same order, and the theorem asks for
-equality of traces (`ISSUES.md`, entry 24).
+A memory argument is recorded as the bytes the kernel received,
+sized by the row's parameter kind, never as a location, since the
+kernel observes bytes and the levels name regions differently. Both
+the stack and the trace are part of the shared state, so Core's run
+and the machine's append the same events in the same order, and the
+theorem asks for equality of traces (`ISSUES.md`, entries 24 and
+30).
 
 ### 2.6 Machine states, loading, halting
 
@@ -522,7 +534,11 @@ and is not needed for the paper.
 ## 10. Decisions this draft embeds
 
 1. One machine for BIR and bytecode, and the same shared state as
-   Core: maps, packet, token, held stack, trace.
+   Core: maps, packet, token, kernel objects, held stack, trace. The
+   shared state is one definition containing no location of any
+   level, embedded by every level's state; each level extends the
+   shared regions with its own; the builtins, the kernel call, and
+   the protocol are one implementation every level calls (entry 30).
 2. Values are scalars or locations; null is the scalar zero;
    pointers never become integers.
 3. The verifier's safety conditions are the stuck states, listed in

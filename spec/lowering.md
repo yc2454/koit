@@ -23,8 +23,13 @@ Five semantic passes, A, B, I, C, and D; one encoding, E; one
 printer, P. Three languages, Core, LIR, and BIR, and one machine
 under all of them, whose state is shared verbatim across every pass:
 maps, packet, layout token, kernel objects, held stack, trace
-(`bir.md`, section 2). No pass owns a memory model of its own, and
-the relation between two levels speaks only of locals and registers.
+(`bir.md`, section 2). "Verbatim" is literal: the shared state is
+one definition, containing no location of any level, that each
+level's state holds as a field beside its private half, and the
+builtins, the kernel call, and the protocol are one implementation
+every level's semantics calls (`ISSUES.md`, entry 30). No pass owns
+a memory model of its own, and the relation between two levels
+speaks only of locals and registers.
 
 | pass | from, to | settles | leaves open |
 |---|---|---|---|
@@ -64,11 +69,13 @@ checker accepts.
 
 ### 2.2 The relation between states
 
-`Agree st m` holds between a Core state and a machine state when the
-shared parts are equal: the maps, the packet and its token, the
-kernel objects and rings, the trace, and the held stack read as its
-rows and objects, names dropped. Locals and registers are not
-mentioned: at a halt they no longer matter. The per-pass relations
+`Agree st m` holds between a Core state and a machine state when
+their shared states are equal, one equality of one structure: the
+maps, the packet and its token, the kernel objects and rings, the
+trace with memory arguments as bytes, and the held stack as rows and
+objects described without locations (`bir.md`, 2.5). Locals,
+registers, each level's private regions, and Core's named context
+are not mentioned: at a halt they no longer matter. The per-pass relations
 of sections 3 to 7 refine `Agree` with what each level keeps of the
 locals.
 
@@ -329,7 +336,12 @@ object, and the frame's bytes at `base(id)` are the region's bytes.
 This last clause is the one injection in the whole lowering, from
 LIR's many small stack regions into the machine's one frame; it is
 simple because the regions are disjoint by construction and never
-escape.
+escape, and because nothing in the shared state refers to them: a
+held object and a traced argument are recorded without locations,
+so the injection touches locals and the frame only (entry 30). The
+context is the other private part: LIR binds fields by name, the
+machine holds bytes at the kind's offsets, and `R_C` relates the two
+per row of the context table.
 
 ### 6.3 Theorem C
 
@@ -570,9 +582,10 @@ belongs to session 8.
    on LIR so that flattening never sees a call.
 2. Preservation is equality of the unique behavior per kernel, on the
    precondition that the checker accepted the unit.
-3. `Agree` is equality of the shared state with the held stack read
-   as rows and objects; per-pass relations add only locals and
-   registers.
+3. `Agree` is equality of the shared state, one structure with no
+   location of any level in it, the held stack as rows and objects
+   and traced memory arguments as bytes; per-pass relations add only
+   locals, registers, and each level's private regions (entry 30).
 4. Pass B lowers impure expressions to administrative normal form in
    Core's evaluation order and pure ones directly.
 5. Pass B uses Lemmas W, M, and H, and never T2; it emits every test
