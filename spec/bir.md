@@ -106,7 +106,8 @@ each byte initialized or not. The rules are the verifier's:
   none to belong to a spilled slot;
 - the frame starts with every byte uninitialized.
 
-**The context** is a table of fields per kind, from the prelude: for
+**The context** is a table of fields per kind, from the kernel
+interface: for
 each field its name, its type, its offset in bytes, and whether it
 is writable; the width is the type's. Every row is readable, since a
 field the source may not read is not a row, and a load or store at

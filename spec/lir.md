@@ -402,7 +402,7 @@ the order of effects is Core's.
 | `break`, `continue` | `br` to the loop's enclosing block, `br` to the body's block |
 | `return e`, a verdict | `return e` |
 | `if c s1 s2`, `c` constant | the live branch alone |
-| `size T`, `config`, verdict and prelude constants, `hton k` | immediates |
+| `size T`, `config`, verdict and interface constants, `hton k` | immediates |
 | `x = atomic op p e...` | `x = atomic op(s,w) fetch (a, e...)`; on a scalar local, a read and a store, since a local is the program's alone |
 | `ctx.f := e` | `ctx f <- e` |
 | `let _ = call f(...)` | `call f(...) unwind { ... }` |

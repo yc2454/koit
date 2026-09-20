@@ -139,7 +139,7 @@ ExecProgram K st p (halt v) st'                                  Core
 ## 3. Pass A: fold and select
 
 **Definition.** On a checked unit, with the build's configuration:
-every `config` name and `size T` and verdict and prelude constant
+every `config` name and `size T` and verdict and interface constant
 becomes a literal; every `ite` whose condition is a constant
 expression becomes its live branch, both having been checked; every
 `array[1]` map is marked for direct value access and every other map
@@ -153,7 +153,7 @@ Nothing else changes. The output is Core.
 
 **Proof shape.** Induction on the derivation, one case per rule. A
 constant evaluates to its value by the rules `varConst`, `varConfig`,
-`varVerdict`, `varPrelude`, and `size`; a folded `ite` takes the
+`varVerdict`, `varInterface`, and `size`; a folded `ite` takes the
 branch the condition's value selects. The map marking changes no
 rule. This is the free pass, and it is separate so that B never sees
 a constant or a dead branch.
@@ -626,9 +626,18 @@ every level unchanged. The words have one reader that is not ours
 before a kernel is: when `llvm-mc` is present, the runner requires
 that the words disassemble to the bytecode printed in LLVM's syntax
 and that this text assembles back to the words, under both cpus; the
-tool is optional and its absence is noted, never a failure. The last comparison, bytecode against the
-kernel under `BPF_PROG_TEST_RUN`, is the model's validation and
-belongs to session 8.
+tool is optional and its absence is noted, never a failure. The last
+comparison, bytecode against the kernel under `BPF_PROG_TEST_RUN`,
+is the model's validation: the same program on the same packet,
+executed by the Lean bytecode interpreter and by the kernel, and
+three things compared, the verdict, the packet after the run, and
+every map's contents read back afterwards; the trace is not, since
+the kernel has none. A unit whose helpers the synthetic kernel
+answers by fiat, the clock or a socket lookup, compares verdicts
+only, and a unit the target's verifier is expected to refuse says so
+with the stuck-state cause of `bir.md` 5.3 it matches; any other
+refusal is a model bug or an entry. The stage is opt-in, needs a
+host with the kernel, and never builds Lean there.
 
 ## 13. Decisions this draft embeds
 

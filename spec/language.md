@@ -9,9 +9,9 @@ re-derived the mechanisms against the kernel's own state
 1. One runtime coercion, `e as T?` for a refinement type `T`, is the
    only way to establish a fact at runtime; `check P` is sugar for it
    (sections 8.3, 10.4, 18.4).
-2. `with` is renamed `hold`; resource constructors after it are prelude
+2. `with` is renamed `hold`; resource constructors after it are interface
    names, not keywords (sections 5, 11).
-3. Ownership: `own T` in prelude signatures, and `move x` as the one
+3. Ownership: `own T` in interface signatures, and `move x` as the one
    sanctioned escape of a place, with join consistency instead of
    runtime flags (sections 7, 11.5, 18.4).
 4. Guards: a place's validity may be tied to a held resource or to the
@@ -36,7 +36,7 @@ re-derived the mechanisms against the kernel's own state
 12. Slot types: the storage side of M3 is a table like the acquisition
     side; `spinlock` is its one stage-1 row, not a keyword (sections
     5, 7, 11, 18.1).
-13. The prelude's six tables are specified: kinds, context fields,
+13. The kernel interface's six tables are specified: kinds, context fields,
     calls, resources, regions, slots; the target kernel is a compiler
     input; `const` parameters; sleepable kinds as rows; the trusted
     columns (sections 6, 7, 12, 13, 16, 20).
@@ -81,8 +81,9 @@ entry numbers are that file's):
    must exit (entry 1; sections 9, 13).
 4. A function body may end in an expression, its result (entry 7;
    sections 9, 16).
-5. The prelude is a table the compiler carries, hand-written for stage
-   1; protocol numbers are prelude constants (entry 5; section 6).
+5. The kernel interface is a table the compiler carries, hand-written
+   for stage 1; protocol numbers are interface constants (entry 5;
+   section 6).
 6. The newline rule's scope, `else` placement, and `abort` (entry 6;
    sections 5, 9).
 
@@ -98,8 +99,8 @@ Revisions folded on 2026-09-14 from `ISSUES.md`:
    scalar (entry 9; sections 7, 16).
 4. One spelling of the header fields across the documents, the
    kernel's (`protocol`, `source`, `dest`); the socket lookups take the
-   tuple only, of the prelude type `SockTuple` (entry 4; sections 11.2,
-   11.5, 23.3).
+   tuple only, of the interface type `SockTuple` (entry 4; sections
+   11.2, 11.5, 23.3).
 5. The `except` list of `preserve maps` runs to the end of the clause;
    a block comment spanning lines counts as a newline (entry 10;
    sections 5, 14.1).
@@ -119,6 +120,14 @@ Revisions folded on 2026-09-19 from `ISSUES.md` entries 25 to 27:
    killed equation said of its other side (section 18.4).
 2. The machine's trace and held stack in the form every level of the
    lowering shares (section 19.1).
+
+Revision folded on 2026-09-20 from `ISSUES.md` entry 40, at the start
+of session 8:
+
+1. The prelude is renamed the kernel interface; each of its rows has
+   a koit side, written by hand, and a kernel side, transcribed from
+   the kernel tree and checked against the koit side in the build;
+   Q10 closed (sections 6, 13, 20, 21).
 
 Reading guide. Sections 2 to 17 are the surface language and can become
 the manual. Sections 18 to 20 are the formal part. Section 23 gives the
@@ -181,7 +190,7 @@ The verifier still checks; it no longer has to discover.
 | a held spin lock and the calls forbidden under it | typestate, effect restrictions | resource table |
 | packet pointers invalidated by a resize | capability revocation | view invalidation |
 | bounded loops walked to convergence | termination checking | declared bounds |
-| helper prototypes | function types with effects | prelude signatures |
+| helper prototypes | function types with effects | interface signatures |
 | branch refinement | path-sensitive typing | facts from conditions |
 | pruning by state subsumption | subtyping | entailment |
 
@@ -335,19 +344,29 @@ comparisons, non-associative; `&&`; `||`.
 ## 6. Compilation units and declarations
 
 A file is one compilation unit and compiles to one object whose programs
-share the unit's maps. A prelude of header types, kernel function
-signatures, slot types, and the six tables of section 13 is generated
-from the kernel and supplied by the compiler for the kernel the unit is
-compiled for, named by the compiler's `--kernel` option; stage 1 has
-one, `v7.0`. A call, kind, or slot the target kernel lacks is a type
-error naming that kernel. The prelude is a table the compiler carries,
-not a source file: for stage 1 it is written by hand for `xdp`, `tc`,
-and `syscall` and the helpers the examples call, and the generator
-later emits the same table. Protocol and ethertype numbers such as
-`IPPROTO_UDP` and `ETH_P_IP` are prelude constants. Declarations are
-visible throughout the unit. The prelude is an outer scope: a
-declaration of the unit with the same name as a prelude constant or
-type shadows it.
+share the unit's maps. The kernel interface, header types, kernel
+function signatures, slot types, and the six tables of section 13, is
+what the kernel offers a program of each kind as koit states it; the
+compiler carries one per kernel it can compile for, named by its
+`--kernel` option; stage 1 was written under the label `v7.0` with
+no kernel behind it, and the first kernel a program loads on is
+`v6.8`, the stock kernel of a rented node, with `v7.0` following once
+a kernel is built there (entry 42). A call, kind, or slot the
+target kernel lacks is a type error naming that kernel. The interface
+is a table the compiler carries, not a source file, and each of its
+rows has two sides (decision 58): the koit side, which is written by
+hand and decides how the kernel's operation is typed, and the kernel
+side, which a tool transcribes from the kernel's own sources for the
+version and which the build checks the koit side against. Protocol
+and ethertype numbers such as `IPPROTO_UDP` and `ETH_P_IP` are
+interface constants. Declarations are visible throughout the unit.
+The interface is an outer scope: a declaration of the unit with the
+same name as an interface constant or type shadows it. The compiler
+prints the koit side of the interface for a kernel, or for one kind,
+in a documentation form that reuses this grammar's signatures and
+adds a call's effects, failure kind, acquisition, availability, and
+GPL mark as clauses; the form is not source and is not read back
+(entry 45).
 
 ```
 Unit      ::= LicenseDecl? Item*
@@ -398,14 +417,14 @@ Type      ::= IntType | 'bool' | Ident
             | '{' Ident ':' Type '|' Pred '}'
             | Type '[' Expr ']'
             | 'ref' Type | 'view' Type | Type '?'
-            | 'own' Type                      -- prelude signatures only
+            | 'own' Type                      -- interface signatures only
 Field     ::= Ident ':' Type ('where' Pred)?
 IntType   ::= 'u8' | 'u16' | 'u32' | 'u64' | 'i8' | 'i16' | 'i32' | 'i64'
             | 'be16' | 'be32' | 'be64'
 ```
 
-An `Ident` names a declared type, a prelude type such as `Sock`, or a
-slot type such as `spinlock`.
+An `Ident` names a declared type, an interface type such as `Sock`,
+or a slot type such as `spinlock`.
 
 **Integers.** `uN` and `iN` are fixed-width with wrapping arithmetic
 modulo 2^N. No implicit widening or narrowing.
@@ -431,7 +450,7 @@ type, subject to the slot's row.
 map value, a global-data section, or an allocated object: locks,
 timers, work queues, list and tree heads and nodes, reference counts,
 and kernel-pointer fields. koit calls them slot types. A slot type is an
-opaque type supplied by the prelude's slot table and named like any
+opaque type supplied by the interface's slot table and named like any
 type. It has a size and an alignment; it is not data, so a place of a
 slot type is never read, written, copied, compared, viewed, or refined;
 it appears only where its row allows; a row marked unique admits one
@@ -492,7 +511,7 @@ with the `resize` effect drops the token and kills every live view.
 
 **Owned references.** `own T` is the type of a reference the program is
 responsible for releasing: the result of a kernel function the kernel
-marks as acquiring. It appears only in prelude signatures. User code
+marks as acquiring. It appears only in interface signatures. User code
 obtains one by binding it with `hold` (section 11) and disposes of it
 either by letting the scope release it or by handing it to a sink with
 `move` (section 11.5). `T` is the type of the place the reference
@@ -813,8 +832,8 @@ of the acquiring kernel function (`sk_lookup_tcp(t)`).
 
 ### 11.2 The resource table
 
-Everything after `hold` is a row of this table, supplied by the
-prelude for the kernel version the unit targets; the core knows only
+Everything after `hold` is a row of this table, supplied by the kernel
+interface for the kernel version the unit targets; the core knows only
 the columns. Rows in this draft:
 
 | resource | acquisition | argument | can fail | normal exit | abnormal exit | forbidden while held | nesting | class | guards |
@@ -824,7 +843,7 @@ the columns. Rows in this draft:
 | preempt-off | `preempt_off` | none | no | enable | enable | `sleep` | yes, counted | | |
 | IRQ-off | `irq_off` | none | no | restore | restore | `sleep` | yes, LIFO | native or lock; a flag saved by one class cannot be restored by the other | |
 | ring-buffer record | `rb.reserve<T>()`, yields `own T` | the ring buffer and the record type | yes, `helper` | submit | discard | none | yes | | |
-| socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the prelude type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `missing` | release | release | none | yes | | |
+| socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the interface type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `missing` | release | release | none | yes | | |
 
 Rows the extensions add with no change to the core: resilient locks,
 whose acquisition can fail; kernel iterators, generic over the iterated
@@ -942,8 +961,8 @@ packet-changing helpers, demotion of RCU pointers to untrusted at
 unlock, and the requirement that a graph node be accessed under the
 lock of its allocation.
 
-**The region table.** A region is a row the prelude supplies; the core
-knows only the columns:
+**The region table.** A region is a row the kernel interface supplies;
+the core knows only the columns:
 
 | column | meaning |
 |---|---|
@@ -965,8 +984,10 @@ packet is read-only is a type error at the store.
 ## 13. Programs, contexts, verdicts
 
 `program name : kind [implements C] clause* [fail exit] handler* { body }`.
-The body sees `pkt` in packet kinds and `ctx` in all kinds. `ctx` field
-tables are generated from the kernel's context-access rules.
+The body sees `pkt` in packet kinds and `ctx` in all kinds. The `ctx`
+field tables follow the kernel's context-access rules: names, types,
+and writability are their koit side, offsets their kernel side
+(decision 58).
 
 | kind | `pkt` | `ctx` fields in this draft | verdicts | sugar | default failure | `sleep` |
 |---|---|---|---|---|---|---|
@@ -977,14 +998,32 @@ tables are generated from the kernel's context-access rules.
 The context table carries, besides each field's name, type, and
 writability, its offset in the kernel's layout, which the lowering
 and the target machine read and no source-level surface shows
-(decision 55). A kind's row is one of six tables the prelude carries for a kernel:
-kinds, context fields per kind, calls with their signatures and effects
-and availability per kind, resources, regions, and slots. A call row
-also carries its kernel implementation: a helper by number or a kfunc
-by name, with the layout of the kernel's arguments relative to koit's,
-or the mark that the kernel computes the row inline, as it does
-`pkt.len` and the checksum rows; the lowering and the target machine
-read it and no source-level surface shows it (decision 57). The `pkt`
+(decision 55). A kind's row is one of six tables the kernel interface
+carries for a kernel: kinds, context fields per kind, calls with their
+signatures and effects and availability per kind, resources, regions,
+and slots. Every row has a koit side and a kernel side (decision 58).
+The koit side is written by hand and holds the decisions: a kind's
+verdicts, default failure, and packet access; a context field's name,
+type, and writability; a call's signature, effects, failure kind, and
+acquisition; the resource, region, and slot rows; the constants and
+header types. The kernel side is transcribed from the kernel's sources
+for the version and holds the facts: a kind's program type and section
+name; a context field's offset; a helper's number, prototype, the
+argument kinds its `bpf_func_proto` declares, its `gpl_only` flag,
+the kinds it exists in, and whether it changes the packet; a kfunc's
+name, prototype, flags, and program types; the verdict values, map
+types, and constants. Between the two sides of a call row lies its
+correspondence, written by hand: the kernel name the call resolves
+to, per kind where it differs, and the layout of the kernel's
+arguments in terms of koit's, or the mark that the kernel computes
+the row inline, as it does `pkt.len` and the checksum rows; the
+lowering and the target machine read it and no source-level surface
+shows it (decision 57). The build checks the correspondence against
+the kernel side: the name exists in the version, the layout has the
+prototype's arity, each of its entries has the shape the argument
+kind asks for, the availability the koit side claims is within the
+kernel's, and the `resize` effect is claimed exactly by the calls the
+kernel marks as changing the packet. The `pkt`
 column says whether the packet exists and whether views into it may be
 written (`rw`, `ro`, none). The verdict range is the one the kernel
 enforces at every exit. A call, kind, or slot the target kernel lacks is
@@ -1125,13 +1164,13 @@ every item exists in every variant.
   to a subprogram is not part of the language.
 - A function may be called inside a resource block only if its effect
   set is allowed there.
-- In prelude signatures, a parameter of type `own T` is a `move` sink
+- In interface signatures, a parameter of type `own T` is a `move` sink
   and a result of type `own T` must be bound by `hold` at the call
   site; a parameter written `const n: T` takes a constant expression
   (section 8.4) at every call, which is how the kernel's constant-size
   and `__k` arguments are stated. User functions take `ref` and `view`
   parameters and never `own` or `const`.
-- Prelude parameters carry refinements like any parameter, and the
+- Interface parameters carry refinements like any parameter, and the
   kernel's argument constraints are stated as such: a length paired
   with a memory argument is `len: u32 where 0 < len && len <= size(buf)`
   (or `0 <= len` for the `_OR_ZERO` kinds), so a zero or negative
@@ -1229,7 +1268,7 @@ implementation (`ISSUES.md`, entry 11):
   default reason of the `helper` kind; it is defined only in the `else`
   of such a `try`.
 - `size T` is typed as a literal, representable in the type of the
-  context; `pkt.len` is a prelude call; `-e` is `0 - e`, the kernel's
+  context; `pkt.len` is an interface call; `-e` is `0 - e`, the kernel's
   negation under total arithmetic.
 - A surface form outside its positions (a fallible operation in a
   value position, a struct literal elsewhere than a `let` initializer,
@@ -1861,14 +1900,16 @@ definition; the kernel's own verification is retained as an independent
 check, not replaced.
 
 **Trusted, for the corollary.** Besides the compiler and the ISA
-semantics, the corollary trusts three columns of the prelude's call
-table: a call's effect set, its `own` and `T?` annotations, and the
-region kinds of its parameters and result. A helper marked as not
-resizing the packet when it does would let a view outlive its region.
-The availability, context, slot-layout, and verdict-range columns
-affect acceptance only: an error there makes a program fail to load or
-rejects one that would have loaded, and never makes a safe program
-unsafe.
+semantics, the corollary trusts three columns of the interface's call
+table, all on its koit side: a call's effect set, its `own` and `T?`
+annotations, and the region kinds of its parameters and result. A
+helper marked as not resizing the packet when it does would let a view
+outlive its region; the build's check of the `resize` column against
+the kernel side catches the transcribable half of that error, not the
+semantic half. The availability, context, slot-layout, and
+verdict-range columns, and the whole kernel side, affect acceptance
+only: an error there makes a program fail to load or rejects one that
+would have loaded, and never makes a safe program unsafe.
 
 **Lemma L, path facts.** Every fact in `F` that the checker uses to
 discharge a demand is implied by the branch conditions on the
@@ -1919,7 +1960,7 @@ Draft 3 decisions, from `mechanisms-draft3.md`:
 12. No `prove` and no solver in the type system: the kernel formulates
     proof goals from bytecode, and Lemma L makes them provable.
 13. The entailment fragment is fixed by acceptance (P9).
-14. `with` is `hold`; resource constructors are prelude names.
+14. `with` is `hold`; resource constructors are interface names.
 15. `move x` is an expression; sinks are the kernel's operations;
     moved state merges at joins like the held set.
 16. Guards on places subsume view invalidation.
@@ -1943,15 +1984,15 @@ Revisions of 2026-09-13, from `ISSUES.md`:
 25. A `syscall` body may fall off its end and returns 0; packet bodies
     must exit.
 26. A function body may end in an expression, its result.
-27. The prelude is a table the compiler carries; protocol numbers are
-    prelude constants.
+27. The kernel interface is a table the compiler carries; protocol
+    numbers are interface constants.
 28. The newline rule applies in blocks and between items; `else` on
     the line of its `}`; `abort` a verdict in statement position.
 
 Revisions of 2026-09-14, from `ISSUES.md`:
 
 29. The twelve representation points of entry 11: the fine print of
-    18.1, the prelude as an outer scope (6), a function with a result
+    18.1, the interface as an outer scope (6), a function with a result
     ending in `return` (16), the struct literal's type from the
     binding's annotation or the unique declared struct (8.2), counts of
     any unsigned type (8.4).
@@ -1964,12 +2005,12 @@ Revisions of 2026-09-14, from `ISSUES.md`:
 33. The greedy `except` list and the multi-line comment as a newline,
     as the parser and lexer do (entry 10).
 Revisions of 2026-09-14, second pass, from `ISSUES.md` entries 13 to 17:
-34. Slot types: `spinlock` is a prelude slot row, not a keyword or a
-    Core constructor; Core's `T` has `slot(row)` and `R` is a row
+34. Slot types: `spinlock` is an interface slot row, not a keyword or
+    a Core constructor; Core's `T` has `slot(row)` and `R` is a row
     (entry 13).
 35. The target kernel is the compiler's `--kernel` input; the region
     table's columns and packet writability per kind; `const n: T`
-    prelude parameters; sleepable variants as kind rows; the trusted
+    interface parameters; sleepable variants as kind rows; the trusted
     columns (entry 14).
 36. The acquisition's argument form is a column; lexical scoping is a
     stated non-claim; `own T` uniformly (entry 15).
@@ -2060,6 +2101,22 @@ end of the session that lowered Core to LIR:
     function of the machine that pass D expands (entry 38,
     2026-09-20).
 
+Revision of 2026-09-20, from `ISSUES.md` entry 40, at the start of
+session 8:
+
+58. The prelude is the kernel interface: what the kernel offers a
+    program of each kind, as koit states it. Each row has a koit
+    side, hand-written, holding the decisions and every trusted
+    column, and a kernel side, transcribed per kernel version from
+    the kernel tree by a tool and never edited by hand, holding the
+    numbers, prototypes, argument kinds, flags, offsets, and
+    availability; a call row's correspondence, hand-written, names
+    the kernel function and lays out its arguments, and the build
+    checks it against the kernel side. Both sides are Lean values
+    the build sees, not data read at startup. Context writability and
+    per-kind availability stay hand-written until the kernel's
+    switches are parsed (entry 40).
+
 Open questions, with the default the checker implements until decided:
 
 - Q1. Handlers on functions. Default: no; a function-level handler is
@@ -2067,7 +2124,8 @@ Open questions, with the default the checker implements until decided:
 - Q2. Closed 2026-09-13: local struct literals with scalar fields are
   supported (section 8.2); the stack rule is the compiler's frame
   report (decision 22).
-- Q3. User-defined resources. Default: none; rows come from the prelude.
+- Q3. User-defined resources. Default: none; rows come from the kernel
+  interface.
 - Q4. A parsing cursor as sugar over consecutive views. Default: none.
 - Q5. Conditional declarations under `config`. Default: none.
 - Q6. Views on regions other than the packet. The core rule is general;
@@ -2080,9 +2138,9 @@ Open questions, with the default the checker implements until decided:
 - Q9. A second lowering of failure through `bpf_throw` and the
   exception callback. Compiler question; the portable lowering, jumps
   and error codes generated by elaboration, comes first.
-- Q10. Whether the context and availability tables are probed from the
-  running kernel or transcribed per version. Tooling question; probing
-  is recommended.
+- Q10. Closed 2026-09-20: the kernel side of the interface is
+  transcribed per version from the kernel tree, not probed from a
+  running kernel (decision 58).
 
 ## 22. Extensions not yet defined
 

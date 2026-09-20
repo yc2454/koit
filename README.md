@@ -48,11 +48,13 @@ desugar` (the Core of `spec/language.md` 18.1), and `koitc check`,
 whose base half (declarations, names, base types, places against
 values, the positions of fallible operations, exits) is done and whose
 facts, entailment, effects, and resources are sessions 3 and 4; the
-Core interpreter follows; the C backend and the kernel table generator
-are the phase after. `tests/run.sh` runs the corpus; `KOIT_STAGE=check`
-runs the checker over it. The stage-1 prelude, the tables of section
-13 for `xdp`, `tc`, and `syscall`, is `Koit/Prelude/Stage1.lean` over
-the row types of `Koit/Prelude/Tables.lean`. The checker is
+Core interpreter follows; the C backend and the kernel interface's
+transcriber are the phase after. `tests/run.sh` runs the corpus; `KOIT_STAGE=check`
+runs the checker over it. The stage-1 kernel interface, the tables of
+section 13 for `xdp`, `tc`, and `syscall`, is `Koit/Prelude/Stage1.lean`
+over the row types of `Koit/Prelude/Tables.lean`; the module becomes
+`Koit/Interface/` with the split into a koit side and a transcribed
+kernel side in session 8. The checker is
 `Koit/Check/` (one judgment: `Env`, `Types`, `Expr`, `Stmt`, `Decl`,
 and `Rules` for the judgment as a proposition); the refinement layer
 (`Koit/Facts/`) and the effect layer (`Koit/Effects/`) are its next
