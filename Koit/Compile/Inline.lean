@@ -1,4 +1,4 @@
-import Koit.Lower.LIR
+import Koit.LIR.Wf
 
 /-!
 Pass I, inlining, LIR to LIR: the call graph is acyclic, so each
@@ -15,7 +15,7 @@ frame does. The result is closed LIR: one body per program and no
 `call` statements.
 -/
 
-namespace Koit.Lower
+namespace Koit.Compile
 
 open Koit (Span)
 
@@ -199,4 +199,4 @@ def inline (u : LIR.CompUnit) : LIR.CompUnit :=
   let (programs, _) := go.run {}
   { u with fns := [], programs }
 
-end Koit.Lower
+end Koit.Compile

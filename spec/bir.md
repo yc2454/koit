@@ -122,8 +122,8 @@ conversion of those fields made primitive.
 ### 2.3 Maps and rings
 
 The map operations are builtins with fixed semantics, the ones
-`Semantics.lean` gives them, and do not consult the kernel
-parameter:
+`Koit/Machine/Ops.lean` gives them and every level calls, and do not
+consult the kernel parameter:
 
 | builtin | arguments | meaning |
 |---|---|---|

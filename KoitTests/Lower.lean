@@ -1,9 +1,9 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
 import Koit.Core.Interp
-import Koit.Lower.Lower
-import Koit.Lower.Inline
-import Koit.Lower.LIRInterp
+import Koit.Compile.Lower
+import Koit.Compile.Inline
+import Koit.LIR.Interp
 import Koit.Prelude.Stage1
 
 /-!
@@ -17,7 +17,7 @@ coercions, functions with and without failures, absence, locks,
 ring-buffer records, sockets and `move`, atomics, and byte order.
 -/
 
-open Koit Koit.Syntax Koit.Core Koit.Check Koit.Sem
+open Koit Koit.Syntax Koit.Core Koit.Check Koit.Core.Sem
 
 /-- Core's report of a run, as lines. -/
 private def coreRun (s : String) (packet : String) (ctx : List (String × Nat)) :
@@ -44,11 +44,11 @@ private def lirRun (s : String) (packet : String) (ctx : List (String × Nat))
   let checked ← match checkUnit Prelude.stage1 core with
     | .error d => throw s!"check: {d}"
     | .ok c => pure c
-  let lir ← Lower.lower Prelude.stage1 (Lower.fold Prelude.stage1 core checked)
-  let lir := if inl then Lower.inline lir else lir
+  let lir ← Compile.lower Prelude.stage1 (Compile.fold Prelude.stage1 core checked)
+  let lir := if inl then Compile.inline lir else lir
   LIR.wf Prelude.stage1 lir |>.mapError ("wf: " ++ ·)
   let some bytes := parseHex packet | throw "bad hex"
-  let (reports, maps) ← LIR.runUnit Prelude.stage1 core lir bytes ctx none 100000
+  let (reports, maps) ← LIR.Sem.runUnit Prelude.stage1 core lir bytes ctx none 100000
   return (reports.map fun r => s!"{r.program}: {r.verdict}" ++
     String.join (r.log.map fun l => s!" [{l}]")) ++ maps
 

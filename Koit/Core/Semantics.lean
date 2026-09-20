@@ -1,8 +1,8 @@
-import Koit.Core.Machine
+import Koit.Core.State
 
 /-!
-The dynamic semantics of Core: a big-step relation over the machine
-of `Machine.lean`, the subject of the safety theorem. A judgment
+The dynamic semantics of Core: a big-step relation over the state
+of `State.lean`, the subject of the safety theorem. A judgment
 relates a state and a phrase to what the phrase produces and the
 state after it. A statement produces an outcome: normal completion,
 a loop exit, a `return`, a failure on its way to the program's
@@ -18,15 +18,20 @@ the definition's small-step account are the enclosing rules here: a
 enclosing `hold` on its way out and is consumed by the program's
 handler rule. The relation is parameterized by a kernel, one of the
 relations the contracts allow, so a theorem about it holds for every
-kernel; the evaluator of `Interp.lean` runs a synthetic one.
+kernel; the evaluator of `Interp.lean` runs a synthetic one. The
+shared state, maps, packet, held stack, and trace, is reached only
+through the operations of `Koit.Machine.Ops`, which every level of
+the lowering calls, so that a map update or a kernel call is one
+definition at every level.
 -/
 
-namespace Koit.Sem
+namespace Koit.Core.Sem
 
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env UnitOk)
 open Koit.Prelude (KindRow CallRow ResourceRow AcqArg Sig)
+open Koit.Machine (Kernel toNatMod wrap zeros arith compare bswap)
 
 /-- What an expression or a fallible operation produces. -/
 abbrev Res (α : Type) := Except Abort α
@@ -45,25 +50,11 @@ def abortOut : Abort → Outcome
   | .raise k r => .raise k r
   | .err m => .err m
 
-/-- The innermost held entry named, so that `move` can cancel its
-release. -/
-def heldNamed (st : State) (x : Option String) : State :=
-  { st with held := match st.held with
-      | h :: rest => { h with name := x } :: rest
-      | [] => [] }
-
 /-- The value an atomic update stores, or none for a `cmpxchg` whose
 comparison fails. -/
 def atomicResult (op : AtomicOp) (sg : Bool) (w : Nat) (o : Int) (vs : List Val) :
     Option Int :=
-  let arg (i : Nat) : Int := ((vs[i]?).bind (·.toInt?)).getD 0
-  match op with
-  | .add => some (arith .add sg w o (arg 0))
-  | .band => some (arith .band sg w o (arg 0))
-  | .bor => some (arith .bor sg w o (arg 0))
-  | .bxor => some (arith .bxor sg w o (arg 0))
-  | .xchg => some (wrap sg w (arg 0))
-  | .cmpxchg => if o == arg 0 then some (wrap sg w (arg 1)) else none
+  Machine.atomic op sg w o (vs.map fun v => (v.toInt?).getD 0)
 
 mutual
 
@@ -166,14 +157,14 @@ inductive EvalExpr (K : Kernel) : State → Expr → Res Val → State → Prop
   | hton {st s e sg w x poly st1} :
       EvalExpr K st e (.ok (.int sg w x poly)) st1 →
       EvalExpr K st (.hton s e)
-        (.ok (if poly then .be 0 (toNatMod x 64) else .be w (Val.bswap w (toNatMod x w)))) st1
+        (.ok (if poly then .be 0 (toNatMod x 64) else .be w (bswap w (toNatMod x w)))) st1
   | htonAbort {st s e a st1} :
       EvalExpr K st e (.error a) st1 → EvalExpr K st (.hton s e) (.error a) st1
   /-- (Ntoh): the byte swap back to a host-order integer. -/
   | ntoh {st s e w x st1} :
       EvalExpr K st e (.ok (.be w x)) st1 →
       EvalExpr K st (.ntoh s e)
-        (.ok (if w == 0 then Val.mkInt false 64 x else Val.mkInt false w (Val.bswap w x))) st1
+        (.ok (if w == 0 then Val.mkInt false 64 x else Val.mkInt false w (bswap w x))) st1
   | ntohAbort {st s e a st1} :
       EvalExpr K st e (.error a) st1 → EvalExpr K st (.ntoh s e) (.error a) st1
   /-- (Read): a scalar place loaded. -/
@@ -184,12 +175,11 @@ inductive EvalExpr (K : Kernel) : State → Expr → Res Val → State → Prop
       EvalPlace K st p (.error a) st1 → EvalExpr K st (.read s p) (.error a) st1
   | size {st s t n} :
       prim (sizeOf t) st = .ok (n, st) → EvalExpr K st (.size s t) (.ok (Val.lit n)) st
-  /-- (Move): the reference, with the name dead and the scope's release
-  cancelled. -/
+  /-- (Move): the reference, with the name dead, so that the scope
+  releases nothing; the sink's row pops the held entry when it runs. -/
   | move {st s x l} :
       st.local? x = some (.place l) →
-      EvalExpr K st (.move s x) (.ok (.loc l))
-        { st.rebind x .moved with held := st.held.filter (·.name != some x) }
+      EvalExpr K st (.move s x) (.ok (.loc l)) (st.rebind x .moved)
   | call {st s f args v st1} :
       Call K st s f args (.ok (some v)) st1 →
       EvalExpr K st (.call s f args) (.ok v) st1
@@ -216,7 +206,7 @@ inductive EvalPlace (K : Kernel) : State → Place → Res PlaceRef → State �
   view, is the packet's current one. -/
   | varPlace {st s x l} :
       st.local? x = some (.place l) →
-      (l.region = .pkt → l.tok = st.layout) →
+      (l.region.isPkt = true → l.tok = st.layout) →
       EvalPlace K st (.var s x) (.ok (.mem l)) st
   | ctx {st s p f} :
       p = .var s "ctx" → EvalPlace K st (.field s p f) (.ok (.ctx f)) st
@@ -284,11 +274,14 @@ inductive Call (K : Kernel) : State → Span → String → List Arg → Res (Op
   | builtin {st s f args row r st1} :
       st.env.fn? f = none → st.env.prelude.call? f = some row → row.sig = .builtin →
       Builtin K st s f args r st1 → Call K st s f args r st1
-  /-- A kernel function: what the kernel does on the arguments. -/
+  /-- A kernel function: what the kernel does on the arguments,
+  through the machine, which appends the trace event and pushes or
+  pops the held stack per the row. -/
   | helper {st s f args row params ret vs v st1 st2} :
       st.env.fn? f = none → st.env.prelude.call? f = some row → row.sig = .fn params ret →
-      EvalArgs K st params args (.ok vs) st1 → K.helper row vs st1 = .ok v st2 →
-      Call K st s f args (.ok v) (st2.record (.call row.name vs (.ok v)))
+      EvalArgs K st params args (.ok vs) st1 →
+      prim (kernelCall K row params ret vs) st1 = .ok (some v, st2) →
+      Call K st s f args (.ok v) st2
   | helperArgsAbort {st s f args row params ret a st1} :
       st.env.fn? f = none → st.env.prelude.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.error a) st1 → Call K st s f args (.error a) st1
@@ -305,51 +298,40 @@ inductive Builtin (K : Kernel) : State → Span → String → List Arg → Res 
       prim (sizeOf d.ty) st2 = .ok (n, st2) →
       Builtin K st s "fill" [.place dst, .val b] (.ok none)
         (st2.writeAt d (List.replicate n (UInt8.ofNat (toNatMod ((v.toInt?).getD 0) 8))))
-  /-- `insert` on a present key replaces the value. -/
-  | insertReplace {st s sp m k v ms kr vr kb vb i key old st1 st2} :
+  /-- `insert`: the machine's update, which replaces a present key,
+  adds a new one while the map has room, and answers with the
+  kernel's `E2BIG` otherwise, which is the failure of kind `helper`. -/
+  | insert {st s sp m k v ms kr vr kb vb st1 st2 st3} :
       st.maps.lookup m = some ms →
       EvalPlace K st k (.ok kr) st1 → prim (bytesOfPlace kr ms.keySize) st1 = .ok (kb, st1) →
       EvalPlace K st1 v (.ok vr) st2 → prim (bytesOfPlace vr ms.valueSize) st2 = .ok (vb, st2) →
-      ms.entries.find? (·.2.1 == kb) = some (i, key, old) →
-      Builtin K st s "insert" [.map sp m, .place k, .place v] (.ok none)
-        (st2.setRegion (.map m i) (ByteArray.mk vb.toArray))
-  /-- `insert` on a new key adds an entry while the map has room, and
-  fails with the kernel's `E2BIG` otherwise. -/
-  | insertNew {st s sp m k v ms kr vr kb vb st1 st2} :
+      prim (op (Machine.update m kb vb)) st2 = .ok (0, st3) →
+      Builtin K st s "insert" [.map sp m, .place k, .place v] (.ok none) st3
+  | insertFull {st s sp m k v ms kr vr kb vb rc st1 st2 st3} :
       st.maps.lookup m = some ms →
       EvalPlace K st k (.ok kr) st1 → prim (bytesOfPlace kr ms.keySize) st1 = .ok (kb, st1) →
       EvalPlace K st1 v (.ok vr) st2 → prim (bytesOfPlace vr ms.valueSize) st2 = .ok (vb, st2) →
-      ms.entries.find? (·.2.1 == kb) = none → ms.entries.length < ms.capacity →
-      Builtin K st s "insert" [.map sp m, .place k, .place v] (.ok none)
-        { st2 with maps := st2.maps.map fun (p : String × MapState) =>
-            if p.1 == m then (p.1, { ms with entries := ms.entries ++
-              [(ms.nextEntry, kb, ByteArray.mk vb.toArray)], nextEntry := ms.nextEntry + 1 })
-            else p }
-  | insertFull {st s sp m k v ms kr vr kb vb st1 st2} :
-      st.maps.lookup m = some ms →
-      EvalPlace K st k (.ok kr) st1 → prim (bytesOfPlace kr ms.keySize) st1 = .ok (kb, st1) →
-      EvalPlace K st1 v (.ok vr) st2 → prim (bytesOfPlace vr ms.valueSize) st2 = .ok (vb, st2) →
-      ms.entries.find? (·.2.1 == kb) = none → ms.entries.length ≥ ms.capacity →
+      prim (op (Machine.update m kb vb)) st2 = .ok (rc, st3) → rc ≠ 0 →
       Builtin K st s "insert" [.map sp m, .place k, .place v]
-        (.error (.raise .helper (toNatMod (-7) 32))) st2
-  | delete {st s sp m k ms kr kb st1} :
+        (.error (.raise .helper (toNatMod rc 32))) st3
+  /-- `delete`: the machine's delete, or the kernel's `ENOENT`. -/
+  | delete {st s sp m k ms kr kb st1 st2} :
       st.maps.lookup m = some ms →
       EvalPlace K st k (.ok kr) st1 → prim (bytesOfPlace kr ms.keySize) st1 = .ok (kb, st1) →
-      ms.entries.any (·.2.1 == kb) = true →
-      Builtin K st s "delete" [.map sp m, .place k] (.ok none)
-        { st1 with maps := st1.maps.map fun (p : String × MapState) =>
-            if p.1 == m then (p.1, { ms with entries := ms.entries.filter (·.2.1 != kb) })
-            else p }
-  | deleteAbsent {st s sp m k ms kr kb st1} :
+      prim (op (Machine.delete m kb)) st1 = .ok (0, st2) →
+      Builtin K st s "delete" [.map sp m, .place k] (.ok none) st2
+  | deleteAbsent {st s sp m k ms kr kb rc st1 st2} :
       st.maps.lookup m = some ms →
       EvalPlace K st k (.ok kr) st1 → prim (bytesOfPlace kr ms.keySize) st1 = .ok (kb, st1) →
-      ms.entries.any (·.2.1 == kb) = false →
+      prim (op (Machine.delete m kb)) st1 = .ok (rc, st2) → rc ≠ 0 →
       Builtin K st s "delete" [.map sp m, .place k]
-        (.error (.raise .helper (toNatMod (-2) 32))) st1
+        (.error (.raise .helper (toNatMod rc 32))) st2
+  /-- `printk`: an event on the trace, its arguments as the kernel
+  sees them. -/
   | printk {st s s' fmt rest vs st1} :
       EvalArgs K st [] rest (.ok vs) st1 →
       Builtin K st s "printk" (.val (.str s' fmt) :: rest) (.ok none)
-        (st1.record (.print fmt (vs.map settle)))
+        (st1.record (.print fmt (vs.map fun v => (settle v).observe)))
 
 /-- A function of the unit: the arguments bound in a fresh frame, the
 body run, its `return` the result, the caller's frame restored. -/
@@ -411,17 +393,18 @@ inductive ExecFall (K : Kernel) :
       ExecFall K st (.view s off t) (.ok none) st1
   | viewAbort {st s off t a st1} :
       EvalExpr K st off (.error a) st1 → ExecFall K st (.view s off t) (.error a) st1
-  /-- (Lookup): the entry with the key's bytes. -/
-  | lookupFound {st s m k ms kr kb i key v st1} :
+  /-- (Lookup): the machine's lookup with the key's bytes, the entry's
+  location or the kernel's null. -/
+  | lookupFound {st s m k ms kr kb r st1} :
       st.maps.lookup m = some ms → EvalPlace K st k (.ok kr) st1 →
       prim (bytesOfPlace kr ms.keySize) st1 = .ok (kb, st1) →
-      ms.entries.find? (·.2.1 == kb) = some (i, key, v) →
+      prim (op (Machine.lookup m kb)) st1 = .ok (some r, st1) →
       ExecFall K st (.lookup s m k)
-        (.ok (some (some (.place { region := .map m i, off := 0, ty := ms.valueTy })))) st1
+        (.ok (some (some (.place { region := .shared r, off := 0, ty := ms.valueTy })))) st1
   | lookupMissing {st s m k ms kr kb st1} :
       st.maps.lookup m = some ms → EvalPlace K st k (.ok kr) st1 →
       prim (bytesOfPlace kr ms.keySize) st1 = .ok (kb, st1) →
-      ms.entries.find? (·.2.1 == kb) = none →
+      prim (op (Machine.lookup m kb)) st1 = .ok (none, st1) →
       ExecFall K st (.lookup s m k) (.ok none) st1
   /-- (LoadW): the field's predicate of the value loaded, with the
   siblings read from the place. -/
@@ -437,18 +420,18 @@ inductive ExecFall (K : Kernel) :
       ExecFall K st (.loadw s (.field s q f))
         (.ok (if ok.truthy then some (some (.val v)) else none))
         { st3 with locals := st1.locals }
-  /-- A fallible helper: the kernel's answer, with `errno` on a
-  failure. -/
+  /-- A fallible helper: the kernel's answer through the machine,
+  with `errno` on a failure. -/
   | callOk {st s f args row params ret vs v st1 st2} :
       st.env.prelude.call? f = some row → row.sig = .fn params ret →
-      EvalArgs K st params args (.ok vs) st1 → K.helper row vs st1 = .ok v st2 →
-      ExecFall K st (.call s f args) (.ok (some (v.map bindingOf)))
-        (st2.record (.call row.name vs (.ok v)))
-  | callFailed {st s f args row params ret vs errno st1 st2} :
+      EvalArgs K st params args (.ok vs) st1 →
+      prim (kernelCall K row params ret vs) st1 = .ok (some v, st2) →
+      ExecFall K st (.call s f args) (.ok (some (v.map bindingOf))) st2
+  | callFailed {st s f args row params ret vs st1 st2} :
       st.env.prelude.call? f = some row → row.sig = .fn params ret →
-      EvalArgs K st params args (.ok vs) st1 → K.helper row vs st1 = .failed errno st2 →
-      ExecFall K st (.call s f args) (.ok none)
-        ({ st2 with errno }.record (.call row.name vs (.failed errno)))
+      EvalArgs K st params args (.ok vs) st1 →
+      prim (kernelCall K row params ret vs) st1 = .ok (none, st2) →
+      ExecFall K st (.call s f args) (.ok none) st2
   | callBuiltinOk {st s f args row v st1} :
       st.env.prelude.call? f = some row → row.sig = .builtin →
       Builtin K st s f args (.ok v) st1 →
@@ -476,40 +459,37 @@ inductive ExecFall (K : Kernel) :
         { st2 with locals := st1.locals }
   | coerceAbort {st s e t a st1} :
       EvalExpr K st e (.error a) st1 → ExecFall K st (.coerce s e t) (.error a) st1
-  /-- (Hold-in) for a lock: the slot's place, then the resource held. -/
-  | acquirePlace {st s r f ty p row slot l st1} :
+  /-- (Hold-in) for a lock: the slot's place, then the lock taken on
+  the machine, which refuses one while another is held. -/
+  | acquirePlace {st s r f ty p row slot l obj st1 st2} :
       st.env.prelude.resource? r = some row → row.arg = .place slot →
-      EvalPlace K st p (.ok (.mem l)) st1 →
-      ExecFall K st (.acquire s r f ty [.place p]) (.ok (some none))
-        { st1 with held := { row, name := none, obj := some l } :: st1.held }
-  | acquireScope {st s r f ty row} :
+      EvalPlace K st p (.ok (.mem l)) st1 → l.heldObj = some obj →
+      prim (op (Machine.lock row obj)) st1 = .ok ((), st2) →
+      ExecFall K st (.acquire s r f ty [.place p]) (.ok (some none)) st2
+  | acquireScope {st s r f ty row st1} :
       st.env.prelude.resource? r = some row → row.arg = .scope →
-      ExecFall K st (.acquire s r f ty []) (.ok (some none))
-        { st with held := { row, name := none } :: st.held }
+      prim (op (Machine.enter row)) st = .ok ((), st1) →
+      ExecFall K st (.acquire s r f ty []) (.ok (some none)) st1
   /-- A ring-buffer record: a fresh kernel object of the record's
-  size while the ring has room. -/
-  | reserveOk {st s r sp m t row ms n id st1} :
+  size while the ring has room, held. -/
+  | reserveOk {st s r sp m t row n id st1} :
       st.env.prelude.resource? r = some row → row.arg = .call →
-      st.maps.lookup m = some ms → prim (sizeOf t) st = .ok (n, st) →
-      (ms.ring.foldl (fun a b => a + b.size) 0) + n ≤ ms.capacity →
-      st.fresh = (id, st1) →
+      prim (sizeOf t) st = .ok (n, st) →
+      prim (op (Machine.reserve row m n)) st = .ok (some id, st1) →
       ExecFall K st (.acquire s r "reserve" (some t) [.map sp m])
-        (.ok (some (some (.place { region := .kernel id, off := 0, ty := t }))))
-        { st1.setRegion (.kernel id) (zeros n) with
-            held := { row, name := none, map := some m,
-                      obj := some { region := .kernel id, off := 0, ty := t } } :: st1.held }
-  | reserveFull {st s r sp m t row ms n} :
+        (.ok (some (some (.place { region := .kernel id, off := 0, ty := t })))) st1
+  | reserveFull {st s r sp m t row n st1} :
       st.env.prelude.resource? r = some row → row.arg = .call →
-      st.maps.lookup m = some ms → prim (sizeOf t) st = .ok (n, st) →
-      (ms.ring.foldl (fun a b => a + b.size) 0) + n > ms.capacity →
+      prim (sizeOf t) st = .ok (n, st) →
+      prim (op (Machine.reserve row m n)) st = .ok (none, st1) →
       ExecFall K st (.acquire s r "reserve" (some t) [.map sp m]) (.ok none)
-        { st with errno := -12 }
-  /-- An acquiring kernel function: its owned result held. -/
+        { st1 with errno := -12 }
+  /-- An acquiring kernel function: its owned result, which the call
+  through the machine has already pushed on the held stack. -/
   | acquireCall {st s r f args row l st1} :
       st.env.prelude.resource? r = some row → row.arg = .call → f ≠ "reserve" →
       ExecFall K st (.call s f args) (.ok (some (some (.place l)))) st1 →
-      ExecFall K st (.acquire s r f none args) (.ok (some (some (.place l))))
-        { st1 with held := { row, name := none, obj := some l } :: st1.held }
+      ExecFall K st (.acquire s r f none args) (.ok (some (some (.place l)))) st1
   | acquireCallFailed {st s r f args row st1} :
       st.env.prelude.resource? r = some row → row.arg = .call → f ≠ "reserve" →
       ExecFall K st (.call s f args) (.ok none) st1 →
@@ -557,7 +537,7 @@ inductive ExecStmt (K : Kernel) : State → Stmt → Outcome → State → Prop
   /-- A struct literal: a fresh stack region, its fields stored. -/
   | letLit {st s m x ty ls fields t n id st1 st2} :
       prim (lift (Koit.Check.structForLiteral st.env ls ty fields)) st = .ok (t, st) →
-      prim (sizeOf t) st = .ok (n, st) → st.fresh = (id, st1) →
+      prim (sizeOf t) st = .ok (n, st) → st.freshStack = (id, st1) →
       StoreFields K (st1.setRegion (.stack id) (zeros n))
         { region := .stack id, off := 0, ty := t } t fields (.ok ()) st2 →
       ExecStmt K st (.«let» s m x ty (.lit ls fields)) .normal
@@ -624,15 +604,22 @@ inductive ExecStmt (K : Kernel) : State → Stmt → Outcome → State → Prop
   | tryAbort {st s x f thn els ex a st1} :
       ExecFall K st f (.error a) st1 → ExecStmt K st (.«try» s x f thn els ex) (abortOut a) st1
   /-- (Hold-in), then (Hold-out) or the abnormal release: the body under
-  the resource, released normally when the body completes and
-  abnormally on any other exit, unless `move` took it. -/
-  | hold {st s r x acq body els b o st1 st2} :
+  the resource, released on the machine normally when the body
+  completes and abnormally on any other exit, unless `move` took it. -/
+  | hold {st s r x acq body els b o st1 st2 st3} :
       ExecFall K st acq (.ok (some b)) st1 →
-      ExecBlock K (heldNamed (match x, b with
-                               | some x, some b => st1.bind x b
-                               | _, _ => st1) x) body o st2 →
-      ExecStmt K st (.hold s r x acq body els) o
-        ((releaseRes st2 (o matches .normal) x).dropLocalsTo st1.locals.length)
+      ExecBlock K (match x, b with
+                   | some x, some b => st1.bind x b
+                   | _, _ => st1) body o st2 →
+      prim (release K (o matches .normal) (st2.moved x)) st2 = .ok ((), st3) →
+      ExecStmt K st (.hold s r x acq body els) o (st3.dropLocalsTo st1.locals.length)
+  | holdReleaseErr {st s r x acq body els b o m st1 st2} :
+      ExecFall K st acq (.ok (some b)) st1 →
+      ExecBlock K (match x, b with
+                   | some x, some b => st1.bind x b
+                   | _, _ => st1) body o st2 →
+      prim (release K (o matches .normal) (st2.moved x)) st2 = .error (.err m) →
+      ExecStmt K st (.hold s r x acq body els) (.err m) st2
   | holdFail {st s r x acq body els e o st1 st2} :
       ExecFall K st acq (.ok none) st1 → els = some e → ExecBlock K st1 e o st2 →
       ExecStmt K st (.hold s r x acq body els) o st2
@@ -724,21 +711,27 @@ the handler of its kind with `reason` bound and nothing held, whose
 `return` halts; a `syscall` body falling off its end returns 0. -/
 inductive ExecProgram (K : Kernel) : State → Program → ProgOut → State → Prop
   | ret {st p v v' st1} :
-      ExecBlock K st p.body (.ret (some v)) st1 →
+      ExecBlock K st p.body (.ret (some v)) st1 → st1.held = [] →
       prim (coerceTo st.kind.verdictTy v) st1 = .ok (v', st1) →
       ExecProgram K st p (.halt v') st1
   | fallOff {st p st1} :
-      ExecBlock K st p.body .normal st1 → st.kind.hasPkt = false →
+      ExecBlock K st p.body .normal st1 → st.kind.hasPkt = false → st1.held = [] →
       ExecProgram K st p (.halt (Val.mkInt true 32 0)) st1
   | handled {st p k reason h v v' st1 st2} :
-      ExecBlock K st p.body (.raise k reason) st1 →
+      ExecBlock K st p.body (.raise k reason) st1 → st1.held = [] →
       p.handlers.find? (·.kind == k) = some h →
-      ExecBlock K { st1 with locals := [("reason", .val (Val.u32 reason))], held := [] }
+      ExecBlock K { st1 with locals := [("reason", .val (Val.u32 reason))] }
         h.body (.ret (some v)) st2 →
       prim (coerceTo st.kind.verdictTy v) st2 = .ok (v', st2) →
       ExecProgram K st p (.halt v') st2
   | bodyErr {st p m st1} :
       ExecBlock K st p.body (.err m) st1 → ExecProgram K st p (.err m) st1
+  /-- Every `hold` released on the way out, so nothing is held at the
+  exit; a state that still holds something is an error. -/
+  | heldAtExit {st p o st1} :
+      ExecBlock K st p.body o st1 → (o matches .ret _ | .raise .. | .normal) →
+      st1.held ≠ [] →
+      ExecProgram K st p (.err "the program exits holding a resource") st1
   | bodyStuck {st p o st1} :
       ExecBlock K st p.body o st1 → (o matches .brk | .cont | .ret none) →
       ExecProgram K st p (.err "the body ends outside a loop or without a verdict") st1
@@ -746,25 +739,19 @@ inductive ExecProgram (K : Kernel) : State → Program → ProgOut → State →
       ExecBlock K st p.body .normal st1 → st.kind.hasPkt = true →
       ExecProgram K st p (.err "the body fell off its end") st1
   | handlerErr {st p k reason h o st1 st2} :
-      ExecBlock K st p.body (.raise k reason) st1 →
+      ExecBlock K st p.body (.raise k reason) st1 → st1.held = [] →
       p.handlers.find? (·.kind == k) = some h →
-      ExecBlock K { st1 with locals := [("reason", .val (Val.u32 reason))], held := [] }
+      ExecBlock K { st1 with locals := [("reason", .val (Val.u32 reason))] }
         h.body o st2 → (∀ v, o ≠ .ret (some v)) →
       ExecProgram K st p (.err "the handler does not return a verdict") st2
 
 /-! ### The safety theorem -/
 
-/-- A kernel within its contracts: a helper never errs, changes the
-packet only when its row has the `resize` effect, and yields a value
-exactly when its signature has a result. -/
-def KernelOk (K : Kernel) : Prop :=
-  ∀ row args st,
-    (∀ m, K.helper row args st ≠ .err m) ∧
-    (∀ v st', K.helper row args st = .ok v st' →
-      (v.isSome ↔ ∃ params ret, row.sig = .fn params (some ret)) ∧
-      ((Effects.Effs.ofCore row.effects).has .resize = false →
-        st'.packet = st.packet ∧ st'.layout = st.layout)) ∧
-    (∀ errno st', K.helper row args st = .failed errno st' → row.fails.isSome)
+/-- A kernel within its contracts, `Koit.Machine.KernelOk`: a helper
+never errs, changes the packet only when its row has the `resize`
+effect, yields a value exactly when its signature has a result, and
+fails only when the row is fallible. -/
+abbrev KernelOk := Machine.KernelOk
 
 /-- The initial state of a program of a unit: any packet, any context
 values, the maps as some earlier program of the unit left them or
@@ -789,4 +776,4 @@ theorem safety (pre : Prelude) (u : CompUnit) (K : Kernel) :
       (∀ m st', ¬ ExecProgram K st p (.err m) st') := by
   sorry
 
-end Koit.Sem
+end Koit.Core.Sem

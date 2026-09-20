@@ -1,44 +1,61 @@
+import Koit.Machine.Ops
 import Koit.Check.Rules
 
 /-!
-The machine the dynamic semantics runs on: values, the total
-arithmetic of the kernel's instruction set, byte memory for the
-regions, the state of a run, what a helper may do, and the outcomes
-a statement can have. The big-step relation of `Semantics.lean` and
-the evaluator of `Interp.lean` are both written over these, so that
-the evaluator is the relation's executable form.
+The state of a Core run and the values it holds. The observable
+half, the maps, the packet, the kernel objects, the held stack, and
+the trace, is the shared state of `Koit.Machine`, embedded as one
+field; the rest is Core's own: the frame of names bound to values,
+places, or marked moved, the struct literals' bytes, the context by
+field name, `errno`, and the evaluator's fuel. The big-step relation
+of `Semantics.lean` and the evaluator of `Interp.lean` are both
+written over these, so that the evaluator is the relation's
+executable form, and both reach the shared state only through the
+operations of `Koit.Machine.Ops`.
 
 Values are scalars: fixed-width integers normalized to their type's
 range, byte-order values, booleans, and the location of a place for
 the names a `let` binds to one. A literal or an untyped constant is
 `poly`: it takes the width of the operand or the place it meets, as
-it takes its type from the context in the static rules. Regions are
-byte arrays: a map slot, the packet, a struct literal on the stack,
-or a kernel object bound by `hold`; scalars local to a block live in
-the frame's store.
+it takes its type from the context in the static rules. A location's
+region is one of the machine's, or a struct literal's frame, which
+is Core's alone.
 -/
 
-namespace Koit.Sem
+namespace Koit.Core.Sem
 
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env)
 open Koit.Prelude (KindRow CallRow ResourceRow AcqArg Sig)
+open Koit.Machine (toNatMod wrap leBytes ofLe slice blit zeros bswap Kernel HeldObj)
 
 /-! ### Locations and values -/
 
-/-- A region of bytes. -/
+/-- A region of bytes: one of the machine's, or a struct literal's
+frame, numbered per run. -/
 inductive Region where
-  /-- A struct literal's bytes, numbered per run. -/
+  | shared (r : Machine.Region)
   | stack (id : Nat)
-  /-- A slot of an array or per-CPU map, or an entry of a hash map by
-  its number. -/
-  | map (name : String) (slot : Nat)
-  | pkt
-  /-- An object the kernel handed out: a ring-buffer record, a
-  socket. -/
-  | kernel (id : Nat)
   deriving BEq, Repr, Inhabited
+
+namespace Region
+
+def map (m : String) (slot : Nat) : Region := .shared (.map m slot)
+def pkt : Region := .shared .pkt
+def kernel (id : Nat) : Region := .shared (.kernel id)
+
+def isPkt : Region → Bool
+  | .shared .pkt => true
+  | _ => false
+
+/-- The machine's region, for a location the shared state can
+describe. -/
+def shared? : Region → Option Machine.Region
+  | .shared r => some r
+  | .stack _ => none
+
+end Region
 
 /-- A place: a region, an offset in it, the type of what is there,
 and, for the packet, the layout token the location was made under,
@@ -50,6 +67,14 @@ structure Loc where
   ty     : Ty
   tok    : Nat := 0
   deriving Repr, Inhabited
+
+/-- The object a location names on the held stack: the field of a map
+value for a lock, the kernel object for a record or a socket. -/
+def Loc.heldObj (l : Loc) : Option HeldObj :=
+  match l.region with
+  | .shared (.map m i) => some (.slot m i l.off)
+  | .shared (.kernel id) => some (.object id)
+  | _ => none
 
 /-- Values. A byte-order value is its stored bit pattern, the number
 read little-endian from the bytes as they lie in memory, so that
@@ -63,16 +88,6 @@ inductive Val where
   | loc (l : Loc)
   deriving Repr, Inhabited
 
-/-- `v` modulo `2^w`, as a natural number. -/
-def toNatMod (v : Int) (w : Nat) : Nat :=
-  let m := 2 ^ w
-  if v ≥ 0 then v.toNat % m else (m - (v.natAbs % m)) % m
-
-/-- `v` reduced to the range of `int(s,w)`. -/
-def wrap (signed : Bool) (w : Nat) (v : Int) : Int :=
-  let r : Int := toNatMod v w
-  if signed && r ≥ 2 ^ (w - 1) then r - 2 ^ w else r
-
 namespace Val
 
 def mkInt (signed : Bool) (w : Nat) (v : Int) (poly : Bool := false) : Val :=
@@ -81,11 +96,6 @@ def mkInt (signed : Bool) (w : Nat) (v : Int) (poly : Bool := false) : Val :=
 def u64 (v : Nat) : Val := mkInt false 64 v
 def u32 (v : Nat) : Val := mkInt false 32 v
 def lit (v : Nat) : Val := mkInt false 64 v true
-
-/-- The bytes of the pattern `x` of width `w` reversed: `hton` and
-`ntoh` on this little-endian machine. -/
-def bswap (w : Nat) (x : Nat) : Nat :=
-  (List.range (w / 8)).foldl (fun acc i => acc * 256 + (x >>> (8 * i)) % 256) 0
 
 /-- A byte-order value printed as the number it holds in network
 order, swapping the stored pattern back. -/
@@ -111,42 +121,19 @@ def truthy : Val → Bool
   | .be _ v => v != 0
   | .loc _ => true
 
+/-- The value as the kernel and the trace see it: an integer, a
+byte-order value as its pattern, a boolean as 0 or 1, and an object
+the kernel handed out by its number. -/
+def observe : Val → Machine.Val
+  | .int _ _ v _ => .scalar v
+  | .be _ v => .scalar v
+  | .bool b => .scalar (if b then 1 else 0)
+  | .loc l =>
+    match l.region with
+    | .shared (.kernel id) => .object id
+    | _ => .scalar 0
+
 end Val
-
-/-! ### The kernel's arithmetic -/
-
-/-- Division rounding toward zero, the kernel's for signed operands. -/
-def tdiv (a b : Int) : Int :=
-  let q : Int := a.natAbs / b.natAbs
-  if (a < 0) != (b < 0) then -q else q
-
-/-- The arithmetic and bitwise operators on `int(s,w)`, total: `x / 0`
-is `0`, `x % 0` is `x`, shifts mask their amount to the width, and
-everything wraps. -/
-def arith (op : ArithOp) (signed : Bool) (w : Nat) (a b : Int) : Int :=
-  let bits (x : Int) : Nat := toNatMod x w
-  wrap signed w <| match op with
-    | .add => a + b
-    | .sub => a - b
-    | .mul => a * b
-    | .div => if b == 0 then 0 else if signed then tdiv a b else a / b
-    | .mod => if b == 0 then a else if signed then a - b * tdiv a b else a % b
-    | .band => bits a &&& bits b
-    | .bor => bits a ||| bits b
-    | .bxor => bits a ^^^ bits b
-    | .shl => bits a <<< (bits b % w)
-    | .shr =>
-      let s := bits b % w
-      if signed then
-        -- arithmetic: floor division by 2^s
-        if a ≥ 0 then a.toNat >>> s
-        else -(((a.natAbs + 2 ^ s - 1) / 2 ^ s : Nat) : Int)
-      else bits a >>> s
-
-def compare (op : CmpOp) (a b : Int) : Bool :=
-  match op with
-  | .eq => a == b | .ne => a != b | .lt => a < b | .le => a ≤ b
-  | .gt => a > b | .ge => a ≥ b
 
 /-- The width two operands meet at: a `poly` operand takes the other's
 type, and two `poly` operands are `u64`. -/
@@ -158,30 +145,6 @@ def meetInts : Val → Val → Option (Bool × Nat × Int × Int × Bool)
     else if s == s' && w == w' then some (s, w, a, b, false)
     else none
   | _, _ => none
-
-/-! ### Bytes -/
-
-/-- The little-endian bytes of `v` in `n` bytes. -/
-def leBytes (v : Nat) (n : Nat) : List UInt8 :=
-  (List.range n).map fun i => UInt8.ofNat ((v >>> (8 * i)) % 256)
-
-def beBytes (v : Nat) (n : Nat) : List UInt8 := (leBytes v n).reverse
-
-def ofLe (bs : List UInt8) : Nat :=
-  bs.foldr (fun b acc => acc * 256 + b.toNat) 0
-
-def ofBe (bs : List UInt8) : Nat := ofLe bs.reverse
-
-/-- The bytes `[off, off + n)` of `b`, zero past its end. -/
-def slice (b : ByteArray) (off n : Nat) : List UInt8 :=
-  (List.range n).map fun i => if off + i < b.size then b.get! (off + i) else 0
-
-/-- `b` with `bs` written at `off`; a write past the end is dropped. -/
-def blit (b : ByteArray) (off : Nat) (bs : List UInt8) : ByteArray :=
-  bs.foldl (fun (acc, i) x => (if i < acc.size then acc.set! i x else acc, i + 1))
-    (b, off) |>.1
-
-def zeros (n : Nat) : ByteArray := ByteArray.mk (Array.replicate n 0)
 
 /-- A scalar value decoded from bytes by its normalized type; a
 byte-order value is the pattern as stored. -/
@@ -196,17 +159,17 @@ def decode (t : Ty) (bs : List UInt8) : Option Val :=
 keeps its low bytes, a constant of no width yet is swapped into
 place, and an untyped integer is `hton` of itself. -/
 def fitBe (w : Nat) : Val → Val
-  | .be 0 x => .be w (Val.bswap w (toNatMod x w))
+  | .be 0 x => .be w (bswap w (toNatMod x w))
   | .be _ x => .be w (toNatMod x w)
-  | .int _ _ x _ => .be w (Val.bswap w (toNatMod x w))
+  | .int _ _ x _ => .be w (bswap w (toNatMod x w))
   | v => v
 
 /-- Two byte-order operands at one pattern width: a constant of no
 width yet takes the other's. -/
 def meetBe (w : Nat) (x : Nat) (w' : Nat) (y : Nat) : Option (Nat × Nat) :=
   if w == 0 && w' == 0 then some (x, y)
-  else if w == 0 then some (Val.bswap w' (toNatMod x w'), y)
-  else if w' == 0 then some (x, Val.bswap w (toNatMod y w))
+  else if w == 0 then some (bswap w' (toNatMod x w'), y)
+  else if w' == 0 then some (x, bswap w (toNatMod y w))
   else if w == w' then some (x, y)
   else none
 
@@ -224,22 +187,6 @@ def encode (t : Ty) (v : Val) : Option (List UInt8) :=
 
 /-! ### The state of a run -/
 
-/-- A map's contents: slots by number for the array kinds, entries by
-number for a hash map, submitted records for a ring buffer. A slot
-not yet written is all zero. -/
-structure MapState where
-  decl      : MapDecl
-  valueTy   : Ty
-  valueSize : Nat
-  keyTy     : Option Ty := none
-  keySize   : Nat := 0
-  capacity  : Nat
-  slots     : List (Nat × ByteArray) := []
-  entries   : List (Nat × List UInt8 × ByteArray) := []
-  ring      : List ByteArray := []
-  nextEntry : Nat := 0
-  deriving Inhabited
-
 /-- What a name in the frame denotes. -/
 inductive Binding where
   | val (v : Val)
@@ -248,88 +195,45 @@ inductive Binding where
   | moved
   deriving Repr, Inhabited
 
-/-- What the kernel answered a call with, as the trace records it. -/
-inductive CallOut where
-  | ok (v : Option Val)
-  | failed (errno : Int)
-  deriving Repr, Inhabited
-
-/-- One event of the trace: a kernel call with its row, its arguments,
-and its answer, or a `printk` with its format and arguments. What a
-run does outside the model is this list, in order. -/
-inductive Event where
-  | call (row : String) (args : List Val) (out : CallOut)
-  | print (fmt : String) (args : List Val)
-  deriving Repr, Inhabited
-
-/-- A held resource, innermost first in the state. -/
-structure HeldRes where
-  row  : ResourceRow
-  name : Option String
-  /-- The record's map, for a ring-buffer record. -/
-  map  : Option String := none
-  obj  : Option Loc := none
-  deriving Inhabited
-
 structure State where
   env        : Env
   kind       : KindRow
-  packet     : ByteArray := ByteArray.empty
-  /-- The layout token: dropped by a resize, so that a view carved
-  before it is dead. -/
-  layout     : Nat := 0
+  /-- The shared state: what every level of the lowering acts on. -/
+  machine    : Machine.State := {}
   ctx        : List (String × Val) := []
-  maps       : List (String × MapState) := []
+  /-- The struct literals' bytes, by number. -/
   stackBufs  : List (Nat × ByteArray) := []
-  kernelObjs : List (Nat × ByteArray) := []
-  nextId     : Nat := 0
+  nextStack  : Nat := 0
   /-- The frame's store: the names in scope, innermost first. -/
   locals     : List (String × Binding) := []
-  held       : List HeldRes := []
   /-- The negative return of the last helper that failed. -/
   errno      : Int := 0
   fuel       : Nat := 100000
-  clock      : Nat := 0
-  /-- The kernel calls made so far and the `printk` events, in
-  order. -/
-  trace      : List Event := []
   deriving Inhabited
 
 namespace State
 
 def region (st : State) : Region → ByteArray
+  | .shared r => st.machine.region r
   | .stack id => (st.stackBufs.lookup id).getD ByteArray.empty
-  | .map m slot =>
-    match st.maps.lookup m with
-    | some ms =>
-      match ms.decl.kind with
-      | .hash .. => ((ms.entries.find? (·.1 == slot)).map (·.2.2)).getD
-          (zeros ms.valueSize)
-      | _ => (ms.slots.lookup slot).getD (zeros ms.valueSize)
-    | none => ByteArray.empty
-  | .pkt => st.packet
-  | .kernel id => (st.kernelObjs.lookup id).getD ByteArray.empty
 
 def setRegion (st : State) : Region → ByteArray → State
+  | .shared r, b => { st with machine := st.machine.setRegion r b }
   | .stack id, b =>
     { st with stackBufs := (id, b) :: st.stackBufs.filter (·.1 != id) }
-  | .map m slot, b =>
-    { st with maps := st.maps.map fun (n, ms) =>
-        if n != m then (n, ms) else
-        match ms.decl.kind with
-        | .hash .. =>
-          (n, { ms with entries := ms.entries.map fun (i, k, v) =>
-                  if i == slot then (i, k, b) else (i, k, v) })
-        | _ => (n, { ms with slots := (slot, b) :: ms.slots.filter (·.1 != slot) }) }
-  | .pkt, b => { st with packet := b }
-  | .kernel id, b =>
-    { st with kernelObjs := (id, b) :: st.kernelObjs.filter (·.1 != id) }
 
 def bytesAt (st : State) (l : Loc) (n : Nat) : List UInt8 :=
   slice (st.region l.region) l.off n
 
 def writeAt (st : State) (l : Loc) (bs : List UInt8) : State :=
   st.setRegion l.region (blit (st.region l.region) l.off bs)
+
+/-- Whether an access of `n` bytes at `l` is admitted: the token is
+current for the packet and the bytes lie in the region. -/
+def admits (st : State) (l : Loc) (n : Nat) : Bool :=
+  match l.region with
+  | .shared r => st.machine.admits r l.off n l.tok
+  | .stack _ => l.off + n ≤ (st.region l.region).size
 
 def local? (st : State) (x : String) : Option Binding :=
   (st.locals.find? (·.1 == x)).map (·.2)
@@ -341,12 +245,33 @@ def rebind (st : State) (x : String) (b : Binding) : State :=
   { st with locals := st.locals.map fun (y, b') =>
       if y == x then (y, b) else (y, b') }
 
-def fresh (st : State) : Nat × State :=
-  (st.nextId, { st with nextId := st.nextId + 1 })
+/-- Whether an owned name has been moved on this path. -/
+def moved (st : State) (x : Option String) : Bool :=
+  match x with
+  | some x => (st.local? x matches some .moved)
+  | none => false
 
-/-- The trace with an event appended. -/
-def record (st : State) (ev : Event) : State :=
-  { st with trace := st.trace ++ [ev] }
+/-- A fresh struct literal's number. -/
+def freshStack (st : State) : Nat × State :=
+  (st.nextStack, { st with nextStack := st.nextStack + 1 })
+
+/-- The shared parts, read through the state. -/
+def maps (st : State) := st.machine.maps
+def packet (st : State) := st.machine.packet
+def layout (st : State) := st.machine.layout
+def held (st : State) := st.machine.held
+def trace (st : State) := st.machine.trace
+
+def record (st : State) (ev : Machine.Event) : State :=
+  { st with machine := st.machine.record ev }
+
+/-- The lines `printk` wrote. -/
+def log (st : State) : List String := st.machine.log
+
+/-- The frame's locals restored to `n` entries after a block, keeping
+the stores to the outer names, which are updated in place. -/
+def dropLocalsTo (st : State) (n : Nat) : State :=
+  { st with locals := st.locals.drop (st.locals.length - n) }
 
 end State
 
@@ -372,58 +297,17 @@ inductive FallOut where
   | err (msg : String)
   deriving Repr, Inhabited
 
-/-! ### The kernel -/
-
-/-- What a kernel function does when called: a result and a new
-state, a failure with the negative return the `helper` reason
-defaults to, or an error the kernel's contract excludes. -/
-inductive HelperOut where
-  | ok (v : Option Val) (st : State)
-  | failed (errno : Int) (st : State)
-  | err (msg : String)
-  deriving Inhabited
-
-/-- A kernel: what each helper of the call table does on the
-evaluated arguments, one of the relations the contracts allow. The
-semantics is stated for every kernel; the evaluator runs a synthetic
-one. -/
-structure Kernel where
-  helper : CallRow → List Val → State → HelperOut
-
 /-- The initial state of a program: the packet, the context fields at
 their given values or zero, and the maps as they are. -/
 def initState (env : Env) (row : KindRow) (packet : ByteArray)
-    (ctx : List (String × Nat)) (maps : List (String × MapState)) (fuel : Nat) :
+    (ctx : List (String × Nat)) (maps : List (String × Machine.MapState)) (fuel : Nat) :
     State :=
-  { env, kind := row, packet, maps, fuel,
+  { env, kind := row, fuel,
+    machine := { maps, packet },
     ctx := row.ctx.map fun f =>
       (f.name, Val.mkInt false 32 ((ctx.lookup f.name).getD 0)) }
 
 /-! ### The evaluation monad and its primitives -/
-
-/-- The release of the innermost held resource, normally or
-abnormally: a ring-buffer record is submitted or discarded; the
-others leave no trace here. A resource `move` handed away is no
-longer held and is not released. -/
-def releaseRes (st : State) (normal : Bool) (x : Option String) : State :=
-  match st.held with
-  | h :: rest =>
-    if x.isSome && h.name != x then st else
-    let st := { st with held := rest }
-    match h.map, h.obj with
-    | some m, some l =>
-      if normal then
-        let rec_ := st.region l.region
-        { st with maps := st.maps.map fun (p : String × MapState) =>
-          if p.1 == m then (p.1, { p.2 with ring := p.2.ring ++ [rec_] }) else p }
-      else st
-    | _, _ => st
-  | [] => st
-
-/-- The frame's locals restored to `n` entries after a block, keeping
-the stores to the outer names, which are updated in place. -/
-def State.dropLocalsTo (st : State) (n : Nat) : State :=
-  { st with locals := st.locals.drop (st.locals.length - n) }
 
 /-- What leaves a statement without returning to it: a failure on its
 way to the program's handler, or an error. -/
@@ -440,11 +324,19 @@ abbrev M := ExceptT Abort (StateM State)
 /-- A primitive applied in a state: its result and the state after,
 or the abort. -/
 def M.exec (f : M α) (st : State) : Except Abort (α × State) :=
-  match (f.run).run st with
+  match (ExceptT.run f).run st with
   | (.ok v, st') => .ok (v, st')
   | (.error e, _) => .error e
 
 def fail (msg : String) : M α := throw (.err msg)
+
+/-- An operation of the shared machine, applied to the shared half of
+the state; its error is an error here. -/
+def op (f : Machine.Op α) : M α := do
+  let st ← get
+  match f.exec st.machine with
+  | .ok (a, m) => set { st with machine := m }; return a
+  | .error msg => fail msg
 
 /-- A checker operation, whose failure here is an error. -/
 def lift (x : Koit.Check.M α) : M α :=
@@ -575,20 +467,70 @@ def siblingFrame (l : Loc) (fields : List Field) (f : String) (v : Val) :
       frame := (g.name, .val gv) :: frame
   return frame
 
-/-- Bytes formatted for `printk`'s `{}`. -/
-def fmtArgs (fmt : String) (args : List Val) : String :=
-  let parts := fmt.splitOn "{}"
-  let rec go : List String → List Val → String
-    | [], _ => ""
-    | [p], _ => p
-    | p :: ps, a :: as => p ++ a.print ++ go ps as
-    | p :: ps, [] => p ++ "{}" ++ go ps []
-  go parts args
+/-! ### Kernel functions and releases through the machine -/
 
-/-- The lines `printk` wrote, read off the trace. -/
-def State.log (st : State) : List String :=
-  st.trace.filterMap fun
-    | .print fmt args => some (fmtArgs fmt args)
-    | _ => none
+/-- An argument as the kernel sees it, fitted to its parameter: a
+scalar reduced to the parameter's type, a `ref` or `view` place as
+its bytes, an owned reference as its object. -/
+def kernelArg (p : Param) (v : Val) : M Machine.Val := do
+  match ← norm p.ty, v with
+  | .own .., .loc l =>
+    match l.region with
+    | .shared (.kernel id) => return .object id
+    | _ => fail s!"`{p.name}` takes an owned reference"
+  | .ref _ t, .loc l | .view _ t, .loc l =>
+    let n ← sizeOf t
+    unless (← get).admits l n do fail s!"`{p.name}` reads outside its region"
+    return .bytes ((← get).bytesAt l n)
+  | .ref .., _ | .view .., _ | .own .., _ => fail s!"`{p.name}` takes a place"
+  | t, v =>
+    match ← coerceTo t v with
+    | .loc _ => fail s!"`{p.name}` takes a scalar"
+    | v' => return v'.observe
 
-end Koit.Sem
+/-- The kernel's answer at the row's result type: an integer at the
+type, or the location of the object handed out. -/
+def kernelResult (ret : Option Ty) (v : Machine.Val) : M Val := do
+  match ret, v with
+  | some t, .object id =>
+    let pointee := match t with
+      | .own _ u | .ref _ u => u
+      | u => u
+    return .loc { region := .kernel id, off := 0, ty := pointee }
+  | some t, .scalar x =>
+    match ← norm t with
+    | .int _ s w => return Val.mkInt s w x
+    | .bool _ => return .bool (x != 0)
+    | .refined _ _ base _ =>
+      match ← norm base with
+      | .int _ s w => return Val.mkInt s w x
+      | _ => return Val.mkInt true 64 x
+    | _ => return Val.mkInt true 64 x
+  | _, v => return Val.mkInt true 64 v.toInt
+
+/-- A kernel function through the shared machine: the arguments as
+the kernel sees them, the call with its trace event and its effect
+on the held stack, and the result at the row's type; `none` on a
+failure, with `errno` set to its negative return. -/
+def kernelCall (K : Kernel) (row : CallRow) (params : List Param) (ret : Option Ty)
+    (args : List Val) : M (Option (Option Val)) := do
+  let st ← get
+  let vs ← (params.zip args).mapM fun (p, v) => kernelArg p v
+  match ← op (Machine.call st.env.prelude K st.kind row vs) with
+  | .ok v =>
+    match v with
+    | some v => return some (some (← kernelResult ret v))
+    | none => return some none
+  | .failed n =>
+    helperFailed n
+    return none
+
+/-- The release at the exit of a `hold`, normally or abnormally, as
+the innermost entry's row says; nothing when `move` handed the
+resource away. -/
+def release (K : Kernel) (normal : Bool) (moved : Bool) : M Unit := do
+  if moved then return
+  let st ← get
+  op (Machine.release st.env.prelude K st.kind normal)
+
+end Koit.Core.Sem

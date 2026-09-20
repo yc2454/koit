@@ -1,5 +1,5 @@
-import Koit.Lower.Fold
-import Koit.Lower.LIR
+import Koit.Compile.Fold
+import Koit.LIR.Wf
 
 /-!
 Pass B, Core to LIR: the translation is per function and per
@@ -30,7 +30,7 @@ and a call to a `fails` function carries the releases the call site
 owes in its `unwind`. `move` emits nothing: the sink is the release.
 -/
 
-namespace Koit.Lower
+namespace Koit.Compile
 
 open Koit (Span)
 open Koit.Core
@@ -241,7 +241,7 @@ def deadBranch (c : LCtx) (sp : Span) : List LIR.Stmt :=
       let (_, w) := intParts vt
       let v : Nat := match row.defaultExit with
         | .verdict name => (row.verdicts.lookup name).getD 0
-        | .value v => Sem.toNatMod v w
+        | .value v => Machine.toNatMod v w
       [.ret sp (some (lit w v))]
     | none => [.ret sp none]
   match c.ret with
@@ -316,7 +316,7 @@ partial def lowerExpr (c : LCtx) (sp : Span) (e : Expr) (expected : Option Ty) :
         | _ => lerr "`hton` of a value that is not an unsigned integer"
     let E ← lowerExpr c sp e' (some (.int sp false w))
     let e'' := match E.e with
-      | .lit _ k => lit w (Sem.Val.bswap w k)
+      | .lit _ k => lit w (Machine.bswap w k)
       | e => .bswap w e
     return { pre := E.pre, e := e'', ty := .int false w }
   | .ntoh _ e' =>
@@ -596,14 +596,13 @@ partial def releaseStmt (c : LCtx) (sp : Span) (row : ResourceRow) (normal : Boo
   let objArgs := match obj with
     | some a => [LIR.Expr.addr a]
     | none => []
-  if row.arg == .scope then return .builtin sp none (.leave row.res) []
-  if row.res == ⟨"spinlock"⟩ then return .builtin sp none .unlock objArgs
-  if row.res == ⟨"ringbuf"⟩ then
-    return .builtin sp none (if normal then .submit else .discard) objArgs
-  let exit := if normal then row.normalExit else row.abnormalExit
-  match c.env.prelude.calls.find? (·.kernel == exit) with
-  | some crow => return .kernel sp none crow.name objArgs
-  | none => lerr s!"no kernel function `{exit}` releases {row.describe}"
+  match Machine.releaseOf c.env.prelude row normal with
+  | .ok .leave => return .builtin sp none (.leave row.res) []
+  | .ok .unlock => return .builtin sp none .unlock objArgs
+  | .ok .submit => return .builtin sp none .submit objArgs
+  | .ok .discard => return .builtin sp none .discard objArgs
+  | .ok (.kernel crow) => return .kernel sp none crow.name objArgs
+  | .error m => lerr m
 
 /-- The abnormal releases owed by every action in `ρ` up to the
 construct `stop` selects, innermost first, for the names not moved. -/
@@ -1124,7 +1123,7 @@ partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
     -- for it is `ENOMEM`, as Core's rule sets `errno`
     let (errDecl, ce) ← if row.fails == some .helper then
         let err ← freshName "err"
-        pure ([LIR.Stmt.«let» sp err .u32 (lit 32 (Sem.toNatMod (-12) 32))],
+        pure ([LIR.Stmt.«let» sp err .u32 (lit 32 (Machine.toNatMod (-12) 32))],
               { c with errno := some err })
       else pure ([], c)
     let (els', _) ← lowerStmts ce (els.getD [])
@@ -1237,4 +1236,4 @@ def lower (pre : Prelude) (folded : Folded) : Except String LIR.CompUnit := do
   return { license := u.license.map (·.2), types, maps := u.maps.map (foldMapDecl env),
            direct := folded.direct, fns, programs }
 
-end Koit.Lower
+end Koit.Compile

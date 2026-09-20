@@ -1,17 +1,17 @@
-import Koit.Lower.LIR
-import Koit.Core.Interp
+import Koit.LIR.State
 
 /-!
-The dynamic semantics of LIR: the machine of Core, restricted to what
-a structured language needs. The state is Core's, shared verbatim in
-its maps, packet, layout token, kernel objects, held stack, and
-trace; the frame binds each local to a value, an integer at its type
-or a location; the kernel `K` is the same parameter and `KernelOk`
-the same contract. Expressions are pure and partial functions of the
+The dynamic semantics of LIR over the state of `State.lean`, whose
+shared half is the machine's: maps, packet, layout token, kernel
+objects, held stack, and trace are the same objects Core's run acts
+on, reached through the same operations of `Koit.Machine.Ops`; the
+frame binds each local to a value, an integer at its type or a
+location; the kernel `K` is the same parameter and `KernelOk` the
+same contract. Expressions are pure and partial functions of the
 state, so they are functions here; the builtins and the kernel
 functions are deterministic given `K`, so they are functions too,
 and the statement, call, and program judgments are the relations the
-lowering theorems are stated on. `LIRInterp.lean` is the executable
+lowering theorems are stated on. `Interp.lean` is the executable
 form of those relations, and the runner compares it with Core's.
 
 The held stack is protocol state: `lock`, `enter`, `reserve`, and an
@@ -22,12 +22,12 @@ holding anything are errors, which is what makes a missing or
 misplaced release a divergence the pass-B theorem sees.
 -/
 
-namespace Koit.LIR
+namespace Koit.LIR.Sem
 
 open Koit (Span)
 open Koit.Core (ArithOp CmpOp AtomicOp Kind Resource)
-open Koit.Sem (State Val Loc Region Binding HeldRes Kernel Event CallOut M
-  Abort toNatMod wrap slice zeros leBytes ofLe prim)
+open Koit.Core.Sem (Val Loc Region Abort)
+open Koit.Machine (Kernel toNatMod wrap zeros leBytes ofLe bswap HeldObj)
 open Koit.Prelude (CallRow ResourceRow)
 
 /-- How a statement ends. -/
@@ -57,18 +57,21 @@ def pattern (w : Nat) : Val → Option Nat
 /-- A pattern read at a signedness and width. -/
 def ofPattern (s : Bool) (w : Nat) (n : Nat) : Int := wrap s w n
 
-/-- The location a type-agnostic place carries; LIR never reads it. -/
+/-- The type a type-agnostic location carries; LIR never reads it. -/
 def anyTy : Core.Ty := .int Koit.Prelude.noSpan false 8
+
+/-- A value at a Core type of the kind, for the verdict and the
+scalar parameters of kernel functions. -/
+partial def fitCore (t : Core.Ty) (v : Val) : Val :=
+  match t, v with
+  | .int _ s w, .int _ _ x _ => Val.mkInt s w x
+  | .int _ s w, .bool b => Val.mkInt s w (if b then 1 else 0)
+  | .refined _ _ base _, v => fitCore base v
+  | _, v => v
 
 abbrev Res (α : Type) := Except String α
 
 /-! ### Expressions -/
-
-/-- A load or store of `n` bytes at `l` is admitted: the location's
-token is current for the packet, and the bytes lie in the region. -/
-def admitted (st : State) (l : Loc) (n : Nat) : Bool :=
-  (l.region != .pkt || l.tok == st.layout) &&
-    l.off + n ≤ (st.region l.region).size
 
 mutual
 
@@ -77,22 +80,21 @@ partial def evalExpr (st : State) : Expr → Res Val
   | .lit w k => return .int false w k
   | .var x =>
     match st.local? x with
-    | some (.val v) => return v
-    | some (.place l) => return .loc l
-    | _ => throw s!"`{x}` is unbound"
+    | some v => return v
+    | none => throw s!"`{x}` is unbound"
   | .arith op s w l r => do
     let some a := pattern w (← evalExpr st l) | throw "arithmetic on a location"
     let some b := pattern w (← evalExpr st r) | throw "arithmetic on a location"
-    return Val.mkInt s w (Sem.arith op s w (ofPattern s w a) (ofPattern s w b))
+    return Val.mkInt s w (Machine.arith op s w (ofPattern s w a) (ofPattern s w b))
   | .cast s w s' w' e => do
     let some a := pattern w (← evalExpr st e) | throw "a cast of a location"
     return Val.mkInt s' w' (ofPattern s w a)
   | .bswap w e => do
     let some a := pattern w (← evalExpr st e) | throw "a swap of a location"
-    return Val.mkInt false w (Val.bswap w a)
+    return Val.mkInt false w (bswap w a)
   | .load s w a => do
     let l ← evalAddr st a
-    unless admitted st l (w / 8) do
+    unless st.admits l (w / 8) do
       throw s!"a load of {w} bits at {repr l.region} + {l.off} is not admitted"
     return Val.mkInt s w (ofLe (st.bytesAt l (w / 8)))
   | .ctx f =>
@@ -104,7 +106,7 @@ partial def evalExpr (st : State) : Expr → Res Val
 partial def evalAddr (st : State) : Addr → Res Loc
   | .var x =>
     match st.local? x with
-    | some (.val (.loc l)) | some (.place l) => return l
+    | some (.loc l) => return l
     | _ => throw s!"`{x}` is not a location"
   | .plus a k => do
     let l ← evalAddr st a
@@ -128,7 +130,7 @@ def evalCond (st : State) (c : Cond) : Res Bool := do
   match a, b with
   | .loc l, .loc l' =>
     unless l.region == l'.region do throw "locations of different regions compared"
-    return Sem.compare c.op l.off l'.off
+    return Machine.compare c.op l.off l'.off
   | .loc _, v | v, .loc _ =>
     match c.op, pattern 64 v with
     | .eq, some 0 => return false
@@ -137,11 +139,9 @@ def evalCond (st : State) (c : Cond) : Res Bool := do
   | a, b =>
     let some x := pattern c.w a | throw "a comparison of a location"
     let some y := pattern c.w b | throw "a comparison of a location"
-    return Sem.compare c.op (ofPattern c.signed c.w x) (ofPattern c.signed c.w y)
+    return Machine.compare c.op (ofPattern c.signed c.w x) (ofPattern c.signed c.w y)
 
-/-! ### Builtins and kernel functions, in the machine's monad -/
-
-def fail (msg : String) : M α := throw (.err msg)
+/-! ### Builtins and kernel functions, in the evaluation monad -/
 
 def liftRes (r : Res α) : M α :=
   match r with
@@ -153,163 +153,133 @@ def locOf (v : Val) (what : String) : M Loc :=
   | .loc l => pure l
   | _ => fail s!"{what} takes a location"
 
+/-- The object a location names on the held stack. -/
+def heldObjOf (l : Loc) (what : String) : M HeldObj :=
+  match l.heldObj with
+  | some obj => pure obj
+  | none => fail s!"{what} takes a place in a map value or a kernel object"
+
 /-- The bytes of a key or value argument, which must be initialized
 and admitted. -/
-def argBytes (st : State) (l : Loc) (n : Nat) : M (List UInt8) := do
-  unless admitted st l n do fail "a key or value outside its region"
+def argBytes (l : Loc) (n : Nat) : M (List UInt8) := do
+  let st ← get
+  unless st.admits l n do fail "a key or value outside its region"
   return st.bytesAt l n
 
+def norm (t : Core.Ty) : M Core.Ty := do
+  match (← get).env.norm t with
+  | .ok t => pure t
+  | .error d => fail s!"{d}"
+
+def sizeOf (t : Core.Ty) : M Nat := do
+  match (← get).env.layout t with
+  | .ok (n, _) => pure n
+  | .error d => fail s!"{d}"
+
 /-- The row of a resource, by its name. -/
-def resourceRow (st : State) (r : Resource) : M ResourceRow :=
-  match st.env.prelude.resource? r with
+def resourceRow (r : Resource) : M ResourceRow := do
+  match (← get).env.prelude.resource? r with
   | some row => pure row
   | none => fail s!"no row for `{r}`"
 
-def sameObj (a b : Option Loc) : Bool :=
-  match a, b with
-  | some l, some l' => l.region == l'.region && l.off == l'.off
-  | none, none => true
-  | _, _ => false
-
-/-- The innermost held entry popped, when it is the row's object. -/
-def popHeld (r : Resource) (obj : Option Loc) : M HeldRes := do
-  let st ← get
-  match st.held with
-  | h :: rest =>
-    unless h.row.res == r && sameObj h.obj obj do
-      fail s!"a release of {h.row.describe} that is not the innermost held"
-    set { st with held := rest }
-    return h
-  | [] => fail "a release with nothing held"
-
-/-- What a builtin does. The map operations have Core's semantics;
-the protocol operations push and pop the held stack. -/
+/-- What a builtin does, through the machine: the map operations have
+the kernel's answers, the protocol operations push and pop the held
+stack, the byte moves and the atomics act on the bytes. -/
 def execBuiltin (b : Builtin) (args : List Val) : M (Option Val) := do
   let st ← get
   match b, args with
   | .lookup m, [k] =>
     let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
     let kl ← locOf k "`lookup`"
-    match ms.decl.kind with
-    | .hash .. =>
-      let kb ← argBytes st kl ms.keySize
-      match ms.entries.find? (·.2.1 == kb) with
-      | some (i, _, _) =>
-        return some (.loc { region := .map m i, off := 0, ty := ms.valueTy })
-      | none => return some (Val.mkInt false 64 0)
-    | .ringbuf _ => fail "a ring buffer has no slots"
-    | _ =>
-      let idx := ofLe (← argBytes st kl 4)
-      if idx < ms.capacity then
-        return some (.loc { region := .map m idx, off := 0, ty := ms.valueTy })
-      else return some (Val.mkInt false 64 0)
+    let keySize := match ms.decl.kind with
+      | .hash .. => ms.keySize
+      | _ => 4
+    match ← op (Machine.lookup m (← argBytes kl keySize)) with
+    | some r => return some (.loc { region := .shared r, off := 0, ty := ms.valueTy })
+    | none => return some (Val.mkInt false 64 0)
   | .update m, [k, v] =>
     let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
-    let kb ← argBytes st (← locOf k "`update`") ms.keySize
-    let vb ← argBytes st (← locOf v "`update`") ms.valueSize
-    match ms.entries.find? (·.2.1 == kb) with
-    | some (i, _, _) =>
-      set (st.setRegion (.map m i) (ByteArray.mk vb.toArray))
-      return some (Val.mkInt true 64 0)
-    | none =>
-      if ms.entries.length ≥ ms.capacity then return some (Val.mkInt true 64 (-7))
-      let ms' := { ms with entries := ms.entries ++ [(ms.nextEntry, kb, ByteArray.mk vb.toArray)],
-                           nextEntry := ms.nextEntry + 1 }
-      set { st with maps := st.maps.map fun (n, x) => if n == m then (n, ms') else (n, x) }
-      return some (Val.mkInt true 64 0)
+    let kb ← argBytes (← locOf k "`update`") ms.keySize
+    let vb ← argBytes (← locOf v "`update`") ms.valueSize
+    return some (Val.mkInt true 64 (← op (Machine.update m kb vb)))
   | .delete m, [k] =>
     let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
-    let kb ← argBytes st (← locOf k "`delete`") ms.keySize
-    if ms.entries.any (·.2.1 == kb) then
-      let ms' := { ms with entries := ms.entries.filter (·.2.1 != kb) }
-      set { st with maps := st.maps.map fun (n, x) => if n == m then (n, ms') else (n, x) }
-      return some (Val.mkInt true 64 0)
-    else return some (Val.mkInt true 64 (-2))
+    let kb ← argBytes (← locOf k "`delete`") ms.keySize
+    return some (Val.mkInt true 64 (← op (Machine.delete m kb)))
   | .reserve m n, [] =>
-    let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
-    let row ← resourceRow st ⟨"ringbuf"⟩
-    if (ms.ring.foldl (fun a b => a + b.size) 0) + n > ms.capacity then
-      return some (Val.mkInt false 64 0)
-    let (id, st) := st.fresh
-    let l : Loc := { region := .kernel id, off := 0, ty := anyTy }
-    set { st.setRegion (.kernel id) (zeros n) with
-            held := { row, name := none, map := some m, obj := some l } :: st.held }
-    return some (.loc l)
+    let row ← resourceRow ⟨"ringbuf"⟩
+    match ← op (Machine.reserve row m n) with
+    | some id => return some (.loc { region := .kernel id, off := 0, ty := anyTy })
+    | none => return some (Val.mkInt false 64 0)
   | .submit, [r] =>
-    let l ← locOf r "`submit`"
-    let h ← popHeld ⟨"ringbuf"⟩ (some l)
-    let st ← get
-    let rec_ := st.region l.region
-    if let some m := h.map then
-      set { st with maps := st.maps.map fun (p : String × Sem.MapState) =>
-        if p.1 == m then (p.1, { p.2 with ring := p.2.ring ++ [rec_] }) else p }
+    op (Machine.submit (← heldObjOf (← locOf r "`submit`") "`submit`"))
     return none
   | .discard, [r] =>
-    let _ ← popHeld ⟨"ringbuf"⟩ (some (← locOf r "`discard`"))
+    op (Machine.discard (← heldObjOf (← locOf r "`discard`") "`discard`"))
     return none
   | .lock, [a] =>
-    let l ← locOf a "`lock`"
-    let row ← resourceRow st ⟨"spinlock"⟩
-    if st.held.any (·.row.res == ⟨"spinlock"⟩) then fail "a lock acquired while a lock is held"
-    set { st with held := { row, name := none, obj := some l } :: st.held }
+    let row ← resourceRow ⟨"spinlock"⟩
+    op (Machine.lock row (← heldObjOf (← locOf a "`lock`") "`lock`"))
     return none
   | .unlock, [a] =>
-    let _ ← popHeld ⟨"spinlock"⟩ (some (← locOf a "`unlock`"))
+    op (Machine.unlock (← heldObjOf (← locOf a "`unlock`") "`unlock`"))
     return none
   | .enter r, [] =>
-    let row ← resourceRow st r
-    set { st with held := { row, name := none } :: st.held }
+    op (Machine.enter (← resourceRow r))
     return none
   | .leave r, [] =>
-    let _ ← popHeld r none
+    op (Machine.leave r)
     return none
   | .copy n, [d, s] =>
     let dl ← locOf d "`copy`"
     let sl ← locOf s "`copy`"
-    unless admitted st sl n && admitted st dl n do fail "`copy` outside a region"
+    unless st.admits sl n && st.admits dl n do fail "`copy` outside a region"
     set (st.writeAt dl (st.bytesAt sl n))
     return none
   | .fill n, [d, v] =>
     let dl ← locOf d "`fill`"
     let some b := pattern 8 v | fail "`fill` takes a byte"
-    unless admitted st dl n do fail "`fill` outside a region"
+    unless st.admits dl n do fail "`fill` outside a region"
     set (st.writeAt dl (List.replicate n (UInt8.ofNat b)))
     return none
   | .printk fmt, vs =>
-    set (st.record (.print fmt vs))
+    op (Machine.print fmt (vs.map Val.observe))
     return none
-  | .atomic op s w fetch, a :: vs =>
+  | .atomic o s w fetch, a :: vs =>
     let l ← locOf a "an atomic update"
-    unless admitted st l (w / 8) do fail "an atomic update outside its region"
+    unless st.admits l (w / 8) do fail "an atomic update outside its region"
     let old : Int := ofPattern s w (ofLe (st.bytesAt l (w / 8)))
-    match Sem.atomicResult op s w old vs with
+    match Machine.atomic o s w old (vs.map fun v => (v.toInt?).getD 0) with
     | some v => set (st.writeAt l (leBytes (toNatMod v w) (w / 8)))
     | none => pure ()
     return if fetch then some (Val.mkInt s w old) else none
   | b, _ => fail s!"`{b.print}` with the wrong arguments"
 
-/-- The resource rows a kernel function releases: those whose exit
-column names its kernel function. -/
-def releasesOf (st : State) (row : CallRow) : List ResourceRow :=
-  st.env.prelude.resources.filter fun r =>
-    r.normalExit == row.kernel || r.abnormalExit == row.kernel
-
-/-- The arguments of a kernel function fitted to its parameters: a
-scalar reduced to its width, a memory parameter given a location. -/
-def fitArgs (params : List Core.Param) (args : List Val) : M (List Val) := do
-  let mut out : List Val := []
+/-- The arguments of a kernel function as the kernel sees them: a
+scalar reduced to its parameter's type, a `ref` or `view` place as
+its bytes, an owned reference as its object. -/
+def fitArgs (params : List Core.Param) (args : List Val) : M (List Machine.Val) := do
+  let mut out : List Machine.Val := []
   for (p, v) in params.zip args do
-    match ← Sem.norm p.ty, v with
-    | .ref .., .loc _ | .view .., .loc _ | .own .., .loc _ => out := out ++ [v]
+    match ← norm p.ty, v with
+    | .own .., .loc l =>
+      match l.region with
+      | .shared (.kernel id) => out := out ++ [.object id]
+      | _ => fail s!"`{p.name}` takes an owned reference"
+    | .ref _ t, .loc l | .view _ t, .loc l =>
+      out := out ++ [.bytes (← argBytes l (← sizeOf t))]
     | .ref .., _ | .view .., _ | .own .., _ =>
       fail s!"`{p.name}` takes a location"
-    | t, .int .. => out := out ++ [← Sem.coerceTo t v]
+    | t, .int .. => out := out ++ [(fitCore t v).observe]
     | _, _ => fail s!"`{p.name}` takes a scalar"
   return out
 
-/-- What a kernel function does: the arguments fitted, the held rows
-consulted, the kernel's answer as `r0` by the row's convention, the
-trace appended, and the held stack pushed or popped per the row. -/
+/-- What a kernel function does: the arguments fitted, the call
+through the machine, which consults the held rows, appends the trace
+event, and pushes or pops the held stack per the row, and the answer
+as `r0` by the row's convention: a location for an owned or
+referenced result, the 64-bit signed return otherwise, which carries
+the failure signal of a scalar-result row. -/
 def execKernel (K : Kernel) (h : String) (args : List Val) : M Val := do
   let st ← get
   let some row := st.env.prelude.call? h | fail s!"unknown kernel function `{h}`"
@@ -318,41 +288,24 @@ def execKernel (K : Kernel) (h : String) (args : List Val) : M Val := do
     | .builtin => fail s!"`{h}` is a builtin"
   unless args.length == params.length do fail s!"`{h}` takes {params.length} arguments"
   let vs ← fitArgs params args
-  let releases := releasesOf st row
-  for held in st.held do
-    if Koit.Effects.Effs.forbids held.row.forbidden .call &&
-        !releases.any (·.res == held.row.res) then
-      fail s!"a call while {held.row.describe} is held"
-  match K.helper row vs st with
-  | .ok v st' =>
-    let st' := st'.record (.call row.name vs (.ok v))
-    set st'
-    let r0 := match v with
-      | some v => v
-      | none => Val.mkInt true 64 0
-    if let some r := row.acquires then
-      if let .loc l := r0 then
-        let rrow ← resourceRow st' r
-        modify fun st => { st with held := { row := rrow, name := none, obj := some l } :: st.held }
-    if let some rrow := releases.head? then
-      let obj ← match vs.head? with
-        | some (.loc l) => pure (some l)
-        | _ => pure none
-      let _ ← popHeld rrow.res obj
-    return r0
-  | .failed n st' =>
-    set (st'.record (.call row.name vs (.failed n)))
+  match ← op (Machine.call st.env.prelude K st.kind row vs) with
+  | .ok v =>
+    match v with
+    | some (.scalar x) => return Val.mkInt true 64 x
+    | some (.object id) => return .loc { region := .kernel id, off := 0, ty := anyTy }
+    | some (.bytes _) => fail s!"`{h}` answers with bytes"
+    | none => return Val.mkInt true 64 0
+  | .failed n =>
     return match rowResult row with
       | .ptr => Val.mkInt false 64 0
       | _ => Val.mkInt true 64 n
-  | .err m => fail m
 
 /-- `frame x : n`: a fresh zeroed stack region. -/
 def execFrame (x : String) (n : Nat) (src : Option Core.Ty) : M Unit := do
   let st ← get
-  let (id, st) := st.fresh
+  let (id, st) := st.freshStack
   let l : Loc := { region := .stack id, off := 0, ty := src.getD anyTy }
-  set ((st.setRegion (.stack id) (zeros n)).bind x (.val (.loc l)))
+  set ((st.setRegion (.stack id) (zeros n)).bind x (.loc l))
 
 /-- `store(w) a e`. -/
 def execStore (w : Nat) (a : Addr) (e : Expr) : M Unit := do
@@ -360,7 +313,7 @@ def execStore (w : Nat) (a : Addr) (e : Expr) : M Unit := do
   let l ← liftRes (evalAddr st a)
   let v ← liftRes (evalExpr st e)
   let some p := pattern w v | fail "a location is never stored"
-  unless admitted st l (w / 8) do
+  unless st.admits l (w / 8) do
     fail s!"a store of {w} bits at {repr l.region} + {l.off} is not admitted"
   set (st.writeAt l (leBytes p (w / 8)))
 
@@ -368,25 +321,28 @@ def execStore (w : Nat) (a : Addr) (e : Expr) : M Unit := do
 def execLet (x : String) (t : Ty) (e : Expr) : M Unit := do
   let st ← get
   let v ← liftRes (evalExpr st e)
-  set (st.bind x (.val (fit t v)))
+  set (st.bind x (fit t v))
 
 /-- `x := e`, at the type of the value `x` holds. -/
 def execAssign (x : String) (e : Expr) : M Unit := do
   let st ← get
   let v ← liftRes (evalExpr st e)
   match st.local? x with
-  | some (.val (.int s w _ _)) => set (st.rebind x (.val (fit (.int s w) v)))
-  | some (.val _) => set (st.rebind x (.val v))
-  | _ => fail s!"`{x}` is unbound"
+  | some (.int s w _ _) => set (st.rebind x (fit (.int s w) v))
+  | some _ => set (st.rebind x v)
+  | none => fail s!"`{x}` is unbound"
 
 /-- The arguments of a call to a function of the unit, fitted to its
 parameters. -/
-def callFrame (d : Fn) (args : List Val) : M (List (String × Binding)) := do
+def callFrame (d : Fn) (args : List Val) : M (List (String × Val)) := do
   unless args.length == d.params.length do
     fail s!"`{d.name}` takes {d.params.length} arguments"
-  return (d.params.zip args).map fun (p, v) => (p.name, .val (fit p.ty v))
+  return (d.params.zip args).map fun (p, v) => (p.name, fit p.ty v)
 
 /-! ### The judgments -/
+
+/-- A primitive applied in a state. -/
+def prim (f : M α) (st : State) : Except Abort (α × State) := f.exec st
 
 /-- The arguments of a call, evaluated left to right. -/
 inductive EvalArgs : State → List Expr → Res (List Val) → Prop
@@ -405,7 +361,6 @@ rule. -/
 def stmtArgs : Stmt → Option (List Expr)
   | .call _ _ _ args .. | .builtin _ _ _ args | .kernel _ _ _ args => some args
   | _ => none
-
 
 /-- The functions of the unit, which the call rule looks up. -/
 abbrev Fns := List Fn
@@ -499,7 +454,7 @@ inductive ExecStmt (K : Kernel) (fns : Fns) : State → Stmt → Outcome → Sta
       st2 = { st1 with locals := st.locals } →
       ExecStmt K fns st (.call sp x f args u a) .normal
         (match x with
-         | some x => st2.bind x (.val v)
+         | some x => st2.bind x v
          | none => st2)
   | callAbsent {st sp x f args u a d vs frame st1 o st2} :
       fns.find? (·.name == f) = some d → EvalArgs st args (.ok vs) →
@@ -524,7 +479,7 @@ inductive ExecStmt (K : Kernel) (fns : Fns) : State → Stmt → Outcome → Sta
       EvalArgs st args (.ok vs) → prim (execBuiltin b vs) st = .ok (v, st') →
       ExecStmt K fns st (.builtin sp x b args) .normal
         (match x, v with
-         | some x, some v => st'.bind x (.val v)
+         | some x, some v => st'.bind x v
          | _, _ => st')
   | builtinErr {st sp x b args vs m} :
       EvalArgs st args (.ok vs) → prim (execBuiltin b vs) st = .error (.err m) →
@@ -534,7 +489,7 @@ inductive ExecStmt (K : Kernel) (fns : Fns) : State → Stmt → Outcome → Sta
       EvalArgs st args (.ok vs) → prim (execKernel K h vs) st = .ok (v, st') →
       ExecStmt K fns st (.kernel sp x h args) .normal
         (match x with
-         | some x => st'.bind x (.val v)
+         | some x => st'.bind x v
          | none => st')
   | kernelErr {st sp x h args vs m} :
       EvalArgs st args (.ok vs) → prim (execKernel K h vs) st = .error (.err m) →
@@ -555,25 +510,29 @@ inductive ExecStmts (K : Kernel) (fns : Fns) : State → List Stmt → Outcome �
 
 end
 
+/-- How a program's run ends. -/
+inductive ProgOut where
+  | halt (v : Val)
+  | err (msg : String)
+  deriving Repr, Inhabited
+
 /-- (Program): the body's `return` halts; a failure runs the handler
 of its kind with `reason` bound and nothing held; a `syscall` body
 may fall off its end; anything else, including a held stack that is
 not empty at the exit, is an error. -/
-inductive ExecProgram (K : Kernel) (fns : Fns) : State → Program → Sem.ProgOut → State → Prop
-  | ret {st p v v' st1} :
+inductive ExecProgram (K : Kernel) (fns : Fns) : State → Program → ProgOut → State → Prop
+  | ret {st p v st1} :
       ExecStmts K fns st p.body (.ret (some v)) st1 → st1.held = [] →
-      prim (Sem.coerceTo st.kind.verdictTy v) st1 = .ok (v', st1) →
-      ExecProgram K fns st p (.halt v') st1
+      ExecProgram K fns st p (.halt (fitCore st.kind.verdictTy v)) st1
   | fallOff {st p st1} :
       ExecStmts K fns st p.body .normal st1 → st.kind.hasPkt = false → st1.held = [] →
       ExecProgram K fns st p (.halt (Val.mkInt true 32 0)) st1
-  | handled {st p k reason h v v' st1 st2} :
+  | handled {st p k reason h v st1 st2} :
       ExecStmts K fns st p.body (.raise k reason) st1 → st1.held = [] →
       p.handlers.find? (·.kind == k) = some h →
-      ExecStmts K fns { st1 with locals := [("reason", .val (Val.u32 reason))] }
+      ExecStmts K fns { st1 with locals := [("reason", Val.u32 reason)] }
         h.body (.ret (some v)) st2 →
-      prim (Sem.coerceTo st.kind.verdictTy v) st2 = .ok (v', st2) →
-      ExecProgram K fns st p (.halt v') st2
+      ExecProgram K fns st p (.halt (fitCore st.kind.verdictTy v)) st2
   | bodyErr {st p m st1} :
       ExecStmts K fns st p.body (.err m) st1 → ExecProgram K fns st p (.err m) st1
   | heldAtExit {st p o st1} :
@@ -589,8 +548,8 @@ inductive ExecProgram (K : Kernel) (fns : Fns) : State → Program → Sem.ProgO
   | handlerErr {st p k reason h o st1 st2} :
       ExecStmts K fns st p.body (.raise k reason) st1 → st1.held = [] →
       p.handlers.find? (·.kind == k) = some h →
-      ExecStmts K fns { st1 with locals := [("reason", .val (Val.u32 reason))] }
+      ExecStmts K fns { st1 with locals := [("reason", Val.u32 reason)] }
         h.body o st2 → (∀ v, o ≠ .ret (some v)) →
       ExecProgram K fns st p (.err "the handler does not return a verdict") st2
 
-end Koit.LIR
+end Koit.LIR.Sem

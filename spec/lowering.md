@@ -374,7 +374,8 @@ course gives for a while language and a virtual machine, extended
 by the label stack that `block`, `loop`, and `br` need, which is the
 form the WebAssembly proofs take. The expression lemma is a finite
 table: for each operator, width, and signedness, the instruction and
-its normalization compute `arith` of `Machine.lean` on normal forms.
+its normalization compute `arith` of `Koit/Machine/Bytes.lean` on
+normal forms.
 The width table of `bir.md` section 4 is that lemma's statement. Pass
 C also establishes BIR's well-formedness, registers written before
 read and labels defined once, which pass D assumes.

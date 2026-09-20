@@ -1,5 +1,5 @@
-import Koit.Lower.LIR
-import Koit.Core.Machine
+import Koit.LIR.Wf
+import Koit.Core.State
 
 /-!
 The printer P, from LIR with functions to C: one C construct per LIR
@@ -22,7 +22,7 @@ are called through the templates of `kernelCall`, which add the
 arguments the helpers take and the source does not name.
 -/
 
-namespace Koit.Lower
+namespace Koit.Compile
 
 open Koit.Core (Kind)
 
@@ -422,7 +422,7 @@ def cprogram (pre : Prelude) (u : LIR.CompUnit) (p : LIR.Program) : PM String :=
     | some row =>
       match row.defaultExit with
       | .verdict name => (row.verdicts.lookup name).getD 0
-      | .value v => Sem.toNatMod v (LIR.Ty.width vt)
+      | .value v => Machine.toNatMod v (LIR.Ty.width vt)
     | none => 0
   let dv := clit (LIR.Ty.width vt) dflt
   let c : PCtx := { types := u.types, fns := u.fns, kind := p.kind, status := false,
@@ -533,4 +533,4 @@ def emitC (pre : Prelude) (u : LIR.CompUnit) : String :=
   String.join (progs.map (· ++ "\n")) ++
   s!"char _license[] SEC(\"license\") = \"{u.license.getD "GPL"}\";\n"
 
-end Koit.Lower
+end Koit.Compile

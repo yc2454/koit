@@ -16,7 +16,7 @@ constant or a dead branch; its theorem says a run of the folded
 program is a run of the source.
 -/
 
-namespace Koit.Lower
+namespace Koit.Compile
 
 open Koit (Span)
 open Koit.Core
@@ -36,7 +36,7 @@ on an empty frame; `none` when the expression is not constant. -/
 def constVal (env : Env) (row : Prelude.KindRow) (e : Expr) : Option Sem.Val :=
   if env.isConstExpr e then
     let st := Sem.initState env row ByteArray.empty [] [] 64
-    match (Sem.evalExpr Sem.synthetic e).exec st with
+    match (Sem.evalExpr Machine.synthetic e).exec st with
     | .ok (v, _) => some v
     | .error _ => none
   else none
@@ -46,9 +46,9 @@ yet, cast to its type otherwise, which is what the value's type is
 in the evaluator. -/
 def litOf (s : Span) (v : Sem.Val) : Option Expr :=
   match v with
-  | .int _ _ x true => some (.lit s (Sem.toNatMod x 64) (toString (Sem.toNatMod x 64)))
+  | .int _ _ x true => some (.lit s (Machine.toNatMod x 64) (toString (Machine.toNatMod x 64)))
   | .int sg w x false =>
-    let n := Sem.toNatMod x w
+    let n := Machine.toNatMod x w
     some (.cast s (.lit s n (toString n)) (.int s sg w))
   | .bool b => some (.bool s b)
   | _ => none
@@ -209,7 +209,7 @@ def foldEnv (pre : Prelude) (u : CompUnit) (checked : Checked) (env : Env) : Env
 the folded unit's functions. A constant evaluates to its value by the
 rules for names, and a folded conditional takes the branch its
 condition selects. Stated now, proved after the design settles. -/
-theorem fold_correct (pre : Prelude) (u : CompUnit) (checked : Checked) (K : Sem.Kernel) :
+theorem fold_correct (pre : Prelude) (u : CompUnit) (checked : Checked) (K : Machine.Kernel) :
     Check.checkUnit pre u = .ok checked →
     ∀ p ∈ u.programs, ∀ st o st',
       Sem.ExecProgram K st p o st' ↔
@@ -217,4 +217,4 @@ theorem fold_correct (pre : Prelude) (u : CompUnit) (checked : Checked) (K : Sem
         (foldProgram st.env p) o { st' with env := foldEnv pre u checked st'.env } := by
   sorry
 
-end Koit.Lower
+end Koit.Compile

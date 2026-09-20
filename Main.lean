@@ -104,7 +104,7 @@ partial def runOpts : List String → RunOpts → Option RunOpts
   | [], o => some o
   | "--kernel" :: t :: rest, o => runOpts rest { o with kernel := some t }
   | "--packet" :: h :: rest, o => do
-    let b ← Sem.parseHex h
+    let b ← Core.Sem.parseHex h
     runOpts rest { o with packet := b }
   | "--program" :: n :: rest, o => runOpts rest { o with program := some n }
   | "--ctx" :: fv :: rest, o =>
@@ -122,8 +122,8 @@ partial def runOpts : List String → RunOpts → Option RunOpts
 /-- A checked unit lowered through passes A and B, and I when asked. -/
 def lowerUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
     (inline : Bool) : Except String LIR.CompUnit := do
-  let lir ← Lower.lower pre (Lower.fold pre core checked)
-  let lir := if inline then Lower.inline lir else lir
+  let lir ← Compile.lower pre (Compile.fold pre core checked)
+  let lir := if inline then Compile.inline lir else lir
   LIR.wf pre lir |>.mapError (s!"the lowered unit is not well-formed: " ++ ·)
   return lir
 
@@ -191,9 +191,9 @@ def run (args : List String) : IO UInt32 := do
     let some (core, checked) ← checkFile file pre | return 1
     let result ← if opts.lir then
         match lowerUnit pre core checked opts.inline with
-        | .ok lir => pure (LIR.runUnit pre core lir opts.packet opts.ctx opts.program opts.fuel)
+        | .ok lir => pure (LIR.Sem.runUnit pre core lir opts.packet opts.ctx opts.program opts.fuel)
         | .error m => pure (.error m)
-      else pure (Sem.runUnit pre core opts.packet opts.ctx opts.program opts.fuel)
+      else pure (Core.Sem.runUnit pre core opts.packet opts.ctx opts.program opts.fuel)
     match result with
     | .ok (reports, maps) =>
       for r in reports do
@@ -224,7 +224,7 @@ def run (args : List String) : IO UInt32 := do
     let some (core, checked) ← checkFile file pre | return 1
     match lowerUnit pre core checked false with
     | .ok lir =>
-      IO.print (Lower.emitC pre lir)
+      IO.print (Compile.emitC pre lir)
       return 0
     | .error m =>
       IO.eprintln s!"{file}: {m}"

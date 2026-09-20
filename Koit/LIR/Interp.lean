@@ -1,20 +1,23 @@
-import Koit.Lower.LIRSem
+import Koit.LIR.Semantics
+import Koit.Core.Interp
 
 /-!
 The LIR evaluator: the executable form of the relations in
-`LIRSem.lean`, run by `koitc run --lir` over the same synthetic
+`Semantics.lean`, run by `koitc run --lir` over the same synthetic
 kernel, packet, and maps as Core's evaluator, so that the runner can
 compare the two level by level. Statements are executed
 structurally; a `br` and a `return` are outcomes the enclosing
 construct consumes, and a failure or an error is an abort that the
 `unwind` of each enclosing call intercepts on its way to the
-program's handler.
+program's handler. The reporting is Core's, so that the two runs
+print alike.
 -/
 
-namespace Koit.LIR
+namespace Koit.LIR.Sem
 
 open Koit.Core (Kind)
-open Koit.Sem (State Val Loc Binding HeldRes Kernel M Abort prim useFuel)
+open Koit.Core.Sem (Val Loc Abort)
+open Koit.Machine (Kernel HeldRes)
 
 /-- How a statement ends when it does not abort. -/
 inductive LOut where
@@ -25,8 +28,7 @@ inductive LOut where
 
 /-- Two held stacks read as rows and objects. -/
 def heldEq (a b : List HeldRes) : Bool :=
-  a.length == b.length &&
-    (a.zip b).all fun (h, h') => h.row.res == h'.row.res && sameObj h.obj h'.obj
+  a.length == b.length && (a.zip b).all fun (h, h') => h.same h'
 
 def evalArgs (args : List Expr) : M (List Val) := do
   let st ← get
@@ -34,7 +36,7 @@ def evalArgs (args : List Expr) : M (List Val) := do
 
 def bindOpt (x : Option String) (v : Option Val) : M Unit := do
   match x, v with
-  | some x, some v => modify fun st => st.bind x (.val v)
+  | some x, some v => modify fun st => st.bind x v
   | some x, none => fail s!"nothing to bind to `{x}`"
   | none, _ => pure ()
 
@@ -121,15 +123,19 @@ partial def runLoop (K : Kernel) (fns : Fns) (body : List Stmt) : M LOut := do
 
 end
 
-/-- A program from its initial state, as `Sem.runProgram` runs
+/-- A run's result: the verdict and the state. -/
+structure Halt where
+  verdict : Val
+  state   : State
+
+/-- A program from its initial state, as Core's `runProgram` runs
 Core's. -/
-def runProgram (K : Kernel) (fns : Fns) (st : State) (p : Program) :
-    Except String Sem.Halt := do
+def runProgram (K : Kernel) (fns : Fns) (st : State) (p : Program) : Except String Halt := do
   let heldEmpty : M Unit := do
     unless (← get).held.isEmpty do fail "the program exits holding a resource"
   let body : M Val := do
     match ← execStmts K fns p.body with
-    | .ret (some v) => heldEmpty; Sem.coerceTo st.kind.verdictTy v
+    | .ret (some v) => heldEmpty; return fitCore st.kind.verdictTy v
     | .normal =>
       if st.kind.hasPkt then fail "the body fell off its end"
       heldEmpty
@@ -141,9 +147,9 @@ def runProgram (K : Kernel) (fns : Fns) (st : State) (p : Program) :
       | .raise k reason =>
         heldEmpty
         let some h := p.handlers.find? (·.kind == k) | fail s!"no handler for `{k}`"
-        modify fun st => { st with locals := [("reason", .val (Val.u32 reason))] }
+        modify fun st => { st with locals := [("reason", Val.u32 reason)] }
         match ← execStmts K fns h.body with
-        | .ret (some v) => Sem.coerceTo st.kind.verdictTy v
+        | .ret (some v) => return fitCore st.kind.verdictTy v
         | _ => fail s!"the handler for `{k}` does not return a verdict"
       | .err m => throw (.err m)
   match handled.exec st with
@@ -155,27 +161,27 @@ def runProgram (K : Kernel) (fns : Fns) (st : State) (p : Program) :
 `runUnit` does, reporting the same lines. -/
 def runUnit (pre : Prelude) (core : Core.CompUnit) (u : CompUnit) (packet : ByteArray)
     (ctx : List (String × Nat)) (only : Option String) (fuel : Nat) :
-    Except String (List Sem.Report × List String) := do
+    Except String (List Core.Sem.Report × List String) := do
   let env : Check.Env := { prelude := pre, license := core.license.map (·.2),
                            types := core.types, consts := core.consts,
                            configs := core.configs, maps := core.maps, fns := core.fns,
                            contracts := core.contracts }
-  let mut maps ← Sem.initMaps env core
-  let mut reports : List Sem.Report := []
+  let mut maps ← Core.Sem.initMaps env core
+  let mut reports : List Core.Sem.Report := []
   for p in u.programs do
     if only.isSome && only != some p.name then continue
     let some row := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
-    let st := Sem.initState env row packet ctx maps fuel
-    let h ← runProgram Sem.synthetic u.fns st p
+    let st := initState env row packet ctx maps fuel
+    let h ← runProgram Machine.synthetic u.fns st p
     maps := h.state.maps
-    reports := reports ++ [{ program := p.name, verdict := Sem.verdictName row h.verdict,
+    reports := reports ++ [{ program := p.name, verdict := Core.Sem.verdictName row h.verdict,
                              log := h.state.log }]
-  return (reports, Sem.printMaps env maps)
+  return (reports, Core.Sem.printMaps env maps)
 
 /-- The evaluator agrees with the relation: a run it completes is a
 derivation. Stated now, proved after the design settles. -/
-theorem lirInterp_sound (K : Kernel) (fns : Fns) (st : State) (p : Program) (h : Sem.Halt) :
+theorem lirInterp_sound (K : Kernel) (fns : Fns) (st : State) (p : Program) (h : Halt) :
     runProgram K fns st p = .ok h → ExecProgram K fns st p (.halt h.verdict) h.state := by
   sorry
 
-end Koit.LIR
+end Koit.LIR.Sem

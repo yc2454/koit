@@ -15,12 +15,13 @@ program the checker rejects has no defined run, and the errors here
 are the cases the safety theorem makes unreachable.
 -/
 
-namespace Koit.Sem
+namespace Koit.Core.Sem
 
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env)
 open Koit.Prelude (KindRow CallRow ResourceRow AcqArg Sig)
+open Koit.Machine (Kernel toNatMod wrap zeros arith compare bswap hexOf)
 
 mutual
 
@@ -93,12 +94,12 @@ partial def evalExpr (K : Kernel) : Expr → M Val
     match ← evalExpr K e with
     | .int _ w x poly =>
       if poly then return .be 0 (toNatMod x 64)
-      else return .be w (Val.bswap w (toNatMod x w))
+      else return .be w (bswap w (toNatMod x w))
     | v => fail s!"`hton` of {v.print}"
   | .ntoh _ e => do
     match ← evalExpr K e with
     | .be 0 x => return Val.mkInt false 64 x
-    | .be w x => return Val.mkInt false w (Val.bswap w x)
+    | .be w x => return Val.mkInt false w (bswap w x)
     | v => fail s!"`ntoh` of {v.print}"
   | .read _ p => do loadPlace (← evalPlace K p)
   | .size _ t => do return Val.lit (← sizeOf t)
@@ -106,9 +107,9 @@ partial def evalExpr (K : Kernel) : Expr → M Val
     let st ← get
     match st.local? x with
     | some (.place l) =>
-      -- the sink now owns it: the scope's release is cancelled
-      set ((st.rebind x .moved) |> fun st =>
-        { st with held := st.held.filter (·.name != some x) })
+      -- the name is dead, so the scope releases nothing; the sink's
+      -- row pops the held entry when it runs
+      set (st.rebind x .moved)
       return .loc l
     | _ => fail s!"`move {x}` of a name that is not owned"
   | .call s f args => do
@@ -221,13 +222,11 @@ partial def callAny (K : Kernel) (s : Span) (f : String) (args : List Arg) :
   | some row =>
     match row.sig with
     | .builtin => builtin K s f args
-    | .fn params _ =>
+    | .fn params ret =>
       let vs ← evalArgs K args params
-      match K.helper row vs (← get) with
-      | .ok v st' => set (st'.record (.call row.name vs (.ok v))); return v
-      | .failed errno _ =>
-        fail s!"`{f}` failed with {errno} at a call the program did not mark"
-      | .err m => fail m
+      match ← kernelCall K row params ret vs with
+      | some v => return v
+      | none => fail s!"`{f}` failed with {(← get).errno} at a call the program did not mark"
   | none => fail s!"unknown function `{f}`"
 
 /-- A function of the unit: its parameters bound in a fresh frame, the
@@ -284,31 +283,19 @@ partial def builtin (K : Kernel) (s : Span) (f : String) (args : List Arg) :
     let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
     let kb ← bytesOfPlace (← evalPlace K k) ms.keySize
     let vb ← bytesOfPlace (← evalPlace K v) ms.valueSize
-    match ms.entries.find? (·.2.1 == kb) with
-    | some (i, _, _) =>
-      set (st.setRegion (.map m i) (ByteArray.mk vb.toArray))
-      return none
-    | none =>
-      if ms.entries.length ≥ ms.capacity then
-        throw (.raise .helper (toNatMod (-7) 32))
-      let entry : Nat × List UInt8 × ByteArray :=
-        (ms.nextEntry, kb, ByteArray.mk vb.toArray)
-      let ms' := { ms with entries := ms.entries ++ [entry],
-                           nextEntry := ms.nextEntry + 1 }
-      set { st with maps := st.maps.map fun (n, x) => if n == m then (n, ms') else (n, x) }
-      return none
+    match ← op (Machine.update m kb vb) with
+    | 0 => return none
+    | rc => throw (.raise .helper (toNatMod rc 32))
   | "delete", [.map _ m, .place k] =>
     let st ← get
     let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
     let kb ← bytesOfPlace (← evalPlace K k) ms.keySize
-    if ms.entries.any (·.2.1 == kb) then
-      let ms' := { ms with entries := ms.entries.filter (·.2.1 != kb) }
-      set { st with maps := st.maps.map fun (n, x) => if n == m then (n, ms') else (n, x) }
-      return none
-    else throw (.raise .helper (toNatMod (-2) 32))
+    match ← op (Machine.delete m kb) with
+    | 0 => return none
+    | rc => throw (.raise .helper (toNatMod rc 32))
   | "printk", .val (.str _ fmt) :: rest =>
     let vs ← evalArgs K rest
-    modify fun st => st.record (.print fmt (vs.map settle))
+    modify fun st => st.record (.print fmt (vs.map fun v => (settle v).observe))
     return none
   | _, _ =>
     let _ := s
@@ -343,9 +330,8 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
     let st ← get
     let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
     let kb ← bytesOfPlace (← evalPlace K k) ms.keySize
-    match ms.entries.find? (·.2.1 == kb) with
-    | some (i, _, _) =>
-      return some (some (.place { region := .map m i, off := 0, ty := ms.valueTy }))
+    match ← op (Machine.lookup m kb) with
+    | some r => return some (some (.place { region := .shared r, off := 0, ty := ms.valueTy }))
     | none => return none
   | .loadw _ p => do
     match p with
@@ -382,19 +368,11 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
         catch
           | .raise .helper r => helperFailed (wrap true 32 r); return none
           | e => throw e
-      | .fn params _ =>
+      | .fn params ret =>
         let vs ← evalArgs K args params
-        match K.helper row vs (← get) with
-        | .ok v st' =>
-          set (st'.record (.call row.name vs (.ok v)))
-          return some (v.map fun v => match v with
-            | .loc l => .place l
-            | v => .val v)
-        | .failed errno st' =>
-          set (st'.record (.call row.name vs (.failed errno)))
-          helperFailed errno
-          return none
-        | .err m => fail m
+        match ← kernelCall K row params ret vs with
+        | some v => return some (v.map bindingOf)
+        | none => return none
     | none => fail s!"unknown function `{f}`"
   | .callopt _ f args => do
     let env ← getEnv
@@ -423,35 +401,28 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
           | .mem l => pure l
           | _ => fail s!"`{f}` takes a place in a map value"
         | _ => fail s!"`{f}` takes one place"
-      modify fun st => { st with held := { row, name := none, obj := some l } :: st.held }
+      let some obj := l.heldObj | fail s!"`{f}` takes a place in a map value"
+      op (Machine.lock row obj)
       return some none
     | .scope =>
-      modify fun st => { st with held := { row, name := none } :: st.held }
+      op (Machine.enter row)
       return some none
     | .call =>
       if f == "reserve" then
         match args, ty with
         | [.map _ m], some t =>
-          let st ← get
-          let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
           let n ← sizeOf t
-          -- the ring is full when its records fill its bytes
-          if (ms.ring.foldl (fun a b => a + b.size) 0) + n > ms.capacity then
+          match ← op (Machine.reserve row m n) with
+          | some id => return some (some (.place { region := .kernel id, off := 0, ty := t }))
+          | none =>
+            -- the ring is full when its records fill its bytes
             helperFailed (-12)
             return none
-          let (id, st) := st.fresh
-          let st := st.setRegion (.kernel id) (zeros n)
-          let l : Loc := { region := .kernel id, off := 0, ty := t }
-          set { st with held := { row, name := none, map := some m, obj := some l }
-                          :: st.held }
-          return some (some (.place l))
         | _, _ => fail "`reserve` takes a ring buffer and a record type"
       else
+        -- the call through the machine pushes the object it hands out
         match ← execFallible K (.call s f args) with
-        | some (some (.place l)) =>
-          modify fun st =>
-            { st with held := { row, name := none, obj := some l } :: st.held }
-          return some (some (.place l))
+        | some (some (.place l)) => return some (some (.place l))
         | some _ => fail s!"`{f}` yields no owned reference"
         | none => return none
 
@@ -488,7 +459,7 @@ partial def execStmt (K : Kernel) (s : Stmt) : M Outcome := do
       let t ← lift (Koit.Check.structForLiteral env ls ty fields)
       let n ← sizeOf t
       let st ← get
-      let (id, st) := st.fresh
+      let (id, st) := st.freshStack
       set (st.setRegion (.stack id) (zeros n))
       let l : Loc := { region := .stack id, off := 0, ty := t }
       for fi in fields do
@@ -539,15 +510,11 @@ partial def execStmt (K : Kernel) (s : Stmt) : M Outcome := do
       match x, b with
       | some x, some b => modify fun st => st.bind x b
       | _, _ => pure ()
-      -- the held entry carries the name, so that `move` cancels it
-      modify fun st =>
-        let held : List HeldRes := match st.held with
-          | h :: rest => { h with name := x } :: rest
-          | [] => []
-        { st with held }
+      -- released on the way out unless `move` handed it away, which
+      -- the binding records
       let o ← try execBlock K body catch e => do
-        modify (releaseRes · false x); dropTo n; throw e
-      modify (releaseRes · (o matches .normal) x)
+        release K false ((← get).moved x); dropTo n; throw e
+      release K (o matches .normal) ((← get).moved x)
       dropTo n
       return o
     | none =>
@@ -562,14 +529,7 @@ partial def execStmt (K : Kernel) (s : Stmt) : M Outcome := do
     let (s, w) := match old with
       | .int s w _ _ => (s, w)
       | _ => (false, 64)
-    let arg (i : Nat) : Int := ((vs[i]?).bind (·.toInt?)).getD 0
-    let new : Option Int := match op with
-      | .add => some (arith .add s w o (arg 0))
-      | .band => some (arith .band s w o (arg 0))
-      | .bor => some (arith .bor s w o (arg 0))
-      | .bxor => some (arith .bxor s w o (arg 0))
-      | .xchg => some (wrap s w (arg 0))
-      | .cmpxchg => if o == arg 0 then some (wrap s w (arg 1)) else none
+    let new := atomicResult op s w o vs
     if let some v := new then storePlace r (Val.mkInt s w v)
     if let some x := x then modify fun st => st.bind x (.val old)
     return .normal
@@ -615,20 +575,23 @@ structure Halt where
 the failure's kind with `reason` bound, each ending in a `return`.
 A `syscall` body may fall off its end, returning 0. -/
 def runProgram (K : Kernel) (st : State) (p : Program) : Except String Halt := do
+  let heldEmpty : M Unit := do
+    unless (← get).held.isEmpty do fail "the program exits holding a resource"
   let body : M Val := do
     match ← execBlock K p.body with
-    | .ret (some v) => coerceTo st.kind.verdictTy v
+    | .ret (some v) => heldEmpty; coerceTo st.kind.verdictTy v
     | .normal =>
       if st.kind.hasPkt then fail "the body fell off its end"
+      heldEmpty
       return Val.mkInt true 32 0
     | _ => fail "the body ends with a loop exit"
   let handled : M Val := do
     try body catch
       | .raise k reason =>
+        heldEmpty
         let some h := p.handlers.find? (·.kind == k)
           | fail s!"no handler for `{k}`"
-        modify fun st => { st with locals := [("reason", .val (Val.u32 reason))],
-                                   held := [] }
+        modify fun st => { st with locals := [("reason", .val (Val.u32 reason))] }
         match ← execBlock K h.body with
         | .ret (some v) => coerceTo st.kind.verdictTy v
         | _ => fail s!"the handler for `{k}` fell off its end"
@@ -640,8 +603,9 @@ def runProgram (K : Kernel) (st : State) (p : Program) : Except String Halt := d
 
 /-- The map state of a unit at the start of a run: every map empty
 or zero-filled. -/
-def initMaps (env : Env) (u : CompUnit) : Except String (List (String × MapState)) := do
-  let mut ms : List (String × MapState) := []
+def initMaps (env : Env) (u : CompUnit) :
+    Except String (List (String × Machine.MapState)) := do
+  let mut ms : List (String × Machine.MapState) := []
   for d in u.maps do
     let lay (t : Ty) : Except String Nat :=
       match env.layout t with
@@ -672,72 +636,7 @@ def verdictName (row : KindRow) (v : Val) : String :=
     | none => toString x
   | v => v.print
 
-/-! ### The synthetic kernel -/
-
-/-- One behavior each helper of the stage-1 table may have: a redirect
-succeeds with `REDIRECT`; the resizes grow with zero bytes and fail
-past the packet's end; a socket lookup finds a socket; the clock
-advances a microsecond per call; the checksums are the one's
-complement of the kernel, with the kernel's own `csum_add` and `csum_fold`. -/
-def synthetic : Kernel where
-  helper row args st :=
-    let ints := args.map fun v => (v.toInt?).getD 0
-    match row.name, ints with
-    | "redirect", _ =>
-      .ok (some (Val.u32 ((st.kind.verdicts.lookup "REDIRECT").getD 0))) st
-    | "pkt.adjust_head", [delta] =>
-      if delta ≤ 0 then
-        let grown := ByteArray.mk ((Array.replicate delta.natAbs (0 : UInt8)) ++ st.packet.data)
-        .ok none { st with packet := grown, layout := st.layout + 1 }
-      else if delta.toNat > st.packet.size then .failed (-22) st
-      else
-        .ok none { st with packet := st.packet.extract delta.toNat st.packet.size,
-                            layout := st.layout + 1 }
-    | "pkt.adjust_tail", [delta] =>
-      if delta ≥ 0 then
-        let grown := ByteArray.mk (st.packet.data ++ Array.replicate delta.toNat (0 : UInt8))
-        .ok none { st with packet := grown, layout := st.layout + 1 }
-      else if delta.natAbs > st.packet.size then .failed (-22) st
-      else
-        .ok none { st with packet := st.packet.extract 0 (st.packet.size - delta.natAbs),
-                            layout := st.layout + 1 }
-    | "pkt.len", _ => .ok (some (Val.u64 st.packet.size)) st
-    | "sk_lookup_tcp", _ | "sk_lookup_udp", _ =>
-      let (id, st) := st.fresh
-      let st := st.setRegion (.kernel id) ByteArray.empty
-      .ok (some (.loc { region := .kernel id, off := 0,
-                        ty := .named Koit.Prelude.noSpan "Sock" })) st
-    | "sk_release", _ => .ok none st
-    | "ktime", _ =>
-      let st := { st with clock := st.clock + 1000 }
-      .ok (some (Val.u64 st.clock)) st
-    -- `csum_add`: a 32-bit add with end-around carry; `csum_fold`:
-    -- folded twice and complemented, as include/net/checksum.h has them
-    | "csum_add", [c, a] =>
-      let a := toNatMod a 32
-      let s := (toNatMod c 32 + a) % 2 ^ 32
-      .ok (some (Val.u32 (if s < a then s + 1 else s))) st
-    | "csum_fold", [c] =>
-      let s := toNatMod c 32
-      let s := (s % 65536) + (s / 65536)
-      let s := (s % 65536) + (s / 65536)
-      .ok (some (Val.mkInt false 16 (65535 - (s % 65536)))) st
-    | f, _ => .err s!"the synthetic kernel has no rule for `{f}`"
-
-end Koit.Sem
-
-namespace Koit.Sem
-
-open Koit.Core
-open Koit.Check (Env)
-open Koit.Prelude (KindRow)
-
 /-! ### Reporting -/
-
-def hexOf (bs : List UInt8) : String :=
-  String.join (bs.map fun b =>
-    let ds := Nat.toDigits 16 b.toNat
-    (if ds.length < 2 then "0" else "") ++ String.ofList ds)
 
 /-- A value of type `t` at `bs`, printed by its type: structs by
 field, byte arrays as hex, other arrays element by element, a slot
@@ -774,7 +673,7 @@ partial def printBytes (env : Env) (t : Ty) (bs : List UInt8) (fuel : Nat := 32)
 
 /-- The map state, one line per map: the slots or entries that are
 not all zero, or a note that none is. -/
-def printMaps (env : Env) (maps : List (String × MapState)) : List String :=
+def printMaps (env : Env) (maps : List (String × Machine.MapState)) : List String :=
   maps.map fun (name, ms) =>
     match ms.decl.kind with
     | .ringbuf _ =>
@@ -837,15 +736,11 @@ def runUnit (pre : Prelude) (u : CompUnit) (packet : ByteArray)
     if only.isSome && only != some p.name then continue
     let some row := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
     let st := initState env row packet ctx maps fuel
-    let h ← runProgram synthetic st p
+    let h ← runProgram Machine.synthetic st p
     maps := h.state.maps
     reports := reports ++ [{ program := p.name, verdict := verdictName row h.verdict,
                              log := h.state.log }]
   return (reports, printMaps env maps)
-
-end Koit.Sem
-
-namespace Koit.Sem
 
 /-- The evaluator agrees with the relation: a run it completes is a
 derivation. Stated now, proved after the design settles. -/
@@ -853,4 +748,4 @@ theorem interp_sound (K : Kernel) (st : State) (p : Core.Program) (h : Halt) :
     runProgram K st p = .ok h → ExecProgram K st p (.halt h.verdict) h.state := by
   sorry
 
-end Koit.Sem
+end Koit.Core.Sem

@@ -1738,8 +1738,8 @@ with the index's next value.
     a `raise` is an outcome every enclosing rule passes upward, each
     `hold` releasing abnormally on the way; the program rule consumes it
 (Program-handled)
-    K |- <body, st> => raise k r, st1
-    K |- <H(k), st1[reason := r, held := []]> => return v, st2
+    K |- <body, st> => raise k r, st1        held(st1) = []
+    K |- <H(k), st1[reason := r]> => return v, st2
     -------------------------------------------------------
     K |- <program(S, W, H, body), st> => halt(v), st2
 (Program-return)
@@ -1767,9 +1767,10 @@ with the index's next value.
     release performs R's normal action when o is normal and its
     abnormal action otherwise, and nothing when x was moved (Hold-out-moved)
 (Move)
-    <move x, st>  =>  the reference sigma(x),
-                      st with x marked moved and R(x) removed from the
-                      held set, so that no release runs; the sink owns it
+    <move x, st>  =>  the reference sigma(x), st with x marked moved,
+                      so that the scope releases nothing; the sink's
+                      row pops R(x) from the held set when it runs,
+                      which is the transfer (decision 56)
 (Guard-drop)
     a view remembers the layout token it was carved under; a step with
     effect resize changes the token; a read or write through a view
@@ -2034,6 +2035,11 @@ end of the session that lowered Core to LIR:
     machine, hidden from the source; the two packet rows `data` and
     `data_end` yield locations and are not nameable (entry 31,
     2026-09-19).
+56. `move x` marks the name dead and leaves the held set; the sink's
+    row pops the entry, and a `hold` exit releases through the same
+    operation LIR's release statements use, a kernel call for a row
+    whose exit is one; nothing is held when a program returns or
+    raises, else `err` (entry 36, 2026-09-19).
 
 Open questions, with the default the checker implements until decided:
 

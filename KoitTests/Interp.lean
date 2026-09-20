@@ -9,7 +9,7 @@ map state, the kernel's arithmetic, views and resizes, resources and
 `move`, and the two section 23 programs on real packets.
 -/
 
-open Koit Koit.Syntax Koit.Core Koit.Check Koit.Sem
+open Koit Koit.Syntax Koit.Core Koit.Check Koit.Core.Sem
 
 /-- Runs a unit on a packet; the verdicts, then the map lines. -/
 private def run (s : String) (packet : String := "") (ctx : List (String × Nat) := []) :
