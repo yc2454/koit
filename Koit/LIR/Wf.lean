@@ -117,9 +117,11 @@ partial def typeOfAddr (K : WfCtx) (Γ : Γ) : Addr → W Unit
     | .int .. => return ()
     | .ptr => wfErr "an index is a scalar"
   | .pktData | .pktEnd =>
+    -- in a function, the bounds serve the element test of a view
+    -- parameter, and a view exists in packet kinds only
     match K.kind with
     | some row => if row.hasPkt then return () else wfErr "no packet in this kind"
-    | none => wfErr "`pkt_data` outside a program"
+    | none => return ()
   | .mapval .. => return ()
 
 end

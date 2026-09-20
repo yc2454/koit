@@ -22,9 +22,12 @@ value position become a byte set by nested tests, as the
 short-circuit rules evaluate them.
 
 Every runtime test is emitted where the source had a marker, and
-one more where the verifier requires it: the null test after a
-lookup by helper into an array map, whose branch the index demand
-makes dead and which returns the kind's failure verdict. Every
+two more where the verifier requires them, each with a branch the
+checker's facts make dead and which returns the kind's failure
+verdict: the null test after a lookup by helper into an array map,
+and the bound test on a view's element reached by an index that is
+not a constant, since the verifier does not carry the view's test to
+a pointer with a variable added. Every
 release is a statement at the exit that owes it, innermost first,
 and a call to a `fails` function carries the releases the call site
 owes in its `unwind`. `move` emits nothing: the sink is the release.
@@ -223,6 +226,18 @@ inductive PRef where
   | local (x : String) (ty : Ty)
   | ctx (f : String) (ty : Ty)
   | mem (a : LIR.Addr) (ty : Ty)
+
+/-- Whether a place lies in the packet: its root is a view. -/
+def inPacket (c : LCtx) (p : Place) : Bool :=
+  match p.root with
+  | some x =>
+    match c.env.local? x with
+    | some l =>
+      match l.ty with
+      | .view .. => true
+      | _ => false
+    | none => false
+  | none => false
 
 def plusAddr (a : LIR.Addr) (k : Nat) : LIR.Addr :=
   if k == 0 then a else
@@ -445,10 +460,19 @@ partial def lowerPlace (c : LCtx) (sp : Span) (p : Place) : LM (List LIR.Stmt ×
       let esz ← sizeOfTy c elem
       let it ← if isPoly c i then pure Prelude.tU64 else synthTy c i
       let I ← lowerExpr c sp i (some it)
-      let a' := match I.e with
-        | .lit _ k => plusAddr a (k * esz)
-        | e => .index a e esz
-      return (pre ++ I.pre, .mem a' elem)
+      match I.e with
+      | .lit _ k => return (pre ++ I.pre, .mem (plusAddr a (k * esz)) elem)
+      | e =>
+        unless inPacket c q do return (pre ++ I.pre, .mem (.index a e esz) elem)
+        -- the element's address bound once, and the test the verifier
+        -- requires on that very pointer, whose branch the view's window
+        -- and the index demand make dead
+        let el ← freshName "el"
+        let test : LIR.Cond := { op := .gt, signed := false, w := 64,
+                                 l := .addr (plusAddr (.var el) esz), r := .addr .pktEnd }
+        return (pre ++ I.pre ++
+          [.«let» sp el .ptr (.addr (.index a e esz)), .ite sp test (deadBranch c sp) []],
+          .mem (.var el) elem)
     | _ => lerr s!"`{q.print}` is not an array"
   | .slot _ m i =>
     let some d := c.env.map? m | lerr s!"unknown map `{m}`"

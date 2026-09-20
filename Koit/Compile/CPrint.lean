@@ -88,12 +88,12 @@ def clit (w : Nat) (k : Nat) : String :=
 
 mutual
 
-partial def cexpr : LIR.Expr → String
+partial def cexpr (inFn : Bool) : LIR.Expr → String
   | .lit w k => clit w k
   | .var x => cname x
   | .arith op s w l r =>
-    let a := cexpr l
-    let b := cexpr r
+    let a := cexpr inFn l
+    let b := cexpr inFn r
     let u := s!"u{w}"
     let t := ity s w
     match op with
@@ -107,18 +107,18 @@ partial def cexpr : LIR.Expr → String
     | .mod => s!"koit_mod_{t}({a}, {b})"
     | .shl => s!"koit_shl_{t}({a}, {b})"
     | .shr => s!"koit_shr_{t}({a}, {b})"
-  | .cast s w s' w' e => s!"(({ity s' w'})({ity s w})({cexpr e}))"
-  | .bswap w e => s!"__builtin_bswap{w}({cexpr e})"
-  | .load s w a => s!"(*({ity s w} *)({caddr a}))"
+  | .cast s w s' w' e => s!"(({ity s' w'})({ity s w})({cexpr inFn e}))"
+  | .bswap w e => s!"__builtin_bswap{w}({cexpr inFn e})"
+  | .load s w a => s!"(*({ity s w} *)({caddr inFn a}))"
   | .ctx f => s!"ctx->{f}"
-  | .addr a => caddr a
+  | .addr a => caddr inFn a
 
-partial def caddr : LIR.Addr → String
+partial def caddr (inFn : Bool) : LIR.Addr → String
   | .var x => cname x
-  | .plus a k => s!"((u8 *)({caddr a}) + {k})"
-  | .index a e k => s!"((u8 *)({caddr a}) + ({cexpr e}) * {k})"
-  | .pktData => "((void *)(long)ctx->data)"
-  | .pktEnd => "((void *)(long)ctx->data_end)"
+  | .plus a k => s!"((u8 *)({caddr inFn a}) + {k})"
+  | .index a e k => s!"((u8 *)({caddr inFn a}) + ({cexpr inFn e}) * {k})"
+  | .pktData => if inFn then "pkt_data" else "((void *)(long)ctx->data)"
+  | .pktEnd => if inFn then "pkt_end" else "((void *)(long)ctx->data_end)"
   | .mapval m k => s!"((u8 *)({cname m}__val) + {k})"
 
 end
@@ -127,7 +127,7 @@ def isPtrExpr : LIR.Expr → Bool
   | .addr _ => true
   | _ => false
 
-def ccond (Γ : List (String × LIR.Ty)) (c : LIR.Cond) : String :=
+def ccond (inFn : Bool) (Γ : List (String × LIR.Ty)) (c : LIR.Cond) : String :=
   let ptrSide (e : LIR.Expr) : Bool :=
     isPtrExpr e || match e with
       | .var x => Γ.lookup x == some .ptr
@@ -136,12 +136,12 @@ def ccond (Γ : List (String × LIR.Ty)) (c : LIR.Cond) : String :=
     | .lit _ 0 => true
     | _ => false
   if ptrSide c.l && isZero c.r then
-    (if c.op == .eq then s!"!({cexpr c.l})" else s!"({cexpr c.l}) != NULL")
+    (if c.op == .eq then s!"!({cexpr inFn c.l})" else s!"({cexpr inFn c.l}) != NULL")
   else if ptrSide c.l || ptrSide c.r then
-    s!"((u8 *)({cexpr c.l}) {c.op.spelling} (u8 *)({cexpr c.r}))"
+    s!"((u8 *)({cexpr inFn c.l}) {c.op.spelling} (u8 *)({cexpr inFn c.r}))"
   else
     let t := ity c.signed c.w
-    s!"(({t})({cexpr c.l}) {c.op.spelling} ({t})({cexpr c.r}))"
+    s!"(({t})({cexpr inFn c.l}) {c.op.spelling} ({t})({cexpr inFn c.r}))"
 
 /-- The type of an expression under the printer's environment, for
 `printk`'s formats. -/
@@ -216,6 +216,8 @@ structure PCtx where
   program : Bool
   /-- The default verdict, for the dead branches of direct maps. -/
   defaultVerdict : String
+  /-- The functions that take the packet's bounds as parameters. -/
+  bounded : List String := []
   /-- Labels of the enclosing constructs, innermost first. -/
   labels : List String := []
   Γ      : List (String × LIR.Ty) := []
@@ -255,10 +257,10 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
   let bind (x : String) (t : LIR.Ty) : PCtx := { c with Γ := (x, t) :: c.Γ }
   match s with
   | .«let» _ x t e =>
-    return (line s!"{cty t}{if t == .ptr then "" else " "}{cname x} = {cexpr e};", bind x t)
-  | .assign _ x e => return (line s!"{cname x} = {cexpr e};", c)
-  | .store _ w a e => return (line s!"*(u{w} *)({caddr a}) = {cexpr e};", c)
-  | .ctxStore _ f e => return (line s!"ctx->{f} = {cexpr e};", c)
+    return (line s!"{cty t}{if t == .ptr then "" else " "}{cname x} = {cexpr (!c.program) e};", bind x t)
+  | .assign _ x e => return (line s!"{cname x} = {cexpr (!c.program) e};", c)
+  | .store _ w a e => return (line s!"*(u{w} *)({caddr (!c.program) a}) = {cexpr (!c.program) e};", c)
+  | .ctxStore _ f e => return (line s!"ctx->{f} = {cexpr (!c.program) e};", c)
   | .frame _ x sz src =>
     let obj := match src with
       | some t => cdecl c.types t s!"{cname x}__obj"
@@ -269,9 +271,9 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
     let (tl, _) ← cstmts c (n + 4) t
     let (el, _) ← cstmts c (n + 4) e
     if e.isEmpty then
-      return (line s!"if ({ccond c.Γ cnd}) \{" ++ tl ++ line "}", c)
+      return (line s!"if ({ccond (!c.program) c.Γ cnd}) \{" ++ tl ++ line "}", c)
     else
-      return (line s!"if ({ccond c.Γ cnd}) \{" ++ tl ++ line "} else {" ++ el ++ line "}", c)
+      return (line s!"if ({ccond (!c.program) c.Γ cnd}) \{" ++ tl ++ line "} else {" ++ el ++ line "}", c)
   | .block _ body =>
     let l ← freshLabel "L"
     let (bl, _) ← cstmts { c with labels := l :: c.labels } (n + 4) body
@@ -287,15 +289,20 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
   | .ret _ none =>
     if c.status then return (line "return 1;", c) else return (line "return;", c)
   | .ret _ (some e) =>
-    if c.status then return (line s!"*out = {cexpr e}; return 0;", c)
-    else return (line s!"return {cexpr e};", c)
+    if c.status then return (line s!"*out = {cexpr (!c.program) e}; return 0;", c)
+    else return (line s!"return {cexpr (!c.program) e};", c)
   | .raise _ k e =>
     if c.program then
-      return (line s!"reason = {cexpr e}; goto handler_{k.spelling};", c)
+      return (line s!"reason = {cexpr (!c.program) e}; goto handler_{k.spelling};", c)
     else
-      return (line s!"*reason = {cexpr e}; return {2 + kindIndex k};", c)
+      return (line s!"*reason = {cexpr (!c.program) e}; return {2 + kindIndex k};", c)
   | .call _ x f args u a =>
-    let cargs := args.map cexpr
+    -- a callee that mentions the packet's bounds receives them
+    let boundArgs := if c.bounded.contains f then
+        if c.program then ["((void *)(long)ctx->data)", "((void *)(long)ctx->data_end)"]
+        else ["pkt_data", "pkt_end"]
+      else []
+    let cargs := args.map (cexpr (!c.program)) ++ boundArgs
     let some d := c.fns.find? (·.name == f)
       | return (line s!"/* unknown function {f} */", c)
     if !statusFn d then
@@ -325,7 +332,7 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
     return (decl ++ line "{" ++ line (ind 4 ++ s!"int koit_st = {call};") ++
             failPart ++ absentPart ++ line "}", c')
   | .builtin _ x b args =>
-    let cargs := args.map cexpr
+    let cargs := args.map (cexpr (!c.program))
     let a (i : Nat) := (cargs[i]?).getD "0"
     let res (t : LIR.Ty) (call : String) : List String × PCtx :=
       match x with
@@ -349,10 +356,10 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
       let tys := args.map (exprTy c.Γ)
       let casts := (args.zip tys).map fun (e, t) =>
         match t with
-        | .int _ 64 => s!"(long long)({cexpr e})"
-        | .int true _ => s!"(int)({cexpr e})"
-        | .int false _ => s!"(unsigned)({cexpr e})"
-        | .ptr => cexpr e
+        | .int _ 64 => s!"(long long)({cexpr (!c.program) e})"
+        | .int true _ => s!"(int)({cexpr (!c.program) e})"
+        | .int false _ => s!"(unsigned)({cexpr (!c.program) e})"
+        | .ptr => cexpr (!c.program) e
       return (line s!"bpf_printk({Core.strLit (cfmt fmt tys)}{String.join (casts.map (", " ++ ·))});", c)
     | .atomic op s w fetch =>
       let p := s!"({ity s w} *)({a 0})"
@@ -366,7 +373,7 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
       if fetch then return res (.int s w) call
       else return (line s!"(void){call};", c)
   | .kernel _ x h args =>
-    let call := kernelCall c.kind h (args.map cexpr)
+    let call := kernelCall c.kind h (args.map (cexpr (!c.program)))
     match x with
     | some x =>
       let t := match h with
@@ -396,9 +403,41 @@ partial def directMapsIn (direct : List String) : List LIR.Stmt → List String
       | _ => []
     own ++ directMapsIn direct rest
 
-def cfn (types : List Core.TypeDecl) (fns : List LIR.Fn) (f : LIR.Fn) : PM String := do
+/-- Whether statements mention the packet's bounds, or call one of
+the functions named. -/
+partial def mentionsBounds (calls : List String) : List LIR.Stmt → Bool
+  | [] => false
+  | s :: rest =>
+    let inExpr (e : LIR.Expr) : Bool :=
+      let str := e.print
+      (str.splitOn "pkt_data").length > 1 || (str.splitOn "pkt_end").length > 1
+    let own := match s with
+      | .«let» _ _ _ e | .assign _ _ e | .ctxStore _ _ e | .ret _ (some e) | .raise _ _ e => inExpr e
+      | .store _ _ a e => inExpr (.addr a) || inExpr e
+      | .ite _ c t e =>
+        inExpr c.l || inExpr c.r || mentionsBounds calls t || mentionsBounds calls e
+      | .block _ b | .loop _ b => mentionsBounds calls b
+      | .call _ _ f args u a =>
+        calls.contains f || args.any inExpr || mentionsBounds calls (u.getD []) ||
+          mentionsBounds calls (a.getD [])
+      | .builtin _ _ _ args | .kernel _ _ _ args => args.any inExpr
+      | _ => false
+    own || mentionsBounds calls rest
+
+/-- The functions that take the packet's bounds as parameters: those
+that mention them, for the element test of a view, and those that
+call one of them. -/
+partial def boundedFns (fns : List LIR.Fn) (acc : List String := []) : List String :=
+  let acc' := fns.filterMap fun f =>
+    if acc.contains f.name then none
+    else if mentionsBounds acc f.body then some f.name else none
+  if acc'.isEmpty then acc else boundedFns fns (acc ++ acc')
+
+def cfn (types : List Core.TypeDecl) (fns : List LIR.Fn) (bounded : List String)
+    (f : LIR.Fn) : PM String := do
   let params := f.params.map fun p =>
     if p.ty == .ptr then s!"void *{cname p.name}" else s!"{cty p.ty} {cname p.name}"
+  let params := params ++ (if bounded.contains f.name then ["void *pkt_data", "void *pkt_end"] else [])
   let extra := (match f.ret with
       | some t => if statusFn f then [s!"{cty t}{if t == .ptr then "" else " "}*out"] else []
       | none => []) ++ (if f.fails then ["u32 *reason"] else [])
@@ -406,7 +445,8 @@ def cfn (types : List Core.TypeDecl) (fns : List LIR.Fn) (f : LIR.Fn) : PM Strin
     | some t => cty t
     | none => "void"
   let c : PCtx := { types, fns, kind := "", status := statusFn f, program := false,
-                    defaultVerdict := "0", Γ := f.params.map fun p => (p.name, p.ty) }
+                    defaultVerdict := "0", bounded,
+                    Γ := f.params.map fun p => (p.name, p.ty) }
   let (body, _) ← cstmts c 4 f.body
   let ps := if (params ++ extra).isEmpty then "void" else ", ".intercalate (params ++ extra)
   return s!"static __always_inline {ret} {cname f.name}({ps})\n\{\n" ++
@@ -426,7 +466,8 @@ def cprogram (pre : Prelude) (u : LIR.CompUnit) (p : LIR.Program) : PM String :=
     | none => 0
   let dv := clit (LIR.Ty.width vt) dflt
   let c : PCtx := { types := u.types, fns := u.fns, kind := p.kind, status := false,
-                    program := true, defaultVerdict := dv, Γ := [("reason", .u32)] }
+                    program := true, defaultVerdict := dv, bounded := boundedFns u.fns,
+                    Γ := [("reason", .u32)] }
   let ctxTy := ctxType p.kind
   let direct := (directMapsIn u.direct (p.body ++ p.handlers.flatMap (·.body))).eraseDups
   let lookups := direct.flatMap fun m =>
@@ -521,7 +562,8 @@ def emitC (pre : Prelude) (u : LIR.CompUnit) : String :=
         String.join (fs.map fun f => "    " ++ C.cdecl u.types f.ty (C.cname f.name) ++ ";\n") ++ "};\n"
     | _ => ""
   let go : C.PM (List String × List String) := do
-    let fns ← u.fns.mapM (C.cfn u.types u.fns)
+    let bounded := C.boundedFns u.fns
+    let fns ← u.fns.mapM (C.cfn u.types u.fns bounded)
     let progs ← u.programs.mapM (C.cprogram pre u)
     return (fns, progs)
   let ((fns, progs), _) := go.run 0

@@ -133,7 +133,9 @@ Reading notes.
   `ctx f <- e` stores to a field the row marks writable, `mark` in a
   `tc` program. `pkt_data` and `pkt_end` are the packet's bounds as
   locations, read from the context each time they are mentioned; they
-  exist in packet kinds only.
+  exist in packet kinds, and in a function only for the element test
+  of 6.4 on a view parameter, which the checker's typing of views
+  confines to callers of packet kinds (entry 39).
 - `mapval m + k` is the location `k` bytes into the value of a map
   that pass A marked for direct access: an `array[1]` map. Every
   other map is reached through `lookup`.
@@ -467,6 +469,22 @@ amended to allow it (`ISSUES.md`, entry 22). Kernels that mark array
 lookups with a constant in-range key as non-null make the branch
 unnecessary for acceptance as well; the lowering may then omit it.
 
+An element of a view reached by an index that is not a constant is
+the other such branch. The verifier gives a packet pointer with a
+variable added a fresh id and no range, and links a range only to
+the pointers of one id, so the view's own test does not reach the
+element's address. LIR binds that address once and tests it:
+
+```
+el = h + i * size; if el + size > pkt_end { return ABORTED_OF_KIND }; ...
+```
+
+The branch is dead by the view's window and the index demand, its
+value is as above, and the accesses go through `el`, so that the
+comparison is on the pointer they use. A constant index needs no
+test, since the verifier keeps the id across a constant offset
+(`ISSUES.md`, entry 39).
+
 ### 6.5 The frame
 
 Core allocates a fresh stack region for each struct literal. LIR does
@@ -522,7 +540,7 @@ artifact a reader compares with the source.
 | `bswap(w)` | `__builtin_bswapW` |
 | `load(w) a`, `store(w) a e` | `*(uW *)(a)` |
 | `frame x : n as S` | `S x = {0};` or `u8 x[n] __attribute__((aligned(8))) = {0};` |
-| `ctx f`, `pkt_data`, `pkt_end` | `ctx->f`, `(void *)(long)ctx->data`, `(void *)(long)ctx->data_end` |
+| `ctx f`, `pkt_data`, `pkt_end` | `ctx->f`, `(void *)(long)ctx->data`, `(void *)(long)ctx->data_end`; in a function, the two `void *` parameters the printer adds for the bounds |
 | `mapval m + k` | a lookup of slot 0 with a null test that aborts, since C has no direct value access for a declared map; the two backends differ here |
 | `block`, `loop`, `br` | a label after the block, `for (;;)`, and `goto`; the printer may re-sugar the loop shapes of 6.1 into `for` with `break` and `continue` |
 | `raise k e` | `reason = e; goto handler_k;` |
@@ -565,7 +583,8 @@ shows clang needs them; they are printer policy, recorded in
     not write.
 11. Array maps with one slot are reached by `mapval`; the others by
     `lookup` with the dead branch of 6.4, under the amendment to P2
-    of entry 22.
+    of entry 22; a view's element by a non-constant index is bound
+    once and tested with the second dead branch of 6.4 (entry 39).
 12. Byte-order values are bit patterns and memory is little-endian
     (entry 24).
 13. `errno` is a local written by the test after a failing call.

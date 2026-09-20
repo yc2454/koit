@@ -2010,8 +2010,11 @@ Revisions of 2026-09-18, from `ISSUES.md` entries 20 to 24:
     the region's max offset, a column of the region table, 65535 for
     the packet; the lowering adds no bound test (entry 21).
 48. P2 admits a branch the verifier requires on a path the kernel's
-    contract makes unreachable, ending in the kind's default failure
-    verdict (entry 22).
+    contract or the checker's facts make unreachable, ending in the
+    kind's default failure verdict (entry 22): the null test after a
+    lookup by helper, and the bound test on a view's element reached
+    by a non-constant index, whose pointer the verifier does not link
+    to the view's own test (entry 39, 2026-09-20).
 49. The atomic updates take a place of a 32- or 64-bit integer type
     (entry 23).
 50. The machine of section 19.1 is aligned with the lowering's target:

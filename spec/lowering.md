@@ -184,7 +184,8 @@ administrative normal form: each subexpression in Core's evaluation
 order into its own `let`, so that every call and every load happens
 in the order the rules `arith`, `cmpInt`, `andBoth`, and `EvalArgs`
 of `Semantics.lean` fix. Places lower to addresses the same way, a
-place reached by helper contributing the statements of `lir.md`, 6.4.
+place reached by helper, or a view's element reached by a
+non-constant index, contributing the statements of `lir.md`, 6.4.
 
 Statements lower as `lir.md`, section 6, shows. The context decides
 the three things that section leaves implicit:
@@ -467,6 +468,11 @@ output:
   view's window lies under the region's maximum offset, so the
   scalar pass C adds to `data` has a bound the verifier re-derives
   from the branch that established it; no bound test is emitted.
+  An element of a view reached by a non-constant index is a pointer
+  with a variable part of its own, which the view's test does not
+  cover in the verifier; pass B binds it once and tests it, the
+  second dead branch of `lir.md` 6.4, so that L3 holds for it
+  (entry 39).
 
 A small checker, `koitc shape`, tests L1 to L3 on every compiled
 unit in the runner; it is a test, not a proof, and its failures are
@@ -544,6 +550,12 @@ printer and not of any pass:
   modulo, and shifts through `koit_div_T`, `koit_mod_T`,
   `koit_shl_T`, `koit_shr_T`, which implement section 8.1 of the
   definition; casts are C casts between fixed-width types.
+- A function that mentions the packet's bounds, for the element test
+  of `lir.md` 6.4, takes them as two `void *` parameters, `pkt_data`
+  and `pkt_end`, as does a function that calls one; a program passes
+  them from its context, a function its own parameters. They are
+  current at the call: a resize inside the function would stale the
+  view the test belongs to, which the checker refuses (entry 39).
 - A koit name that is a C keyword, or one the printer uses itself,
   gets a trailing underscore.
 - The shim declares the helpers by their uapi numbers and the
@@ -627,7 +639,9 @@ belongs to session 8.
 4. Pass B lowers impure expressions to administrative normal form in
    Core's evaluation order and pure ones directly.
 5. Pass B uses Lemmas W, M, and H, and never T2; it emits every test
-   Core has and only the dead branch of decision 48 beyond them.
+   Core has and only the dead branches of decision 48 beyond them:
+   after a lookup by helper, and on a view's element reached by a
+   non-constant index (entry 39).
 6. The one memory injection is pass C's placement of LIR stack
    regions in the frame.
 6a. Pass C reuses virtual registers by block structure and `R_C`
