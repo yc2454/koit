@@ -29,10 +29,13 @@ def usage : String := String.intercalate "\n"
    "          --fuel N         the step budget (default: 100000)",
    "          --lir [--inline] run the lowered unit instead of Core",
    "          --bir            run the flattened unit on the machine",
+   "          --bytecode       run the allocated unit on the machine",
    "          --cpu v3|v4      the instruction set the machine offers",
    "  lower   check FILE, then print its LIR; --inline removes the",
-   "          functions; --bir prints the flattened unit",
-   "  emit    check FILE, then print the C of its LIR"] ++ "\n"
+   "          functions; --bir prints the flattened unit, --bytecode",
+   "          the allocated one",
+   "  emit    check FILE, then print the C of its LIR; with --bytecode,",
+   "          the words of its programs in hex with their relocations"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
 def readSource (path : String) : IO String := do
@@ -100,6 +103,7 @@ structure RunOpts where
   fuel    : Nat := 100000
   lir     : Bool := false
   bir     : Bool := false
+  bytecode : Bool := false
   inline  : Bool := false
   cpu     : BPF.Cpu := .v3
   file    : Option String := none
@@ -120,6 +124,7 @@ partial def runOpts : List String → RunOpts → Option RunOpts
   | "--fuel" :: n :: rest, o => do runOpts rest { o with fuel := ← n.toNat? }
   | "--lir" :: rest, o => runOpts rest { o with lir := true }
   | "--bir" :: rest, o => runOpts rest { o with bir := true }
+  | "--bytecode" :: rest, o => runOpts rest { o with bytecode := true }
   | "--cpu" :: "v3" :: rest, o => runOpts rest { o with cpu := .v3 }
   | "--cpu" :: "v4" :: rest, o => runOpts rest { o with cpu := .v4 }
   | "--inline" :: rest, o => runOpts rest { o with inline := true }
@@ -147,6 +152,19 @@ def flattenUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
   birs.mapM fun B => do
     let X ← Compile.birEnv pre env B
     BPF.wf X |>.mapError (s!"the flattened `{B.name}` is not well-formed: " ++ ·)
+    return X
+
+/-- A checked unit allocated: pass D on the flattened unit, with the
+machine's environment for each program. -/
+def allocUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
+    (cpu : BPF.Cpu) : Except String (List (BPF.Env BPF.Reg Int)) := do
+  let lir ← lowerUnit pre core checked true
+  let birs ← Compile.flatten pre cpu lir
+  let env := Compile.envOf pre core
+  let allocated ← Compile.allocateAll pre (Compile.sizeOfIn env) birs
+  allocated.mapM fun a => do
+    let X ← Compile.bytecodeEnv pre env a.prog
+    BPF.wf X |>.mapError (s!"the allocated `{a.prog.name}` is not well-formed: " ++ ·)
     return X
 
 /-- A checked unit, or its diagnostic. -/
@@ -211,7 +229,11 @@ def run (args : List String) : IO UInt32 := do
     let some file := opts.file | do IO.eprint usage; return 2
     let some pre ← preludeFor opts.kernel | return 2
     let some (core, checked) ← checkFile file pre | return 1
-    let result ← if opts.bir then
+    let result ← if opts.bytecode then
+        match allocUnit pre core checked opts.cpu with
+        | .ok progs => pure (BPF.runUnit pre core progs opts.packet opts.ctx opts.program opts.fuel)
+        | .error m => pure (.error m)
+      else if opts.bir then
         match flattenUnit pre core checked opts.cpu with
         | .ok progs => pure (BPF.runUnit pre core progs opts.packet opts.ctx opts.program opts.fuel)
         | .error m => pure (.error m)
@@ -237,9 +259,20 @@ def run (args : List String) : IO UInt32 := do
     let (bir, rest) := match rest with
       | "--bir" :: rest => (true, rest)
       | rest => (false, rest)
+    let (bytecode, rest) := match rest with
+      | "--bytecode" :: rest => (true, rest)
+      | rest => (false, rest)
     let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
     let some pre ← preludeFor tag | return 2
     let some (core, checked) ← checkFile file pre | return 1
+    if bytecode then
+      match allocUnit pre core checked .v3 with
+      | .ok progs =>
+        for X in progs do IO.print (BPF.Bytecode.print X.prog)
+        return 0
+      | .error m =>
+        IO.eprintln s!"{file}: {m}"
+        return 1
     if bir then
       match flattenUnit pre core checked .v3 with
       | .ok progs =>
@@ -251,6 +284,17 @@ def run (args : List String) : IO UInt32 := do
     match lowerUnit pre core checked inline with
     | .ok lir =>
       IO.print lir.print
+      return 0
+    | .error m =>
+      IO.eprintln s!"{file}: {m}"
+      return 1
+  | "emit" :: "--bytecode" :: rest => do
+    let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let some pre ← preludeFor tag | return 2
+    let some (core, checked) ← checkFile file pre | return 1
+    match Compile.compile pre .v3 core checked with
+    | .ok C =>
+      for o in C.objects do IO.print (Compile.Object.print o)
       return 0
     | .error m =>
       IO.eprintln s!"{file}: {m}"

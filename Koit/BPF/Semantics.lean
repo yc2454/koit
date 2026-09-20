@@ -385,7 +385,8 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     innermost m r none
     let ((), st') ← machineOp st (Machine.leave r)
     return (none, st')
-  | .printk fmt, vs =>
+  | .printk fmt n _ _, vs =>
+    unless vs.length == n do throw (.badArgument name s!"{n} arguments expected")
     let mut ws : List Machine.Val := []
     for v in vs do
       match v with
@@ -445,7 +446,8 @@ def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args
   | .failed n =>
     return (some (if yieldsLocation row then .scalar 0 else .scalar (toNatMod n 64)), st')
 
-/-- How many operands a callee takes, for the fixed convention. -/
+/-- How many operands a callee takes on the instruction, under the
+explicit convention. -/
 def arity (X : Env ρ τ) : Callee → StepM Nat
   | .builtin b => pure b.arity
   | .kernel name =>
@@ -453,18 +455,54 @@ def arity (X : Env ρ τ) : Callee → StepM Nat
     | some { sig := .fn params _, .. } => pure params.length
     | _ => throw (.malformed s!"unknown kernel function `{name}`")
 
+/-- The kernel's argument layout of a callee, which the fixed
+convention reads: a builtin's own, a kernel row's in the kind, and
+for an inline row koit's arguments in order. -/
+def layout (X : Env ρ τ) : Callee → StepM (List Prelude.AbiArg)
+  | .builtin b => pure b.abi
+  | .kernel name =>
+    match X.pre.call? name with
+    | some row =>
+      match row.implIn X.kind.name, row.sig with
+      | .inline, .fn params _ => pure ((List.range params.length).map .arg)
+      | impl, _ => pure impl.abi
+    | none => throw (.malformed s!"unknown kernel function `{name}`")
+
+/-- The koit arguments read back from the kernel's registers by the
+layout: the `i`-th argument from its position, the context checked
+where the layout says, the constants and sizes read but not used. -/
+def argsByLayout (X : Env ρ τ) (m : State ρ) (h : Callee) (abi : List Prelude.AbiArg)
+    (regs : List ρ) : StepM (List Val) := do
+  let mut found : List (Nat × Val) := []
+  for (a, r) in abi.zip regs do
+    -- every position is read, as the verifier requires it initialized
+    let v ← reg X m r
+    match a with
+    | .arg i => found := found ++ [(i, v)]
+    | .ctx =>
+      match v with
+      | .loc .ctx _ _ => pure ()
+      | v => throw (.badArgument h.print s!"the context expected, not {v.print}")
+    | .const _ | .argSize _ | .fmt => pure ()
+  let n := found.length
+  (List.range n).mapM fun i =>
+    match found.lookup i with
+    | some v => pure v
+    | none => throw (.malformed s!"`{h.print}`: the layout has no argument {i}")
+
 /-- `call h`: the operands from the instruction or from the
-convention's registers, the callee, the result into the instruction's
-register or the convention's, and the convention's registers dead
-after. -/
+convention's registers by the kernel's layout, the callee, the
+result into the instruction's register or the convention's, and the
+convention's registers dead after. -/
 def call (X : Env ρ τ) (K : Kernel) (m : State ρ) (h : Callee) (args : List ρ) (dst : Option ρ) :
     StepM (State ρ) := do
-  let (argRegs, dstReg, dead) ← match X.conv.fixedCall with
+  let (vs, dstReg, dead) ← match X.conv.fixedCall with
     | some (regs, dead) => do
-      let n ← arity X h
-      pure (regs.take n, some X.conv.ret, dead)
-    | none => pure (args, dst, [])
-  let vs ← argRegs.mapM (reg X m)
+      let abi ← layout X h
+      unless abi.length ≤ regs.length do
+        throw (.malformed s!"`{h.print}` takes more than {regs.length} kernel arguments")
+      pure (← argsByLayout X m h abi regs, some X.conv.ret, dead)
+    | none => pure (← args.mapM (reg X m), dst, [])
   let (res, st') ← match h with
     | .builtin b => callBuiltin X m b vs
     | .kernel name => callKernel X K m name vs

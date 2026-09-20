@@ -5,6 +5,8 @@ import Koit.Compile.Lower
 import Koit.Compile.Inline
 import Koit.LIR.Interp
 import Koit.Compile.Flatten
+import Koit.Compile.Alloc
+import Koit.Compile.Compile
 import Koit.BPF.Interp
 import Koit.Prelude.Stage1
 
@@ -79,14 +81,46 @@ private def birRun (s : String) (packet : String) (ctx : List (String × Nat)) :
   return (reports.map fun r => s!"{r.program}: {r.verdict}" ++
     String.join (r.log.map fun l => s!" [{l}]")) ++ maps
 
-/-- Whether the four runs agree and the Core run is the expected
+/-- The machine's report on the allocated unit. -/
+private def bytecodeRun (s : String) (packet : String) (ctx : List (String × Nat)) :
+    Except String (List String) := do
+  let u ← match parse s with
+    | .ok u => pure u
+    | .error e => throw s!"parse: {e.msg}"
+  let core := desugar Prelude.stage1 u
+  let checked ← match checkUnit Prelude.stage1 core with
+    | .error d => throw s!"check: {d}"
+    | .ok c => pure c
+  let lir ← Compile.lower Prelude.stage1 (Compile.fold Prelude.stage1 core checked)
+  let lir := Compile.inline lir
+  let birs ← Compile.flatten Prelude.stage1 .v4 lir
+  let env : Env := { prelude := Prelude.stage1, license := core.license.map (·.2),
+                     types := core.types, consts := core.consts, configs := core.configs,
+                     maps := core.maps, fns := core.fns, contracts := core.contracts }
+  let allocated ← Compile.allocateAll Prelude.stage1 (Compile.sizeOfIn env) birs
+  let progs ← allocated.mapM fun a => do
+    let X ← Compile.bytecodeEnv Prelude.stage1 env a.prog
+    BPF.wf X |>.mapError ("bytecode wf: " ++ ·)
+    -- the words round-trip
+    let o ← Compile.encode Prelude.stage1 a.prog
+    match Compile.decode Prelude.stage1 o with
+    | .ok p' => unless p'.code == a.prog.code do throw "encode/decode: the code differs"
+    | .error m => throw s!"decode: {m}"
+    pure X
+  let some bytes := parseHex packet | throw "bad hex"
+  let (reports, maps) ← BPF.runUnit Prelude.stage1 core progs bytes ctx none 100000
+  return (reports.map fun r => s!"{r.program}: {r.verdict}" ++
+    String.join (r.log.map fun l => s!" [{l}]")) ++ maps
+
+/-- Whether the five runs agree and the Core run is the expected
 one. -/
 private def agree (s : String) (expect : List String) (packet : String := "")
     (ctx : List (String × Nat) := []) : Bool :=
   match coreRun s packet ctx, lirRun s packet ctx false, lirRun s packet ctx true,
-        birRun s packet ctx with
-  | .ok a, .ok b, .ok c, .ok d => a == expect && b == expect && c == expect && d == expect
-  | _, _, _, _ => false
+        birRun s packet ctx, bytecodeRun s packet ctx with
+  | .ok a, .ok b, .ok c, .ok d, .ok e =>
+    a == expect && b == expect && c == expect && d == expect && e == expect
+  | _, _, _, _, _ => false
 
 /-- The three runs, for reading a failure. -/
 private def runs (s : String) (packet : String := "") (ctx : List (String × Nat) := []) :

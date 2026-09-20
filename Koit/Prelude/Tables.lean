@@ -101,6 +101,31 @@ inductive Sig where
   | builtin
   deriving Repr, Inhabited
 
+/-- One argument of a kernel function as the kernel takes it: the
+`i`-th argument of the koit row, the program's context, a constant,
+the byte size of the `i`-th argument's place, or the format of
+`printk`. -/
+inductive AbiArg where
+  | arg (i : Nat)
+  | ctx
+  | const (k : Int)
+  | argSize (i : Nat)
+  | fmt
+  deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- How a row reaches the kernel: a helper by its number with the
+layout of its arguments, a kfunc by name with the layout, or an
+inline sequence of instructions with no call at all. -/
+inductive Impl where
+  | helper (id : Nat) (abi : List AbiArg)
+  | kfunc (name : String) (abi : List AbiArg)
+  | inline
+  deriving Repr, Inhabited
+
+def Impl.abi : Impl → List AbiArg
+  | .helper _ abi | .kfunc _ abi => abi
+  | .inline => []
+
 structure CallRow where
   name : String
   sig  : Sig
@@ -118,13 +143,31 @@ structure CallRow where
   gplOnly : Bool
   /-- The kernel helper, kfunc, or instruction behind the call. -/
   kernel : String
+  /-- How the call reaches the kernel: the helper's number and the
+  layout of its arguments, which the allocation materializes and the
+  encoder writes; no source-level surface shows it. -/
+  impl : Impl := .inline
+  /-- The implementation in a kind where it differs from `impl`, as
+  the resizes' helpers do between `xdp` and `tc`. -/
+  implByKind : List (String × Impl) := []
   deriving Repr, Inhabited
 
 def callRow (name : String) (sig : Sig) (effects : List Effect)
     (kernel : String) (fails : Option Kind := none)
     (acquires : Option Resource := none) (kinds : List String := [])
-    (gplOnly : Bool := false) : CallRow :=
-  { name, sig, effects, fails, acquires, kinds, gplOnly, kernel }
+    (gplOnly : Bool := false) (impl : Impl := .inline)
+    (implByKind : List (String × Impl) := []) : CallRow :=
+  { name, sig, effects, fails, acquires, kinds, gplOnly, kernel, impl, implByKind }
+
+/-- The implementation of a row in a kind. -/
+def CallRow.implIn (row : CallRow) (kind : String) : Impl :=
+  (row.implByKind.lookup kind).getD row.impl
+
+/-- Whether the row is computed inline, with no kernel call. -/
+def CallRow.isInline (row : CallRow) : Bool :=
+  match row.impl with
+  | .inline => true
+  | _ => false
 
 /-! ### Table 4, resources -/
 
@@ -159,6 +202,9 @@ structure ResourceRow where
   /-- Whether another instance of the same resource may be held. -/
   nesting : Nesting
   guards : String
+  /-- The kernel function a scope row's acquisition calls, a kfunc,
+  for the encoder. -/
+  acquireKernel : Option String := none
   deriving Repr, Inhabited
 
 /-! ### Table 5, region kinds -/

@@ -62,15 +62,21 @@ def redirectRet : Ty :=
     (.cmp noSpan .eq (.var noSpan "v") (.var noSpan "REDIRECT"))
 
 def callRows : List CallRow := [
+  -- the helper numbers and argument layouts are the uapi header's;
+  -- a constant is the flags word every helper takes last
   callRow "redirect" (.fn [param "ifindex" tU32] (some redirectRet))
     [.call, .fail] "bpf_redirect" (fails := some .helper)
-    (kinds := ["xdp", "tc"]),
+    (kinds := ["xdp", "tc"]) (impl := .helper 23 [.arg 0, .const 0]),
   callRow "pkt.adjust_head" (.fn [param "delta" tI32] none)
     [.call, .resize, .fail] "bpf_xdp_adjust_head, bpf_skb_change_head"
-    (fails := some .helper) (kinds := ["xdp", "tc"]),
+    (fails := some .helper) (kinds := ["xdp", "tc"])
+    (impl := .helper 44 [.ctx, .arg 0])
+    (implByKind := [("tc", .helper 43 [.ctx, .arg 0, .const 0])]),
   callRow "pkt.adjust_tail" (.fn [param "delta" tI32] none)
     [.call, .resize, .fail] "bpf_xdp_adjust_tail, bpf_skb_change_tail"
-    (fails := some .helper) (kinds := ["xdp", "tc"]),
+    (fails := some .helper) (kinds := ["xdp", "tc"])
+    (impl := .helper 65 [.ctx, .arg 0])
+    (implByKind := [("tc", .helper 38 [.ctx, .arg 0, .const 0])]),
   callRow "pkt.len" (.fn [] (some tU64)) [] "data_end - data"
     (kinds := ["xdp", "tc"]),
   -- `m.insert(k, v)` and `m.delete(k)`: the map, then places of its
@@ -86,19 +92,23 @@ def callRows : List CallRow := [
     (.fn [param "tuple" (.ref noSpan (.named noSpan "SockTuple"))]
       (some (.own noSpan (.named noSpan "Sock"))))
     [.call, .fail] "bpf_sk_lookup_tcp" (fails := some .missing)
-    (acquires := some ⟨"sockref"⟩) (kinds := ["xdp", "tc"]),
+    (acquires := some ⟨"sockref"⟩) (kinds := ["xdp", "tc"])
+    -- the tuple, its size, `BPF_F_CURRENT_NETNS`, and no flags
+    (impl := .helper 84 [.ctx, .arg 0, .argSize 0, .const (-1), .const 0]),
   callRow "sk_lookup_udp"
     (.fn [param "tuple" (.ref noSpan (.named noSpan "SockTuple"))]
       (some (.own noSpan (.named noSpan "Sock"))))
     [.call, .fail] "bpf_sk_lookup_udp" (fails := some .missing)
-    (acquires := some ⟨"sockref"⟩) (kinds := ["xdp", "tc"]),
+    (acquires := some ⟨"sockref"⟩) (kinds := ["xdp", "tc"])
+    (impl := .helper 85 [.ctx, .arg 0, .argSize 0, .const (-1), .const 0]),
   -- a consuming call: its parameter is a `move` sink
   callRow "sk_release" (.fn [param "sk" (.own noSpan (.named noSpan "Sock"))]
-    none) [.call] "bpf_sk_release" (kinds := ["xdp", "tc"]),
+    none) [.call] "bpf_sk_release" (kinds := ["xdp", "tc"])
+    (impl := .helper 86 [.arg 0]),
   -- a format string and at most three scalar arguments
   callRow "printk" .builtin [.call] "bpf_trace_printk" (gplOnly := true),
   callRow "ktime" (.fn [] (some tU64)) [.call] "bpf_ktime_get_ns"
-    (gplOnly := true),
+    (gplOnly := true) (impl := .helper 5 []),
   -- `copy(dst, src)` and `fill(dst, byte)` over places of one type
   callRow "copy" .builtin [] "memcpy of a typed extent",
   callRow "fill" .builtin [] "memset of a typed extent",
@@ -126,15 +136,18 @@ def resourceRows : List ResourceRow := [
     forbidden := [.call, .resize, .sleep], nesting := .no,
     guards := "the allocation the lock lies in, for moved graph nodes" },
   { res := ⟨"rcu"⟩, describe := "an RCU section", acquirers := ["rcu"], arg := .scope, yields := false,
+    acquireKernel := some "bpf_rcu_read_lock",
     fails := none, normalExit := "bpf_rcu_read_unlock",
     abnormalExit := "bpf_rcu_read_unlock", forbidden := [.sleep],
     nesting := .counted,
     guards := "RCU-protected pointers, kernel-memory extension" },
   { res := ⟨"preempt"⟩, describe := "a preempt-off section", acquirers := ["preempt_off"], arg := .scope,
+    acquireKernel := some "bpf_preempt_disable",
     yields := false, fails := none, normalExit := "bpf_preempt_enable",
     abnormalExit := "bpf_preempt_enable", forbidden := [.sleep],
     nesting := .counted, guards := "" },
   { res := ⟨"irq"⟩, describe := "an IRQ-off section", acquirers := ["irq_off"], arg := .scope, yields := false,
+    acquireKernel := some "bpf_local_irq_save",
     fails := none, normalExit := "bpf_local_irq_restore",
     abnormalExit := "bpf_local_irq_restore", forbidden := [.sleep],
     nesting := .lifo, guards := "" },

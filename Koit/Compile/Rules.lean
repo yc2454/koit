@@ -1,6 +1,8 @@
 import Koit.Compile.Lower
 import Koit.Compile.Inline
 import Koit.Compile.Flatten
+import Koit.Compile.Alloc
+import Koit.Compile.Compile
 import Koit.LIR.Interp
 
 /-!
@@ -182,6 +184,101 @@ theorem flatten_correct (pre : Prelude) (cpu : BPF.Cpu) (P : LIR.Program) (B : B
       ∀ X, birEnv pre st.env B = .ok X →
         ∃ m, BPF.Star X K (BPF.load X st.machine (ctxValues st)) m ∧
              BPF.Halted X m (verdictPattern v) ∧ Agree st'.machine m.machine := by
+  sorry
+
+/-! ### Theorem D -/
+
+/-- One or more steps. -/
+def Plus (X : BPF.Env ρ τ) (K : Kernel) [DecidableEq ρ] (m m' : BPF.State ρ) : Prop :=
+  ∃ m1, BPF.step X K m = .ok m1 ∧ BPF.Star X K m1 m'
+
+/-- `R_D m_B m`: the shared states and the context values agree,
+`r10` is the frame pointer and `r6` the context, the machine's `pc`
+is where the BIR instruction's expansion starts, every virtual
+register's value is in its slot, spilled or as bytes according to
+its class, and the frame above the slots holds the objects' bytes
+as BIR's does. -/
+def R_D (A : Allocated) (m_B : BPF.State BPF.VReg) (m : BPF.State BPF.Reg) : Prop :=
+  Agree m_B.machine m.machine ∧ m_B.ctx = m.ctx ∧
+  m.regs .r10 = m_B.regs .fp ∧ m.regs .r6 = m_B.regs .ctx ∧
+  A.starts[m_B.pc]? = some m.pc ∧
+  (∀ v off, A.slots.lookup v = some off →
+    ∀ x, m_B.regs v = some x → m.frame.load off 8 = .ok x) ∧
+  (∀ off n, off ≥ (A.prog.objects.foldl (fun acc o => min acc o.base) 0) →
+    m_B.frame.load off n = m.frame.load off n)
+
+/-- Theorem D, `alloc_correct`: the allocation is a plus simulation
+from BIR to bytecode under `R_D`, each BIR step matched by one or
+more bytecode steps and no stuttering; the loaded states are
+related after the entry instruction copies the context into `r6`;
+and a halted BIR state is matched by a halted bytecode state with
+the same verdict. -/
+theorem alloc_correct (X_B : BPF.Env BPF.VReg BPF.Label) (X : BPF.Env BPF.Reg Int)
+    (A : Allocated) (K : Kernel) :
+    allocate X_B.pre X_B.sizeOf X_B.prog = .ok A → X.prog = A.prog →
+    X.pre = X_B.pre → X.kind = X_B.kind → X.sizeOf = X_B.sizeOf →
+    X_B.conv = BPF.birConv → X.conv = BPF.bytecodeConv →
+    (∀ m_B m_B' m, R_D A m_B m → BPF.step X_B K m_B = .ok m_B' →
+       ∃ m', Plus X K m m' ∧ R_D A m_B' m') ∧
+    (∀ st ctx, ∃ m, BPF.step X K (BPF.load X st ctx) = .ok m ∧
+       R_D A (BPF.load X_B st ctx) m) ∧
+    (∀ m_B m v, R_D A m_B m → BPF.Halted X_B m_B v →
+       ∃ m', BPF.Star X K m m' ∧ BPF.Halted X m' v) := by
+  sorry
+
+/-! ### The encoding -/
+
+/-- The one property of the encoder: its words, with the relocations
+and the notes, decode to the program they came from. -/
+theorem encode_decode (pre : Prelude) (p : BPF.Bytecode) (o : Object) :
+    encode pre p = .ok o → decode pre o = .ok p := by
+  sorry
+
+/-! ### The compiler -/
+
+/-- The context values of a Core state, as the machine loads them. -/
+def coreCtx (st : State) : List (String × Nat) :=
+  st.ctx.map fun (f, v) => (f, verdictPattern v)
+
+/-- `compile_correct`: for a kernel within its contracts and a unit
+the checker accepts, every program's run from every initial state,
+which T1 gives, is matched by the machine's run of its bytecode from
+the loaded state to a halted state with the source's verdict, the
+shared state agreeing. The existence of the Core derivation is T1's;
+this theorem adds the run, by the composition of the passes. -/
+theorem compile_correct (pre : Prelude) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
+    (C : Compiled) (K : Kernel) :
+    KernelOk K → Check.checkUnit pre u = .ok checked → compile pre cpu u checked = .ok C →
+    ∀ p ∈ u.programs, ∀ st, Sem.Initial pre u p st →
+      ∀ X, C.envFor pre st.env p.name = some X →
+        ∃ v st' m, Sem.ExecProgram K st p (.halt v) st' ∧
+          BPF.Star X K (BPF.load X st.machine (coreCtx st)) m ∧
+          BPF.Halted X m (verdictPattern v) ∧ Agree st'.machine m.machine := by
+  sorry
+
+/-- `bytecode_safe`: no state the bytecode reaches is stuck, which is
+to say it never trips a check of the verifier's list; from
+`compile_correct`, since the step is a function and a halted state
+has no successor. -/
+theorem bytecode_safe (pre : Prelude) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
+    (C : Compiled) (K : Kernel) :
+    KernelOk K → Check.checkUnit pre u = .ok checked → compile pre cpu u checked = .ok C →
+    ∀ p ∈ u.programs, ∀ st, Sem.Initial pre u p st →
+      ∀ X, C.envFor pre st.env p.name = some X →
+        ∀ m, BPF.Star X K (BPF.load X st.machine (coreCtx st)) m → ¬ BPF.Stuck X K m := by
+  sorry
+
+/-- `bytecode_unique`: the run of `compile_correct` is the only run,
+and every halted state the loaded state reaches has the source's
+verdict, maps, packet, and trace. -/
+theorem bytecode_unique (pre : Prelude) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
+    (C : Compiled) (K : Kernel) :
+    KernelOk K → Check.checkUnit pre u = .ok checked → compile pre cpu u checked = .ok C →
+    ∀ p ∈ u.programs, ∀ st, Sem.Initial pre u p st →
+      ∀ X, C.envFor pre st.env p.name = some X →
+        ∀ v st', Sem.ExecProgram K st p (.halt v) st' →
+        ∀ m w, BPF.Star X K (BPF.load X st.machine (coreCtx st)) m → BPF.Halted X m w →
+          w = verdictPattern v ∧ Agree st'.machine m.machine := by
   sorry
 
 end Koit.Compile

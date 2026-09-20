@@ -33,6 +33,25 @@ the kind, as `redirect`'s verdict does. -/
 structure Kernel where
   helper : KindRow → CallRow → List Val → State → HelperOut
 
+/-- The rows the kernel computes inline, with no call: `pkt.len` is
+the packet's length, `csum_add` the 32-bit add with end-around
+carry, `csum_fold` the two folds and the complement, as
+include/net/checksum.h has them. They are one function at every
+level, with no trace event, since the kernel makes no call. -/
+def inlineRow (name : String) (args : List Val) (st : State) : Option Val :=
+  match name, args.map Val.toInt with
+  | "pkt.len", _ => some (.scalar st.packet.size)
+  | "csum_add", [c, a] =>
+    let a := toNatMod a 32
+    let s := (toNatMod c 32 + a) % 2 ^ 32
+    some (.scalar (if s < a then s + 1 else s))
+  | "csum_fold", [c] =>
+    let s := toNatMod c 32
+    let s := (s % 65536) + (s / 65536)
+    let s := (s % 65536) + (s / 65536)
+    some (.scalar (65535 - (s % 65536)))
+  | _, _ => none
+
 /-- Whether a row's effect list has the flag `f`; the write effects
 are not flags. -/
 def hasFlag (es : List Effect) (f : Effect) : Bool :=
@@ -59,8 +78,8 @@ def KernelOk (K : Kernel) : Prop :=
 /-- One behavior each helper of the stage-1 table may have: a redirect
 succeeds with the kind's `REDIRECT`; the resizes grow with zero bytes
 and fail past the packet's end; a socket lookup finds a socket; the
-clock advances a microsecond per call; the checksums are the
-kernel's own `csum_add` and `csum_fold`. -/
+clock advances a microsecond per call. The inline rows never reach a
+kernel. -/
 def synthetic : Kernel where
   helper kind row args st :=
     let ints := args.map Val.toInt
@@ -83,7 +102,6 @@ def synthetic : Kernel where
       else
         .ok none { st with packet := st.packet.extract 0 (st.packet.size - delta.natAbs),
                             layout := st.layout + 1 }
-    | "pkt.len", _ => .ok (some (.scalar st.packet.size)) st
     | "sk_lookup_tcp", _ | "sk_lookup_udp", _ =>
       let (id, st) := st.fresh
       let st := st.setRegion (.kernel id) ByteArray.empty
@@ -92,17 +110,6 @@ def synthetic : Kernel where
     | "ktime", _ =>
       let st := { st with clock := st.clock + 1000 }
       .ok (some (.scalar st.clock)) st
-    -- `csum_add`: a 32-bit add with end-around carry; `csum_fold`:
-    -- folded twice and complemented, as include/net/checksum.h has them
-    | "csum_add", [c, a] =>
-      let a := toNatMod a 32
-      let s := (toNatMod c 32 + a) % 2 ^ 32
-      .ok (some (.scalar (if s < a then s + 1 else s))) st
-    | "csum_fold", [c] =>
-      let s := toNatMod c 32
-      let s := (s % 65536) + (s / 65536)
-      let s := (s % 65536) + (s / 65536)
-      .ok (some (.scalar (65535 - (s % 65536)))) st
     | f, _ => .err s!"the synthetic kernel has no rule for `{f}`"
 
 end Koit.Machine

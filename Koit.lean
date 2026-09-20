@@ -46,4 +46,7 @@ import Koit.Compile.Lower
 import Koit.Compile.Inline
 import Koit.Compile.CPrint
 import Koit.Compile.Flatten
+import Koit.Compile.Alloc
+import Koit.Compile.Encode
+import Koit.Compile.Compile
 import Koit.Compile.Rules

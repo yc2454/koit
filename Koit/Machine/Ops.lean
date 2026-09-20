@@ -162,10 +162,17 @@ def forbidsCall (st : State) (releases : List ResourceRow) : Option ResourceRow 
 kernel's answer, the trace appended, and the held stack pushed with
 the object an acquiring row hands out or popped for the object a
 releasing row takes. The arguments arrive as the kernel sees them,
-fitted by the caller to the row's parameter kinds. -/
+fitted by the caller to the row's parameter kinds. An inline row is
+computed here instead, with no call and no event. -/
 def call (pre : Prelude) (K : Kernel) (kind : KindRow) (row : CallRow) (vs : List Val) :
     Op CallOut := do
   let st ← get
+  -- an inline row is arithmetic, not a call: no held row forbids it
+  -- and the trace does not list it
+  if row.isInline then
+    match inlineRow row.name vs st with
+    | some v => return .ok (some v)
+    | none => fail s!"`{row.name}` has no inline computation"
   let releases := releasesOf pre row
   if let some h := forbidsCall st releases then
     fail s!"a call while {h.describe} is held"

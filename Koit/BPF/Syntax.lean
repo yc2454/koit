@@ -80,22 +80,26 @@ inductive Builtin where
   | unlock
   | enter (r : Resource)
   | leave (r : Resource)
-  | printk (fmt : String)
-  deriving Repr, Inhabited
+  /-- `printk` with its format and the number of arguments the source
+  passed, so that the trace records them at every level, and the
+  frame object holding the kernel's format with its size, which the
+  allocation passes to the helper. -/
+  | printk (fmt : String) (n : Nat) (obj : String) (size : Nat)
+  deriving Repr, BEq, Inhabited
 
 /-- What a `call` calls: a builtin, or a kernel function by the name
 of its row. -/
 inductive Callee where
   | builtin (b : Builtin)
   | kernel (row : String)
-  deriving Repr, Inhabited
+  deriving Repr, BEq, Inhabited
 
 /-- A source operand: a register, or the immediate of the `_imm`
 forms. -/
 inductive Src (ρ : Type) where
   | reg (r : ρ)
   | imm (k : Int)
-  deriving Repr, Inhabited
+  deriving Repr, BEq, Inhabited
 
 /-- The instructions. `w` is an access or extension width in
 `{8, 16, 32, 64}`, `off` a signed displacement. -/
@@ -131,7 +135,7 @@ inductive Instr (ρ τ : Type) where
   /-- `atomic(op, cls, fetch) [d + off] s`. -/
   | atomic (op : AtomicOp) (cls : Cls) (fetch : Bool) (d : ρ) (off : Int) (s : ρ)
   | exit
-  deriving Repr, Inhabited
+  deriving Repr, BEq, Inhabited
 
 /-- The class of a virtual register, metadata for the allocation. -/
 inductive RegClass where
@@ -224,14 +228,42 @@ abbrev Bytecode := Program Reg Int
 
 /-! ### Helpers on the syntax -/
 
-/-- How many operands a builtin takes; `printk` as many as its format
-has holes, at most three. -/
+/-- How many operands a builtin takes; `printk` as many as the source
+passed. -/
 def Builtin.arity : Builtin → Nat
   | .lookup | .delete => 2
   | .update => 3
   | .reserve _ | .submit | .discard | .lock | .unlock => 1
   | .enter _ | .leave _ => 0
-  | .printk fmt => min 3 ((fmt.splitOn "{}").length - 1)
+  | .printk _ n _ _ => n
+
+/-- The kernel's argument layout of a builtin, for the fixed
+convention and the encoder: the map operations take the map first
+and a flags word last, `reserve` its size, `printk` the format's
+location and size before its arguments. -/
+def Builtin.abi : Builtin → List Prelude.AbiArg
+  | .lookup => [.arg 0, .arg 1]
+  | .update => [.arg 0, .arg 1, .arg 2, .const 0]
+  | .delete => [.arg 0, .arg 1]
+  | .reserve n => [.arg 0, .const n, .const 0]
+  | .submit | .discard => [.arg 0, .const 0]
+  | .lock | .unlock => [.arg 0]
+  | .enter _ | .leave _ => []
+  | .printk _ n _ size => [.fmt, .const size] ++ (List.range n).map .arg
+
+/-- The kernel helper a builtin calls, by number; the scope rows are
+kfuncs, encoded by name. -/
+def Builtin.helper : Builtin → Option Nat
+  | .lookup => some 1
+  | .update => some 2
+  | .delete => some 3
+  | .reserve _ => some 131
+  | .submit => some 132
+  | .discard => some 133
+  | .lock => some 93
+  | .unlock => some 94
+  | .printk .. => some 6
+  | .enter _ | .leave _ => none
 
 def Builtin.print : Builtin → String
   | .lookup => "lookup"
@@ -244,7 +276,7 @@ def Builtin.print : Builtin → String
   | .unlock => "unlock"
   | .enter r => s!"enter {r}"
   | .leave r => s!"leave {r}"
-  | .printk fmt => s!"printk {Core.strLit fmt}"
+  | .printk fmt n obj size => s!"printk {Core.strLit fmt} {n} {obj} {size}"
 
 def Callee.print : Callee → String
   | .builtin b => b.print

@@ -27,7 +27,8 @@
 # unit must lower, with and without inlining, `koitc run --lir` must
 # print what `koitc run` prints, before and after inlining, and
 # `koitc run --bir` must print it too on the flattened unit under cpu
-# v4, and under v3 unless the unit needs v4's signed division. At the
+# v4, and under v3 unless the unit needs v4's signed division, and
+# `koitc run --bytecode` on the allocated unit under v4. At the
 # emit stage every ok and run unit must emit C and, when clang with
 # the BPF target is present, that C must build.
 set -u
@@ -191,6 +192,15 @@ if at_least lower; then
     elif ! grep -q "need cpu v4" "$TMP/out"; then
       failed run-bir-v3 "$f"; continue
     fi
+    # the allocated unit, under the bytecode convention
+    # shellcheck disable=SC2086
+    if ! "$KOITC" run --bytecode --cpu v4 $opts "$f" >"$TMP/out" 2>&1; then
+      failed run-bytecode "$f"; continue
+    fi
+    if ! cmp -s "$TMP/core" "$TMP/out"; then
+      echo "    core:"; sed 's/^/      /' "$TMP/core"
+      failed bytecode-differs "$f"; continue
+    fi
     pass=$((pass + 1))
   done
 fi
@@ -207,6 +217,9 @@ if at_least emit; then
     [ -e "$f" ] || continue
     if ! "$KOITC" emit "$f" >"$TMP/unit.c" 2>"$TMP/out"; then
       failed emit "$f"; continue
+    fi
+    if ! "$KOITC" emit --bytecode "$f" >"$TMP/words" 2>"$TMP/out"; then
+      failed emit-bytecode "$f"; continue
     fi
     if [ -n "$HAVE_CLANG" ]; then
       # -fno-builtin keeps clang from turning a byte loop into a memset

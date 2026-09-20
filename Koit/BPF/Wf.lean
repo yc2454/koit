@@ -45,8 +45,8 @@ selects, and `cmpxchg` the result register. -/
 def readsOf (X : Env ρ τ) (ins : Instr ρ τ) : List ρ :=
   match ins, X.conv.fixedCall with
   | .call h _ _, some (regs, _) =>
-    match arity X h with
-    | .ok n => regs.take n
+    match layout X h with
+    | .ok abi => regs.take abi.length
     | .error _ => []
   | .atomic .cmpxchg _ _ d _ s, _ => [d, s, X.conv.ret]
   | ins, _ => ins.reads

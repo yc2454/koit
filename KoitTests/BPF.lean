@@ -225,13 +225,16 @@ private def v (n : Nat) : VReg := .v n
 
 /-! ### The bytecode convention -/
 
--- the same call under the fixed convention: `r1` the argument, `r0`
--- the result, `r1` dead after
+-- the same call under the fixed convention and the kernel's layout:
+-- `r1` the argument, `r2` the flags word, `r0` the result, `r1` dead
+-- after
 #guard runC (bcEnv
-  [.lddw .r1 5, .call (.kernel "redirect") [] none, .exit]) == .ok 4
+  [.lddw .r1 5, .mov .w64 .r2 (.imm 0), .call (.kernel "redirect") [] none, .exit]) == .ok 4
 #guard (runC (bcEnv
-  [.lddw .r1 5, .call (.kernel "redirect") [] none, .mov .w64 .r0 (.reg .r1), .exit])).isOk
-  == false
+  [.lddw .r1 5, .call (.kernel "redirect") [] none, .exit])).isOk == false
+#guard (runC (bcEnv
+  [.lddw .r1 5, .mov .w64 .r2 (.imm 0), .call (.kernel "redirect") [] none,
+   .mov .w64 .r0 (.reg .r1), .exit])).isOk == false
 -- the context arrives in `r1` and the frame through `r10`
 #guard runC (bcEnv
   [.mov .w64 .r6 (.reg .r1), .lddw .r2 3, .stx 64 .r10 (-8) (.reg .r2),
@@ -251,7 +254,9 @@ private def v (n : Nat) : VReg := .v n
 #guard (wf (birEnv
   [.lddw (v 0) 1, .jcond .eq .w64 (v 0) (.imm 0) ⟨1⟩, .lddw (v 1) 2,
    .mov .w64 .ret (.reg (v 1)), .exit] [(1, 3)])).isOk == false
-#guard (wf (bcEnv [.lddw .r1 5, .call (.kernel "redirect") [] none, .exit])).isOk == true
+#guard (wf (bcEnv [.lddw .r1 5, .mov .w64 .r2 (.imm 0),
+                   .call (.kernel "redirect") [] none, .exit])).isOk == true
+#guard (wf (bcEnv [.lddw .r1 5, .call (.kernel "redirect") [] none, .exit])).isOk == false
 #guard (wf (bcEnv [.lddw .r1 5, .call (.kernel "redirect") [.r1] none, .exit])).isOk == false
 
 end KoitTests.BPF

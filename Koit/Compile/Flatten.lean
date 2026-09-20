@@ -455,6 +455,44 @@ def fillBytes (b : VReg) (off : Int) (v : Src VReg) (n : Nat) : FM Unit := do
     for i in [0:n] do
       emit (.stx 8 b (off + i) (.reg t))
 
+/-- The kernel's format for a koit one: each `{}` the conversion of
+its argument's type, as `bpf_trace_printk` prints a 64-bit register. -/
+def kernelFormat (fmt : String) (tys : List LIR.Ty) : String :=
+  let parts := fmt.splitOn "{}"
+  let conv : LIR.Ty → String
+    | .int false 64 => "%llu"
+    | .int false _ => "%u"
+    | .int true 64 => "%lld"
+    | .int true _ => "%d"
+    | .ptr => "%llx"
+  let rec go : List String → List LIR.Ty → String
+    | [], _ => ""
+    | [s], _ => s
+    | s :: rest, t :: ts => s ++ conv t ++ go rest ts
+    | s :: rest, [] => s ++ "{}" ++ go rest []
+  go parts tys
+
+/-- The bytes of the kernel's format stored into a fresh frame object
+at the call site, four at a time, so that the allocation can pass
+its location; the object's name and the format's size. -/
+def formatObject (fmt : String) (tys : List LIR.Ty) : FM (String × Nat) := do
+  let bytes := (kernelFormat fmt tys).toUTF8.toList ++ [0]
+  let size := bytes.length
+  let s ← get
+  let name := s!"fmt_{s.objects.length}"
+  let osize := roundUp8 size
+  let base := s.top - osize
+  let obj : FrameObj := { name, size, base }
+  set { s with objects := s.objects ++ [obj], top := base }
+  let t ← temp .location
+  emit (.lea t name)
+  for i in [0:osize / 4] do
+    let chunk := ((bytes.drop (4 * i)).take 4) ++ List.replicate 4 0
+    let pat := Machine.ofLe (chunk.take 4)
+    let imm : Int := if pat ≥ 2 ^ 31 then (pat : Int) - 2 ^ 32 else pat
+    emit (.stx 32 t (4 * i) (.imm imm))
+  return (name, size)
+
 /-- The label of the handler of a kind. -/
 def handlerLabel (k : Kind) : FM Label := do
   match (← get).handlers.lookup k with
@@ -590,7 +628,9 @@ partial def builtin (x : Option String) (b : LIR.Builtin) (args : List LIR.Expr)
     fillBytes bd od sv n
   | .printk fmt, vs =>
     let regs ← argRegs
-    emit (.call (.builtin (.printk fmt)) regs none)
+    let tys ← vs.mapM typeOf
+    let (obj, size) ← formatObject fmt tys
+    emit (.call (.builtin (.printk fmt vs.length obj size)) regs none)
   | .atomic op s w fetch, a :: vs =>
     let (ba, oa) ← addrOf a
     let cls := clsOf w
@@ -605,7 +645,8 @@ partial def builtin (x : Option String) (b : LIR.Builtin) (args : List LIR.Expr)
       if let some d ← bindResult (.int s w) then emit (.mov .w64 d (.reg .ret))
     | _, [v] =>
       let rv ← exprTemp v (.int s w)
-      if fetch || x.isSome then
+      -- an exchange always fetches, as the kernel's does
+      if fetch || x.isSome || op == .xchg then
         let tv ← temp
         emit (.mov .w64 tv (.reg rv))
         emit (.atomic op cls true ba oa tv)
