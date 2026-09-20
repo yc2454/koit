@@ -33,7 +33,11 @@
 # every test a conditional jump, every cast an instruction of the
 # table, every packet access and index under a test on its path. At
 # the emit stage every ok and run unit must emit C and, when clang
-# with the BPF target is present, that C must build.
+# with the BPF target is present, that C must build; and when
+# llvm-mc is present, the words must disassemble to the bytecode
+# printed in LLVM's syntax, and that text must assemble back to the
+# words, under cpu v3 and v4. Both tools are optional: absent, the
+# stage notes it and checks the rest.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
@@ -41,6 +45,7 @@ lake build koitc >/dev/null || { echo "build failed"; exit 2; }
 KOITC=.lake/build/bin/koitc
 STAGE=${KOIT_STAGE:-parse}
 CLANG=${KOIT_CLANG:-/opt/homebrew/opt/llvm/bin/clang}
+LLVM_MC=${KOIT_LLVM_MC:-/opt/homebrew/opt/llvm/bin/llvm-mc}
 # the stages in order, so that a stage includes the ones before it
 rank() {
   case "$1" in
@@ -229,6 +234,15 @@ if at_least emit; then
     HAVE_CLANG=""
     echo "note: no clang with the BPF target at $CLANG; emitted C is not built"
   fi
+  if [ -x "$LLVM_MC" ] && echo exit | "$LLVM_MC" --triple=bpf >/dev/null 2>&1; then
+    HAVE_MC=1
+  else
+    HAVE_MC=""
+    echo "note: no llvm-mc with the BPF target at $LLVM_MC; words are not disassembled"
+  fi
+  # one token per line, for comparing texts and byte streams
+  norm() { sed 's/#.*$//; s/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | grep -v '^$'; }
+  bytes() { grep -v '^#' | tr ', ' '\n\n' | grep -v '^$'; }
   for f in tests/ok/*.ko tests/run/*.ko; do
     [ -e "$f" ] || continue
     if ! "$KOITC" emit "$f" >"$TMP/unit.c" 2>"$TMP/out"; then
@@ -236,6 +250,31 @@ if at_least emit; then
     fi
     if ! "$KOITC" emit --bytecode "$f" >"$TMP/words" 2>"$TMP/out"; then
       failed emit-bytecode "$f"; continue
+    fi
+    if [ -n "$HAVE_MC" ]; then
+      ok=1
+      for cpu in v3 v4; do
+        # a unit that needs v4's signed division has no v3 words
+        if ! "$KOITC" emit --words --cpu $cpu "$f" >"$TMP/words" 2>"$TMP/out"; then
+          grep -q "need cpu v4" "$TMP/out" && continue
+          ok=""; break
+        fi
+        "$KOITC" emit --asm --cpu $cpu "$f" >"$TMP/asm" 2>"$TMP/out" || { ok=""; break; }
+        # our words through LLVM's disassembler read as our text
+        "$LLVM_MC" --disassemble --triple=bpf -mcpu=$cpu <"$TMP/words" 2>"$TMP/out" | norm >"$TMP/dis"
+        norm <"$TMP/asm" >"$TMP/ours"
+        if ! cmp -s "$TMP/dis" "$TMP/ours"; then
+          diff "$TMP/ours" "$TMP/dis" | head -20 >>"$TMP/out"; ok=""; break
+        fi
+        # our text through LLVM's assembler encodes as our words
+        "$LLVM_MC" --triple=bpf -mcpu=$cpu -show-encoding <"$TMP/asm" 2>"$TMP/out" |
+          sed -n 's/.*encoding: \[\(.*\)\].*/\1/p' | bytes >"$TMP/enc"
+        bytes <"$TMP/words" >"$TMP/want"
+        if ! cmp -s "$TMP/enc" "$TMP/want"; then
+          diff "$TMP/want" "$TMP/enc" | head -20 >>"$TMP/out"; ok=""; break
+        fi
+      done
+      [ -n "$ok" ] || { failed llvm-mc "$f"; continue; }
     fi
     if [ -n "$HAVE_CLANG" ]; then
       # -fno-builtin keeps clang from turning a byte loop into a memset

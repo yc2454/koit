@@ -1,0 +1,29 @@
+// Instruction forms the direct backend must spell as the kernel's
+// tools do, gathered so that the round trip through LLVM sees them:
+// signed narrow widths and their sign extensions, signed comparison
+// and shift, byte order, atomics, and a constant wider than 32 bits.
+
+map m : array[1] of { a: i8, b: i16, c: i32, d: i64, n: u64, k: u32, w: be16, x: be32 }
+map q : array[1] of { d: i64, n: u64, k: u32 }
+
+program forms : syscall {
+  let a: i8 = 0 - 100
+  m[0].a = a
+  m[0].b = (a as i16) * 3
+  m[0].c = (m[0].b as i32) - 7
+  m[0].d = m[0].c as i64
+  if m[0].c < 0 { m[0].n = 1 }
+  if m[0].d <= 0 - 1 { m[0].n = m[0].n + 2 }
+  if a > 0 - 127 { m[0].n = m[0].n + 4 }
+  m[0].k = ((m[0].c >> 3) as u32) & 0xffff
+  m[0].w = hton(0x1234)
+  m[0].x = hton(0x01020304)
+  q[0].n = (ntoh(m[0].w) as u64) + (ntoh(m[0].x) as u64)
+  q[0].k = 0xdeadbeef
+  q[0].d = 0x123456789
+  let old = atomic_add(q[0].n, 5)
+  let old2 = atomic_xchg(q[0].k, 9)
+  let old3 = atomic_cmpxchg(q[0].k, 9, 11)
+  m[0].n = m[0].n + old + (old2 as u64) + (old3 as u64)
+  return old as i32
+}

@@ -8,8 +8,10 @@ packet given in hex and zero-filled maps, and prints each verdict,
 the lines `printk` wrote, and the map state; with `--lir` it runs the
 lowered unit instead, so that the two runs can be compared. `lower`
 prints the LIR of a checked unit, inlined with `--inline`; `emit`
-prints the C the printer makes of it; `shape` compiles the unit and
-tests the syntactic part of Lemma L on every program.
+prints the C the printer makes of it, or the words, or the bytecode
+in LLVM's syntax and the words as bytes for the round trip through
+`llvm-mc`; `shape` compiles the unit and tests the syntactic part of
+Lemma L on every program.
 -/
 
 open Koit Koit.Syntax
@@ -36,7 +38,9 @@ def usage : String := String.intercalate "\n"
    "          functions; --bir prints the flattened unit, --bytecode",
    "          the allocated one",
    "  emit    check FILE, then print the C of its LIR; with --bytecode,",
-   "          the words of its programs in hex with their relocations",
+   "          the words of its programs in hex with their relocations;",
+   "          --asm the bytecode in LLVM's syntax, --words the words as",
+   "          byte lines for llvm-mc; --cpu v3|v4 as for run",
    "  shape   compile FILE and test the shape of every program: each",
    "          test a conditional jump, each cast an instruction of the",
    "          table, each packet access and index under a test on its",
@@ -135,6 +139,20 @@ partial def runOpts : List String → RunOpts → Option RunOpts
   | "--inline" :: rest, o => runOpts rest { o with inline := true }
   | [file], o => if file.startsWith "--" then none else some { o with file := some file }
   | _, _ => none
+
+/-- The options of `emit`: the form printed and the cpu. -/
+structure EmitOpts where
+  mode : String := "c"
+  cpu  : BPF.Cpu := .v3
+  rest : List String := []
+
+partial def emitOpts : List String → EmitOpts → EmitOpts
+  | "--bytecode" :: r, o => emitOpts r { o with mode := "bytecode" }
+  | "--asm" :: r, o => emitOpts r { o with mode := "asm" }
+  | "--words" :: r, o => emitOpts r { o with mode := "words" }
+  | "--cpu" :: "v3" :: r, o => emitOpts r { o with cpu := .v3 }
+  | "--cpu" :: "v4" :: r, o => emitOpts r { o with cpu := .v4 }
+  | r, o => { o with rest := r }
 
 /-- A checked unit lowered through passes A and B, and I when asked. -/
 def lowerUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
@@ -310,24 +328,32 @@ def run (args : List String) : IO UInt32 := do
     | .error m, _ | _, .error m =>
       IO.eprintln s!"{file}: {m}"
       return 1
-  | "emit" :: "--bytecode" :: rest => do
-    let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
-    let some pre ← preludeFor tag | return 2
-    let some (core, checked) ← checkFile file pre | return 1
-    match Compile.compile pre .v3 core checked with
-    | .ok C =>
-      for o in C.objects do IO.print (Compile.Object.print o)
-      return 0
-    | .error m =>
-      IO.eprintln s!"{file}: {m}"
-      return 1
   | "emit" :: rest => do
-    let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
+    let o := emitOpts rest {}
+    let some (tag, _, file) := kernelOpt o.rest | do IO.eprint usage; return 2
     let some pre ← preludeFor tag | return 2
     let some (core, checked) ← checkFile file pre | return 1
-    match lowerUnit pre core checked false with
-    | .ok lir =>
-      IO.print (Compile.emitC pre lir)
+    if o.mode == "c" then
+      match lowerUnit pre core checked false with
+      | .ok lir =>
+        IO.print (Compile.emitC pre lir)
+        return 0
+      | .error m =>
+        IO.eprintln s!"{file}: {m}"
+        return 1
+    match Compile.compile pre o.cpu core checked with
+    | .ok C =>
+      if o.mode == "bytecode" then
+        for ob in C.objects do IO.print (Compile.Object.print ob)
+      else if o.mode == "words" then
+        for ob in C.objects do IO.print (Compile.Object.printBytes ob)
+      else
+        for a in C.allocated do
+          match Compile.printAsm pre a.prog with
+          | .ok s => IO.print s
+          | .error m =>
+            IO.eprintln s!"{file}: {m}"
+            return 1
       return 0
     | .error m =>
       IO.eprintln s!"{file}: {m}"

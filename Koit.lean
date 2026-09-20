@@ -48,6 +48,7 @@ import Koit.Compile.CPrint
 import Koit.Compile.Flatten
 import Koit.Compile.Alloc
 import Koit.Compile.Encode
+import Koit.Compile.Asm
 import Koit.Compile.Compile
 import Koit.Compile.Shape
 import Koit.Compile.Rules

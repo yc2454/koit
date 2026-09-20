@@ -555,8 +555,9 @@ call naming the callee the model sees, since the words alone do not
 say which builtin a helper number stands for once its size and flags
 are in registers; the notes are not loaded. The decode-encode round
 trip on the object is the one property of the encoder worth proving,
-and LLVM's BPF disassembler on the words is its independent check
-until a kernel is available (entries 29, 35, 38).
+and LLVM's BPF disassembler and assembler on the words and the
+printed bytecode are its independent check until a kernel is
+available, when the tool is present (entries 29, 35, 38).
 
 **Loading.** Two loaders serve two purposes. The first is a few
 hundred lines over the `bpf` system call: create the maps, with BTF

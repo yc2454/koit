@@ -622,7 +622,11 @@ inlining, `koitc run --bir` on BIR, `koitc run --bytecode` on the
 allocated program, each reporting verdict, maps, packet, and trace.
 A difference between two adjacent levels localizes a bug to one pass
 before any proof exists, and the `tests/run` expectations extend to
-every level unchanged. The last comparison, bytecode against the
+every level unchanged. The words have one reader that is not ours
+before a kernel is: when `llvm-mc` is present, the runner requires
+that the words disassemble to the bytecode printed in LLVM's syntax
+and that this text assembles back to the words, under both cpus; the
+tool is optional and its absence is noted, never a failure. The last comparison, bytecode against the
 kernel under `BPF_PROG_TEST_RUN`, is the model's validation and
 belongs to session 8.
 
