@@ -8,7 +8,7 @@ import Koit.Compile.Flatten
 import Koit.Compile.Alloc
 import Koit.Compile.Compile
 import Koit.BPF.Interp
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the lowering: every unit here lowers to well-formed LIR,
@@ -29,12 +29,12 @@ private def coreRun (s : String) (packet : String) (ctx : List (String × Nat)) 
   let u ← match parse s with
     | .ok u => pure u
     | .error e => throw s!"parse: {e.msg}"
-  let core := desugar Prelude.stage1 u
-  let _ ← match checkUnit Prelude.stage1 core with
+  let core := desugar Interface.v6_8 u
+  let _ ← match checkUnit Interface.v6_8 core with
     | .error d => throw s!"check: {d}"
     | .ok c => pure c
   let some bytes := parseHex packet | throw "bad hex"
-  let (reports, maps) ← runUnit Prelude.stage1 core bytes ctx none 100000
+  let (reports, maps) ← runUnit Interface.v6_8 core bytes ctx none 100000
   return (reports.map fun r => s!"{r.program}: {r.verdict}" ++
     String.join (r.log.map fun l => s!" [{l}]")) ++ maps
 
@@ -44,15 +44,15 @@ private def lirRun (s : String) (packet : String) (ctx : List (String × Nat))
   let u ← match parse s with
     | .ok u => pure u
     | .error e => throw s!"parse: {e.msg}"
-  let core := desugar Prelude.stage1 u
-  let checked ← match checkUnit Prelude.stage1 core with
+  let core := desugar Interface.v6_8 u
+  let checked ← match checkUnit Interface.v6_8 core with
     | .error d => throw s!"check: {d}"
     | .ok c => pure c
-  let lir ← Compile.lower Prelude.stage1 (Compile.fold Prelude.stage1 core checked)
+  let lir ← Compile.lower Interface.v6_8 (Compile.fold Interface.v6_8 core checked)
   let lir := if inl then Compile.inline lir else lir
-  LIR.wf Prelude.stage1 lir |>.mapError ("wf: " ++ ·)
+  LIR.wf Interface.v6_8 lir |>.mapError ("wf: " ++ ·)
   let some bytes := parseHex packet | throw "bad hex"
-  let (reports, maps) ← LIR.Sem.runUnit Prelude.stage1 core lir bytes ctx none 100000
+  let (reports, maps) ← LIR.Sem.runUnit Interface.v6_8 core lir bytes ctx none 100000
   return (reports.map fun r => s!"{r.program}: {r.verdict}" ++
     String.join (r.log.map fun l => s!" [{l}]")) ++ maps
 
@@ -62,22 +62,22 @@ private def birRun (s : String) (packet : String) (ctx : List (String × Nat)) :
   let u ← match parse s with
     | .ok u => pure u
     | .error e => throw s!"parse: {e.msg}"
-  let core := desugar Prelude.stage1 u
-  let checked ← match checkUnit Prelude.stage1 core with
+  let core := desugar Interface.v6_8 u
+  let checked ← match checkUnit Interface.v6_8 core with
     | .error d => throw s!"check: {d}"
     | .ok c => pure c
-  let lir ← Compile.lower Prelude.stage1 (Compile.fold Prelude.stage1 core checked)
+  let lir ← Compile.lower Interface.v6_8 (Compile.fold Interface.v6_8 core checked)
   let lir := Compile.inline lir
-  let birs ← Compile.flatten Prelude.stage1 .v4 lir
-  let env : Env := { prelude := Prelude.stage1, license := core.license.map (·.2),
+  let birs ← Compile.flatten Interface.v6_8 .v4 lir
+  let env : Env := { interface := Interface.v6_8, license := core.license.map (·.2),
                      types := core.types, consts := core.consts, configs := core.configs,
                      maps := core.maps, fns := core.fns, contracts := core.contracts }
   let progs ← birs.mapM fun B => do
-    let X ← Compile.birEnv Prelude.stage1 env B
+    let X ← Compile.birEnv Interface.v6_8 env B
     BPF.wf X |>.mapError ("bir wf: " ++ ·)
     pure X
   let some bytes := parseHex packet | throw "bad hex"
-  let (reports, maps) ← BPF.runUnit Prelude.stage1 core progs bytes ctx none 100000
+  let (reports, maps) ← BPF.runUnit Interface.v6_8 core progs bytes ctx none 100000
   return (reports.map fun r => s!"{r.program}: {r.verdict}" ++
     String.join (r.log.map fun l => s!" [{l}]")) ++ maps
 
@@ -87,28 +87,28 @@ private def bytecodeRun (s : String) (packet : String) (ctx : List (String × Na
   let u ← match parse s with
     | .ok u => pure u
     | .error e => throw s!"parse: {e.msg}"
-  let core := desugar Prelude.stage1 u
-  let checked ← match checkUnit Prelude.stage1 core with
+  let core := desugar Interface.v6_8 u
+  let checked ← match checkUnit Interface.v6_8 core with
     | .error d => throw s!"check: {d}"
     | .ok c => pure c
-  let lir ← Compile.lower Prelude.stage1 (Compile.fold Prelude.stage1 core checked)
+  let lir ← Compile.lower Interface.v6_8 (Compile.fold Interface.v6_8 core checked)
   let lir := Compile.inline lir
-  let birs ← Compile.flatten Prelude.stage1 .v4 lir
-  let env : Env := { prelude := Prelude.stage1, license := core.license.map (·.2),
+  let birs ← Compile.flatten Interface.v6_8 .v4 lir
+  let env : Env := { interface := Interface.v6_8, license := core.license.map (·.2),
                      types := core.types, consts := core.consts, configs := core.configs,
                      maps := core.maps, fns := core.fns, contracts := core.contracts }
-  let allocated ← Compile.allocateAll Prelude.stage1 (Compile.sizeOfIn env) birs
+  let allocated ← Compile.allocateAll Interface.v6_8 (Compile.sizeOfIn env) birs
   let progs ← allocated.mapM fun a => do
-    let X ← Compile.bytecodeEnv Prelude.stage1 env a.prog
+    let X ← Compile.bytecodeEnv Interface.v6_8 env a.prog
     BPF.wf X |>.mapError ("bytecode wf: " ++ ·)
     -- the words round-trip
-    let o ← Compile.encode Prelude.stage1 a.prog
-    match Compile.decode Prelude.stage1 o with
+    let o ← Compile.encode Interface.v6_8 a.prog
+    match Compile.decode Interface.v6_8 o with
     | .ok p' => unless p'.code == a.prog.code do throw "encode/decode: the code differs"
     | .error m => throw s!"decode: {m}"
     pure X
   let some bytes := parseHex packet | throw "bad hex"
-  let (reports, maps) ← BPF.runUnit Prelude.stage1 core progs bytes ctx none 100000
+  let (reports, maps) ← BPF.runUnit Interface.v6_8 core progs bytes ctx none 100000
   return (reports.map fun r => s!"{r.program}: {r.verdict}" ++
     String.join (r.log.map fun l => s!" [{l}]")) ++ maps
 

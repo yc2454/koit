@@ -27,7 +27,7 @@ namespace Koit.Core.Sem
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env)
-open Koit.Prelude (KindRow CallRow ResourceRow AcqArg Sig)
+open Koit.Interface (KindRow CallRow ResourceRow AcqArg Sig)
 open Koit.Machine (toNatMod wrap leBytes ofLe slice blit zeros bswap Kernel HeldObj)
 
 /-! ### Locations and values -/
@@ -516,7 +516,7 @@ def kernelCall (K : Kernel) (row : CallRow) (params : List Param) (ret : Option 
     (args : List Val) : M (Option (Option Val)) := do
   let st ← get
   let vs ← (params.zip args).mapM fun (p, v) => kernelArg p v
-  match ← op (Machine.call st.env.prelude K st.kind row vs) with
+  match ← op (Machine.call st.env.interface K st.kind row vs) with
   | .ok v =>
     match v with
     | some v => return some (some (← kernelResult ret v))
@@ -531,6 +531,6 @@ resource away. -/
 def release (K : Kernel) (normal : Bool) (moved : Bool) : M Unit := do
   if moved then return
   let st ← get
-  op (Machine.release st.env.prelude K st.kind normal)
+  op (Machine.release st.env.interface K st.kind normal)
 
 end Koit.Core.Sem

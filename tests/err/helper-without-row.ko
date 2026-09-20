@@ -1,0 +1,8 @@
+// expect: is the kernel's helper bpf_get_prandom_u32, which koit has no row for yet
+// A helper the kernel has and koit does not offer: the diagnostic
+// says which it is, from the kernel side, and where the offered
+// calls are listed.
+program p : syscall {
+  let r = get_prandom_u32()
+  return 0
+}

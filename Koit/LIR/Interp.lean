@@ -159,10 +159,10 @@ def runProgram (K : Kernel) (fns : Fns) (st : State) (p : Program) : Except Stri
 
 /-- A unit's programs run in order over one map state, as Core's
 `runUnit` does, reporting the same lines. -/
-def runUnit (pre : Prelude) (core : Core.CompUnit) (u : CompUnit) (packet : ByteArray)
+def runUnit (pre : Interface) (core : Core.CompUnit) (u : CompUnit) (packet : ByteArray)
     (ctx : List (String × Nat)) (only : Option String) (fuel : Nat) :
     Except String (List Core.Sem.Report × List String) := do
-  let env : Check.Env := { prelude := pre, license := core.license.map (·.2),
+  let env : Check.Env := { interface := pre, license := core.license.map (·.2),
                            types := core.types, consts := core.consts,
                            configs := core.configs, maps := core.maps, fns := core.fns,
                            contracts := core.contracts }

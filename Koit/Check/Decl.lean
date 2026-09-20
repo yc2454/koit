@@ -19,7 +19,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (KindRow tU32 tU64)
+open Koit.Interface (KindRow tU32 tU64)
 open Koit.Facts (Facts Fact Caps Scope)
 open Koit.Effects (Effs)
 
@@ -375,11 +375,11 @@ def checkClauses (env : Env) (row : KindRow)
           field `{f}`"
 
 def kindRow (env : Env) (span : Span) (kind : String) : M KindRow := do
-  match env.prelude.kind? kind with
+  match env.interface.kind? kind with
   | some row => return row
   | none =>
     err span s!"unknown program kind `{kind}`; the kinds are \
-      {", ".intercalate (env.prelude.kinds.map (·.name))}"
+      {", ".intercalate (env.interface.kinds.map (·.name))}"
 
 def checkContract (env : Env) (c : Contract) : M Unit := do
   let row ← kindRow env c.span c.kind
@@ -453,10 +453,10 @@ structure Checked where
 order of a unit's template, with functions after the call graph is
 known to be acyclic and callees before callers. With `smt`, each
 accepted entailment is traced as a solver query. -/
-def checkUnit (pre : Prelude) (u : CompUnit) (smt : Bool := false) :
+def checkUnit (pre : Interface) (u : CompUnit) (smt : Bool := false) :
     M Checked := do
   checkNames u
-  let env : Env := { prelude := pre, license := u.license.map (·.2),
+  let env : Env := { interface := pre, license := u.license.map (·.2),
                      types := u.types, consts := u.consts,
                      configs := u.configs, maps := u.maps, fns := u.fns,
                      contracts := u.contracts, smt }

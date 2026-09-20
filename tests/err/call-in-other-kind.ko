@@ -1,0 +1,6 @@
+// expect: is not available in a `syscall` program on kernel v6.8; it is available in `xdp`, `tc`
+// A call another kind has: the diagnostic names the kinds that do.
+program p : syscall {
+  let r = redirect(1)?
+  return 0
+}

@@ -13,7 +13,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (Home SlotRow maxSlots)
+open Koit.Interface (Home SlotRow maxSlots)
 
 
 /-- `{v: T | P}` weakened to `T`, at the head. -/
@@ -95,7 +95,7 @@ partial def Env.layout (env : Env) (t : Ty) (fuel : Nat := 64) :
   | .be _ w => return (w / 8, w / 8)
   | .bool _ => return (1, 1)
   | .slot s n =>
-    match env.prelude.slot? n with
+    match env.interface.slot? n with
     | some row => return (row.size, row.align)
     | none => err s s!"unknown slot type `{n}`"
   | .struct _ fields =>
@@ -159,7 +159,7 @@ partial def Env.slotsIn (env : Env) (t : Ty) (fuel : Nat := 64) :
 
 /-- What names a slot type, for a diagnostic about using one as data. -/
 def Env.slotUse (env : Env) (n : String) : String :=
-  match env.prelude.slot? n with
+  match env.interface.slot? n with
   | some row => row.namedBy
   | none => "its resource"
 
@@ -173,7 +173,7 @@ def Env.checkSlots (env : Env) (span : Span) (what : String) (t : Ty)
     err span s!"{what} has {names.length} slot fields; a value holds at \
       most {maxSlots}"
   for n in names.eraseDups do
-    let row ← match env.prelude.slot? n with
+    let row ← match env.interface.slot? n with
       | some row => pure row
       | none => err span s!"unknown slot type `{n}`"
     let k := names.count n

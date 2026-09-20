@@ -20,7 +20,7 @@ namespace Koit.Core.Sem
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env)
-open Koit.Prelude (KindRow CallRow ResourceRow AcqArg Sig)
+open Koit.Interface (KindRow CallRow ResourceRow AcqArg Sig)
 open Koit.Machine (Kernel toNatMod wrap zeros arith compare bswap hexOf)
 
 mutual
@@ -45,7 +45,7 @@ partial def evalExpr (K : Kernel) : Expr → M Val
         | some e => coerceTo d.ty (← evalExpr K e)
         | none => fail s!"`{x}` has no value for this build"
       else if let some n := st.kind.verdicts.lookup x then return Val.u32 n
-      else if let some d := env.prelude.const? x then evalConst K d
+      else if let some d := env.interface.const? x then evalConst K d
       else
         let _ := s
         fail s!"unknown name `{x}`"
@@ -218,7 +218,7 @@ partial def callAny (K : Kernel) (s : Span) (f : String) (args : List Arg) :
   let env ← getEnv
   if let some d := env.fn? f then
     return ← callFn K d args
-  match env.prelude.call? f with
+  match env.interface.call? f with
   | some row =>
     match row.sig with
     | .builtin => builtin K s f args
@@ -358,7 +358,7 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
     | _ => fail "a marked load reads a field"
   | .call _ f args => do
     let env ← getEnv
-    match env.prelude.call? f with
+    match env.interface.call? f with
     | some row =>
       match row.sig with
       | .builtin =>
@@ -392,7 +392,7 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
     | _ => fail "a coercion targets a refinement type"
   | .acquire s r f ty args => do
     let env ← getEnv
-    let some row := env.prelude.resource? r | fail s!"no row for `{r}`"
+    let some row := env.interface.resource? r | fail s!"no row for `{r}`"
     match row.arg with
     | .place _ =>
       let l ← match args with
@@ -681,7 +681,9 @@ def printMaps (env : Env) (maps : List (String × Machine.MapState)) : List Stri
         String.join (ms.ring.map fun r => s!"\n  0x{hexOf r.toList}")
     | .hash .. =>
       if ms.entries.isEmpty then s!"map {name}: empty" else
-      s!"map {name}:" ++ String.join (ms.entries.map fun (_, k, v) =>
+      -- by key, so that the kernel's report compares
+      let sorted := ms.entries.toArray.qsort (fun a b => a.2.1 < b.2.1) |>.toList
+      s!"map {name}:" ++ String.join (sorted.map fun (_, k, v) =>
         s!"\n  {printBytes env (ms.keyTy.getD ms.valueTy) k} => \
           {printBytes env ms.valueTy v.toList}")
     | _ =>
@@ -723,10 +725,10 @@ structure Report where
 /-- A unit's programs run in order over one map state, each from the
 same input packet and context, on the synthetic kernel; with `only`,
 the named program alone. The unit must have passed the checker. -/
-def runUnit (pre : Prelude) (u : CompUnit) (packet : ByteArray)
+def runUnit (pre : Interface) (u : CompUnit) (packet : ByteArray)
     (ctx : List (String × Nat)) (only : Option String) (fuel : Nat) :
     Except String (List Report × List String) := do
-  let env : Env := { prelude := pre, license := u.license.map (·.2),
+  let env : Env := { interface := pre, license := u.license.map (·.2),
                      types := u.types, consts := u.consts,
                      configs := u.configs, maps := u.maps, fns := u.fns,
                      contracts := u.contracts }

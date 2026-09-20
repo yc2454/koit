@@ -22,7 +22,7 @@ a map lookup or a kernel call is one definition at every level.
 namespace Koit.BPF
 
 open Koit.Machine (toNatMod wrap leBytes ofLe bswap Kernel HeldObj)
-open Koit.Prelude (CallRow ResourceRow KindRow)
+open Koit.Interface (CallRow ResourceRow KindRow)
 
 variable {ρ τ : Type} [DecidableEq ρ]
 
@@ -458,7 +458,7 @@ def arity (X : Env ρ τ) : Callee → StepM Nat
 /-- The kernel's argument layout of a callee, which the fixed
 convention reads: a builtin's own, a kernel row's in the kind, and
 for an inline row koit's arguments in order. -/
-def layout (X : Env ρ τ) : Callee → StepM (List Prelude.AbiArg)
+def layout (X : Env ρ τ) : Callee → StepM (List Interface.AbiArg)
   | .builtin b => pure b.abi
   | .kernel name =>
     match X.pre.call? name with
@@ -471,7 +471,7 @@ def layout (X : Env ρ τ) : Callee → StepM (List Prelude.AbiArg)
 /-- The koit arguments read back from the kernel's registers by the
 layout: the `i`-th argument from its position, the context checked
 where the layout says, the constants and sizes read but not used. -/
-def argsByLayout (X : Env ρ τ) (m : State ρ) (h : Callee) (abi : List Prelude.AbiArg)
+def argsByLayout (X : Env ρ τ) (m : State ρ) (h : Callee) (abi : List Interface.AbiArg)
     (regs : List ρ) : StepM (List Val) := do
   let mut found : List (Nat × Val) := []
   for (a, r) in abi.zip regs do

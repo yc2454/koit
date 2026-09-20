@@ -108,10 +108,13 @@ def word (code dst src : Nat) (off : Int) (imm : Int) : Except String Nat := do
   return code ||| (dst <<< 8) ||| (src <<< 12) ||| (toNatMod off 16 <<< 16) ||| (toNatMod imm 32 <<< 32)
 
 /-- The helper number or the kfunc name a callee encodes as. -/
-def calleeTarget (pre : Prelude) (kind : String) : Callee → Except String (Nat ⊕ String)
+def calleeTarget (pre : Interface) (kind : String) : Callee → Except String (Nat ⊕ String)
   | .builtin b =>
     match b, b.helper with
-    | _, some id => pure (.inl id)
+    | _, some name =>
+      match pre.helperId? name with
+      | some id => pure (.inl id)
+      | none => throw s!"{pre.kernel} has no helper bpf_{name}"
     | .enter r, none =>
       match pre.resource? r with
       | some { acquireKernel := some name, .. } => pure (.inr name)
@@ -132,7 +135,7 @@ def calleeTarget (pre : Prelude) (kind : String) : Callee → Except String (Nat
 
 /-- One instruction's words, with the relocation and the note it
 adds at the index `i`. -/
-def encodeInstr (pre : Prelude) (kind : String) (cpu : Cpu) (i : Nat) (ins : Instr Reg Int) :
+def encodeInstr (pre : Interface) (kind : String) (cpu : Cpu) (i : Nat) (ins : Instr Reg Int) :
     Except String (List Nat × List Reloc × List Note) := do
   let one (w : Except String Nat) : Except String (List Nat × List Reloc × List Note) := do
     return ([← w], [], [])
@@ -179,7 +182,7 @@ def encodeInstr (pre : Prelude) (kind : String) (cpu : Cpu) (i : Nat) (ins : Ins
   | .exit => one (word 0x95 0 0 0 0)
 
 /-- A program's object. -/
-def encode (pre : Prelude) (p : Bytecode) : Except String Object := do
+def encode (pre : Interface) (p : Bytecode) : Except String Object := do
   let some kind := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
   let mut words : Array Nat := #[]
   let mut relocs : List Reloc := []
@@ -235,7 +238,7 @@ def atomicOf (imm : Int) : Except String (Core.AtomicOp × Bool) :=
 
 /-- The program an object decodes to, its code from the words with
 the relocations and the notes. -/
-def decode (pre : Prelude) (o : Object) : Except String Bytecode := do
+def decode (pre : Interface) (o : Object) : Except String Bytecode := do
   let mut code : Array (Instr Reg Int) := #[]
   let mut i := 0
   while i < o.words.size do

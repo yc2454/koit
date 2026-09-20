@@ -1,7 +1,7 @@
 import Koit.BPF.Interp
 import Koit.BPF.Wf
 import Koit.Core.Interp
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the target machine over hand-written programs: the ALU's
@@ -21,23 +21,23 @@ private instance : BEq (Except String Nat) where
     | .error x, .error y => x == y
     | _, _ => false
 
-private def xdp : Prelude.KindRow := (Prelude.stage1.kind? "xdp").get!
+private def xdp : Interface.KindRow := (Interface.v6_8.kind? "xdp").get!
 
 /-- A one-slot array map of a 16-byte value, as the runs need one. -/
 private def counters : Machine.MapState :=
   let decl : Core.MapDecl :=
-    { span := Prelude.noSpan, name := "counters",
-      kind := .array (.lit Prelude.noSpan 1 "1") (.int Prelude.noSpan false 64) }
-  { decl, valueTy := .int Prelude.noSpan false 64, valueSize := 16, capacity := 1 }
+    { span := Interface.noSpan, name := "counters",
+      kind := .array (.lit Interface.noSpan 1 "1") (.int Interface.noSpan false 64) }
+  { decl, valueTy := .int Interface.noSpan false 64, valueSize := 16, capacity := 1 }
 
 /-- A hash map from a 4-byte key to an 8-byte value. -/
 private def table : Machine.MapState :=
   let decl : Core.MapDecl :=
-    { span := Prelude.noSpan, name := "table",
-      kind := .hash (.lit Prelude.noSpan 4 "4") (.int Prelude.noSpan false 32)
-        (.int Prelude.noSpan false 64) }
-  { decl, valueTy := .int Prelude.noSpan false 64, valueSize := 8,
-    keyTy := some (.int Prelude.noSpan false 32), keySize := 4, capacity := 4 }
+    { span := Interface.noSpan, name := "table",
+      kind := .hash (.lit Interface.noSpan 4 "4") (.int Interface.noSpan false 32)
+        (.int Interface.noSpan false 64) }
+  { decl, valueTy := .int Interface.noSpan false 64, valueSize := 8,
+    keyTy := some (.int Interface.noSpan false 32), keySize := 4, capacity := 4 }
 
 private def shared (packet : List UInt8 := []) : Machine.State :=
   { maps := [("counters", counters), ("table", table)],
@@ -49,11 +49,11 @@ private def sizeOf : Core.Ty → Option Nat
 
 private def birEnv (code : List (Instr VReg Label)) (labels : List (Nat × Nat) := [])
     (objects : List FrameObj := []) : Env VReg Label :=
-  { pre := Prelude.stage1, kind := xdp, conv := birConv, sizeOf,
+  { pre := Interface.v6_8, kind := xdp, conv := birConv, sizeOf,
     prog := { name := "t", kind := "xdp", code := code.toArray, labels, objects } }
 
 private def bcEnv (code : List (Instr Reg Int)) : Env Reg Int :=
-  { pre := Prelude.stage1, kind := xdp, conv := bytecodeConv, sizeOf,
+  { pre := Interface.v6_8, kind := xdp, conv := bytecodeConv, sizeOf,
     prog := { name := "t", kind := "xdp", code := code.toArray } }
 
 /-- The verdict of a BIR program, or the refusal. -/

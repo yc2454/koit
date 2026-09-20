@@ -27,7 +27,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (CallRow Home tU32 tU64)
+open Koit.Interface (CallRow Home tU32 tU64)
 open Koit.Facts (Origin Facts Scope Shape)
 
 /-- The type of a place, whether it may be written, and where it
@@ -102,7 +102,7 @@ inductive NameRef where
   | verdict (ty : Ty)
 
 /-- Name resolution in value position: locals, the unit's constants
-and configuration, the kind's verdicts, the prelude's constants. -/
+and configuration, the kind's verdicts, the interface's constants. -/
 def resolveName (env : Env) (span : Span) (n : String) : M NameRef := do
   if n == "pkt" then err span "`pkt` is read through views"
   if n == "ctx" then
@@ -111,13 +111,13 @@ def resolveName (env : Env) (span : Span) (n : String) : M NameRef := do
   if let some d := env.consts.find? (·.name == n) then return .const d
   if let some d := env.config? n then return .config d
   if let some t := env.verdict? n then return .verdict t
-  if let some d := env.prelude.const? n then return .const d
+  if let some d := env.interface.const? n then return .const d
   if (env.map? n).isSome then
     err span s!"`{n}` is a map: index it with `{n}[i]`, or look it up with \
       `{n}[k]?`"
   if (env.fn? n).isSome then err span s!"`{n}` is a function; call it"
   if (env.type? n).isSome then err span s!"`{n}` is a type, not a value"
-  if env.prelude.kinds.any (·.verdicts.any (·.1 == n)) then
+  if env.interface.kinds.any (·.verdicts.any (·.1 == n)) then
     match env.kind with
     | some row =>
       err span s!"`{n}` is not a verdict of {article row.name} `{row.name}` \
@@ -177,7 +177,7 @@ trivially, and a loop-carried one needs a `check` at the head of the
 body. -/
 def viewOffsetBound (env : Env) (span : Span) (off : Expr) (sz : Nat) :
     Option Expr :=
-  (env.prelude.region? "pkt").bind fun row => row.maxOffset.map fun mx =>
+  (env.interface.region? "pkt").bind fun row => row.maxOffset.map fun mx =>
     .cmp span .le (.arith span .add off (.lit span sz (toString sz)))
       (.lit span mx (toString mx))
 
@@ -191,6 +191,22 @@ def requirePkt (env : Env) (span : Span) : M Unit :=
   | none =>
     err span "`pkt` is available only in a program body of a packet kind \
      "
+
+/-- The diagnostic for a function name nothing declares: the row the
+target kernel lacks, with what it lacks; the kernel's own function
+koit has no row for yet, by its kernel name with or without `bpf_`;
+or simply unknown. -/
+def unknownFunction (env : Env) (span : Span) (f : String) : M α := do
+  if let some why := env.interface.missing? f then
+    err span s!"`{f}` is not on kernel {env.interface.kernel}: {why}"
+  let bare := if f.startsWith "bpf_" then (f.drop 4).toString else f
+  if (env.interface.side.helper? bare).isSome then
+    err span s!"`{f}` is the kernel's helper bpf_{bare}, which koit has no row for \
+      yet; the calls koit offers are listed by `koitc interface`"
+  if (env.interface.side.kfunc? f).isSome || (env.interface.side.kfunc? ("bpf_" ++ bare)).isSome then
+    err span s!"`{f}` is a kfunc of the kernel, which koit has no row for yet; \
+      the calls koit offers are listed by `koitc interface`"
+  err span s!"unknown function `{f}`"
 
 mutual
 
@@ -545,7 +561,7 @@ partial def placeTyUse (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
   placeDemands env K p
   return info
 
-/-- An argument against a parameter. A `const` parameter of a prelude
+/-- An argument against a parameter. A `const` parameter of a interface
 signature takes a constant expression; a refined parameter's
 predicate is a precondition, demanded of the argument. -/
 partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
@@ -618,15 +634,16 @@ partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
   | _, .map s m =>
     err s s!"`{fname}` takes `{pname}: {pty.print}`; `{m}` is a map"
 
-/-- A prelude call with a signature: availability, license, arity,
+/-- A interface call with a signature: availability, license, arity,
 arguments. -/
-partial def preludeFn (env : Env) (K : Ctx) (span : Span) (row : CallRow)
+partial def interfaceFn (env : Env) (K : Ctx) (span : Span) (row : CallRow)
     (args : List Arg) : M (Option Ty) := do
   if row.name.startsWith "pkt." then requirePkt env span
   if let some k := env.kind then
     if !row.kinds.isEmpty && !row.kinds.contains k.name then
       err span s!"`{row.name}` is not available in {article k.name} `{k.name}` \
-        program on kernel {env.prelude.kernel}"
+        program on kernel {env.interface.kernel}; it is available in \
+        {", ".intercalate (row.kinds.map fun k => s!"`{k}`")}"
   if row.gplOnly && !env.gplCompatible then
     err span s!"`{row.name}` is GPL-only; declare `license \"GPL\"` or another \
       GPL-compatible license"
@@ -724,7 +741,7 @@ partial def hashTypes (env : Env) (span : Span) (m : String) :
   | none => err span s!"unknown map `{m}`"
 
 /-- A call, in a plain position or, with `fallible`, in a `try`:
-a function of the unit, or a prelude call. Returns the result type. -/
+a function of the unit, or a interface call. Returns the result type. -/
 partial def synthCall (env : Env) (K : Ctx) (span : Span) (f : String)
     (args : List Arg) (fallible : Bool) : M (Option Ty) := do
   if let some d := env.fn? f then
@@ -744,7 +761,7 @@ partial def synthCall (env : Env) (K : Ctx) (span : Span) (f : String)
       err span s!"`{f}` returns an optional; call it with `?`, `else`, or \
         `if let`"
     | r => return r
-  if let some row := env.prelude.call? f then
+  if let some row := env.interface.call? f then
     if row.acquires.isSome then
       err span s!"`{f}` yields a resource; bind it with `hold x = {f}(...)` \
        "
@@ -754,14 +771,14 @@ partial def synthCall (env : Env) (K : Ctx) (span : Span) (f : String)
        "
     | none, true => err span s!"`{f}` cannot fail, so it takes no `?` or `else`"
     | _, _ => pure ()
-    return ← preludeFn env K span row args
+    return ← interfaceFn env K span row args
   if (env.local? f).isSome || (env.const? f).isSome ||
       (env.config? f).isSome then
     err span s!"`{f}` is not a function"
   if (env.map? f).isSome then
     err span s!"`{f}` is a map; its operations are `{f}[k]`, \
       `{f}.insert(k, v)`, and `{f}.delete(k)`"
-  err span s!"unknown function `{f}`"
+  unknownFunction env span f
 
 end
 
@@ -779,7 +796,7 @@ def checkPred (env : Env) (bound : List Local) (p : Expr) : M Unit := do
 /-- The kind a `try` on `f` raises. -/
 def fallibleKind (env : Env) : Fallible → Kind
   | .acquire _ r .. =>
-    match env.prelude.resource? r with
+    match env.interface.resource? r with
     | some row => row.fails.getD .helper
     | none => .helper
   | f => f.kind?.getD .helper
@@ -823,7 +840,7 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
   | .call s fn args => return { ty := ← synthCall env K s fn args true }
   | .acquire s r fn tyArg args =>
     -- the acquisition's argument form is a column of its row
-    let row ← match env.prelude.resource? r with
+    let row ← match env.interface.resource? r with
       | some row => pure row
       | none =>
         if r == .iter then
@@ -843,7 +860,7 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
         | _ =>
           err p.span s!"`{fn}` takes a `{slot}` place; `{p.print}` is a \
             `{info.ty.print}`"
-        let homes := ((env.prelude.slot? slot).map (·.homes)).getD []
+        let homes := ((env.interface.slot? slot).map (·.homes)).getD []
         let homesText := ", ".intercalate (homes.map Home.describe)
         match info.origin with
         | .map _ =>
@@ -856,11 +873,11 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
       unless args.isEmpty do err s s!"`{fn}` takes no arguments"
       return { ty := none }
     | .call =>
-      match env.prelude.call? fn with
+      match env.interface.call? fn with
       | some crow =>
         match crow.sig with
         | .fn .. =>
-          return { ty := ← preludeFn env K s crow args, origin := .kernel }
+          return { ty := ← interfaceFn env K s crow args, origin := .kernel }
         | .builtin =>
           -- `rb.reserve<T>()`, the one acquiring builtin, typed by rule
           unless fn == "reserve" do err s s!"`{fn}` has no typing rule"
@@ -879,7 +896,7 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
             | none => err ms s!"unknown map `{m}`"
           | _, _ =>
             err s "`rb.reserve<T>()` takes a ring buffer and a record type"
-      | none => err s s!"unknown function `{fn}`"
+      | none => unknownFunction env s fn
   | .callopt s fn args =>
     match env.fn? fn with
     | some d =>

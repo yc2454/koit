@@ -25,8 +25,8 @@ structure Compiled where
 
 /-- The checker's environment of a unit, for the layouts the machine
 and the allocation ask. -/
-def envOf (pre : Prelude) (core : Core.CompUnit) : Check.Env :=
-  { prelude := pre, license := core.license.map (·.2), types := core.types,
+def envOf (pre : Interface) (core : Core.CompUnit) : Check.Env :=
+  { interface := pre, license := core.license.map (·.2), types := core.types,
     consts := core.consts, configs := core.configs, maps := core.maps, fns := core.fns,
     contracts := core.contracts }
 
@@ -36,7 +36,7 @@ def sizeOfIn (env : Check.Env) : Core.Ty → Option Nat := fun t =>
   | .error _ => none
 
 /-- The pipeline on a checked unit. -/
-def compile (pre : Prelude) (cpu : Cpu) (core : Core.CompUnit) (checked : Check.Checked) :
+def compile (pre : Interface) (cpu : Cpu) (core : Core.CompUnit) (checked : Check.Checked) :
     Except String Compiled := do
   let lir ← lower pre (fold pre core checked)
   let lir := inline lir
@@ -48,7 +48,7 @@ def compile (pre : Prelude) (cpu : Cpu) (core : Core.CompUnit) (checked : Check.
   return { lir, birs, allocated, objects }
 
 /-- The machine's environment for a compiled program's bytecode. -/
-def Compiled.envFor (C : Compiled) (pre : Prelude) (env : Check.Env) (name : String) :
+def Compiled.envFor (C : Compiled) (pre : Interface) (env : Check.Env) (name : String) :
     Option (BPF.Env Reg Int) :=
   match C.allocated.find? (·.prog.name == name) with
   | some a => (bytecodeEnv pre env a.prog).toOption

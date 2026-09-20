@@ -1,7 +1,7 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
 import Koit.Compile.Shape
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the shape checker: the compiled corpus programs pass L1 to
@@ -18,13 +18,13 @@ private def shapeOf (s : String) : Except String (List ShapeReport) := do
   let u ← match parse s with
     | .ok u => pure u
     | .error e => throw s!"parse: {e.msg}"
-  let core := desugar Prelude.stage1 u
-  let checked ← match checkUnit Prelude.stage1 core with
+  let core := desugar Interface.v6_8 u
+  let checked ← match checkUnit Interface.v6_8 core with
     | .error d => throw s!"check: {d}"
     | .ok c => pure c
-  let openLir ← Compile.lower Prelude.stage1 (Compile.fold Prelude.stage1 core checked)
-  let C ← Compile.compile Prelude.stage1 .v4 core checked
-  return shapeUnit Prelude.stage1 core openLir C
+  let openLir ← Compile.lower Interface.v6_8 (Compile.fold Interface.v6_8 core checked)
+  let C ← Compile.compile Interface.v6_8 .v4 core checked
+  return shapeUnit Interface.v6_8 core openLir C
 
 private def clean (s : String) : Bool :=
   match shapeOf s with
@@ -86,10 +86,10 @@ private def bir (code : List (Instr VReg Label)) (labels : List (Nat × Nat) := 
     regs := [(.v 0, .location), (.v 1, .location), (.v 2, .location), (.v 3, .scalar),
              (.v 4, .scalar)] }
 
-private def xdp : Prelude.KindRow := (Prelude.stage1.kind? "xdp").get!
+private def xdp : Interface.KindRow := (Interface.v6_8.kind? "xdp").get!
 
 private def l3 (B : BIR) : List String :=
-  (L3.run { pre := Prelude.stage1, kind := xdp, B }).1
+  (L3.run { pre := Interface.v6_8, kind := xdp, B }).1
 
 private def tail : List (Instr VReg Label) := [.mov .w64 .ret (.imm 2), .exit]
 

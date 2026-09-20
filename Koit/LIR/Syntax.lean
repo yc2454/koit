@@ -1,5 +1,5 @@
 import Koit.Core.Print
-import Koit.Prelude.Tables
+import Koit.Interface.Rows
 
 /-!
 LIR, the explicit intermediate language: Core after the checker, with

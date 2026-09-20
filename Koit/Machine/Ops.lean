@@ -21,7 +21,7 @@ of the lowering make unreachable.
 namespace Koit.Machine
 
 open Koit.Core (Resource Effect)
-open Koit.Prelude (KindRow CallRow ResourceRow AcqArg)
+open Koit.Interface (KindRow CallRow ResourceRow AcqArg)
 
 /-- An operation on the shared state: a result and the new state, or
 an error. -/
@@ -34,8 +34,8 @@ def Op.exec (f : Op α) (st : State) : Except String (α × State) :=
 
 def fail (msg : String) : Op α := throw msg
 
-/-- The row of a resource in the prelude. -/
-def resourceRow (pre : Prelude) (r : Resource) : Op ResourceRow :=
+/-- The row of a resource in the interface. -/
+def resourceRow (pre : Interface) (r : Resource) : Op ResourceRow :=
   match pre.resource? r with
   | some row => pure row
   | none => fail s!"no row for `{r}`"
@@ -148,7 +148,7 @@ def print (fmt : String) (args : List Val) : Op Unit :=
 
 /-- The resource rows a kernel function releases: those whose exit
 column names its kernel function. -/
-def releasesOf (pre : Prelude) (row : CallRow) : List ResourceRow :=
+def releasesOf (pre : Interface) (row : CallRow) : List ResourceRow :=
   pre.resources.filter fun r =>
     r.normalExit == row.kernel || r.abnormalExit == row.kernel
 
@@ -164,7 +164,7 @@ the object an acquiring row hands out or popped for the object a
 releasing row takes. The arguments arrive as the kernel sees them,
 fitted by the caller to the row's parameter kinds. An inline row is
 computed here instead, with no call and no event. -/
-def call (pre : Prelude) (K : Kernel) (kind : KindRow) (row : CallRow) (vs : List Val) :
+def call (pre : Interface) (K : Kernel) (kind : KindRow) (row : CallRow) (vs : List Val) :
     Op CallOut := do
   let st ← get
   -- an inline row is arithmetic, not a call: no held row forbids it
@@ -206,7 +206,7 @@ inductive Release where
   deriving Inhabited
 
 /-- The release of a row, normally or abnormally. -/
-def releaseOf (pre : Prelude) (row : ResourceRow) (normal : Bool) : Except String Release :=
+def releaseOf (pre : Interface) (row : ResourceRow) (normal : Bool) : Except String Release :=
   if row.arg == .scope then .ok .leave
   else if row.res == ⟨"spinlock"⟩ then .ok .unlock
   else if row.res == ⟨"ringbuf"⟩ then .ok (if normal then .submit else .discard)
@@ -218,7 +218,7 @@ def releaseOf (pre : Prelude) (row : ResourceRow) (normal : Bool) : Except Strin
 
 /-- The innermost held entry released, normally or abnormally, as its
 row says. -/
-def release (pre : Prelude) (K : Kernel) (kind : KindRow) (normal : Bool) : Op Unit := do
+def release (pre : Interface) (K : Kernel) (kind : KindRow) (normal : Bool) : Op Unit := do
   let st ← get
   let h :: _ := st.held | fail "a release with nothing held"
   match releaseOf pre h.row normal with

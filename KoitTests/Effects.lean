@@ -1,7 +1,7 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
 import Koit.Check.Decl
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the effect sets the checker computes and on the preserved
@@ -15,7 +15,7 @@ open Koit Koit.Syntax Koit.Core Koit.Check Koit.Effects
 private def chk (s : String) : Except Diag Checked :=
   match parse s with
   | .error e => .error { span := e.span, msg := s!"parse: {e.msg}" }
-  | .ok u => checkUnit Prelude.stage1 (desugar Prelude.stage1 u)
+  | .ok u => checkUnit Interface.v6_8 (desugar Interface.v6_8 u)
 
 private def ok (s : String) : Bool := (chk s).toOption.isSome
 
@@ -60,7 +60,7 @@ private def V : String := "  let eth = pkt.view<EthHdr>(0)?"
 #guard fnEffs (xdp [] []) "both" == some "{write(through c), write(h[12 .. 14))}"
 
 -- a program's effects: the marker's `fail`, the writes with the
--- packet range from the view's offset, the calls of the prelude
+-- packet range from the view's offset, the calls of the interface
 #guard progEffs (xdp [] [V, "  let c = counters[0]", "  bump(c)", "  stamp(eth)"])
   "p" == some "{write(counters), write(pkt[12 .. 14)), fail}"
 #guard progEffs (xdp [] ["  let c = counters[0]", "  both(c, eth)"]) "p" == none

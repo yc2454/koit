@@ -28,7 +28,7 @@ def Builtin.result : Builtin → Option Ty
 when the row yields an owned or referenced place, the 64-bit signed
 return otherwise, which carries the failure signal of a scalar-result
 row. -/
-def rowResult (row : Prelude.CallRow) : Ty :=
+def rowResult (row : Interface.CallRow) : Ty :=
   match row.sig with
   | .fn _ (some (.own ..)) | .fn _ (some (.ref ..)) => .ptr
   | _ => .i64
@@ -36,8 +36,8 @@ def rowResult (row : Prelude.CallRow) : Ty :=
 /-- What the well-formedness check knows about the code around a
 statement. -/
 structure WfCtx where
-  pre     : Prelude
-  kind    : Option Prelude.KindRow
+  pre     : Interface
+  kind    : Option Interface.KindRow
   fns     : List Fn
   /-- The result type of the function, or the verdict type of the
   program or handler. -/
@@ -296,7 +296,7 @@ def declareOnce (what : String) (ss : List Stmt) (params : List String) : W Unit
 
 /-- A unit is well-formed: every function against its signature,
 every program body and handler as section 4 of the design says. -/
-def wf (pre : Prelude) (u : CompUnit) : W Unit := do
+def wf (pre : Interface) (u : CompUnit) : W Unit := do
   for f in u.fns do
     let K : WfCtx := { pre, kind := none, fns := u.fns, ret := f.ret, opt := f.opt,
                        mayRaise := f.fails, inHandler := false }

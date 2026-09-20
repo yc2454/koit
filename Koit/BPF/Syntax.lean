@@ -1,4 +1,4 @@
-import Koit.Prelude.Tables
+import Koit.Interface.Rows
 import Koit.Core.Print
 
 /-!
@@ -241,7 +241,7 @@ def Builtin.arity : Builtin → Nat
 convention and the encoder: the map operations take the map first
 and a flags word last, `reserve` its size, `printk` the format's
 location and size before its arguments. -/
-def Builtin.abi : Builtin → List Prelude.AbiArg
+def Builtin.abi : Builtin → List Interface.AbiArg
   | .lookup => [.arg 0, .arg 1]
   | .update => [.arg 0, .arg 1, .arg 2, .const 0]
   | .delete => [.arg 0, .arg 1]
@@ -251,18 +251,19 @@ def Builtin.abi : Builtin → List Prelude.AbiArg
   | .enter _ | .leave _ => []
   | .printk _ n _ size => [.fmt, .const size] ++ (List.range n).map .arg
 
-/-- The kernel helper a builtin calls, by number; the scope rows are
-kfuncs, encoded by name. -/
-def Builtin.helper : Builtin → Option Nat
-  | .lookup => some 1
-  | .update => some 2
-  | .delete => some 3
-  | .reserve _ => some 131
-  | .submit => some 132
-  | .discard => some 133
-  | .lock => some 93
-  | .unlock => some 94
-  | .printk .. => some 6
+/-- The kernel helper a builtin calls, by its name without `bpf_`;
+the number is the kernel side of the interface's. The scope rows are
+kfuncs, encoded by the name their resource row gives. -/
+def Builtin.helper : Builtin → Option String
+  | .lookup => some "map_lookup_elem"
+  | .update => some "map_update_elem"
+  | .delete => some "map_delete_elem"
+  | .reserve _ => some "ringbuf_reserve"
+  | .submit => some "ringbuf_submit"
+  | .discard => some "ringbuf_discard"
+  | .lock => some "spin_lock"
+  | .unlock => some "spin_unlock"
+  | .printk .. => some "trace_printk"
   | .enter _ | .leave _ => none
 
 def Builtin.print : Builtin → String

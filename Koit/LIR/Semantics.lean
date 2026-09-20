@@ -28,7 +28,7 @@ open Koit (Span)
 open Koit.Core (ArithOp CmpOp AtomicOp Kind Resource)
 open Koit.Core.Sem (Val Loc Region Abort)
 open Koit.Machine (Kernel toNatMod wrap zeros leBytes ofLe bswap HeldObj)
-open Koit.Prelude (CallRow ResourceRow)
+open Koit.Interface (CallRow ResourceRow)
 
 /-- How a statement ends. -/
 inductive Outcome where
@@ -58,7 +58,7 @@ def pattern (w : Nat) : Val → Option Nat
 def ofPattern (s : Bool) (w : Nat) (n : Nat) : Int := wrap s w n
 
 /-- The type a type-agnostic location carries; LIR never reads it. -/
-def anyTy : Core.Ty := .int Koit.Prelude.noSpan false 8
+def anyTy : Core.Ty := .int Koit.Interface.noSpan false 8
 
 /-- A value at a Core type of the kind, for the verdict and the
 scalar parameters of kernel functions. -/
@@ -178,7 +178,7 @@ def sizeOf (t : Core.Ty) : M Nat := do
 
 /-- The row of a resource, by its name. -/
 def resourceRow (r : Resource) : M ResourceRow := do
-  match (← get).env.prelude.resource? r with
+  match (← get).env.interface.resource? r with
   | some row => pure row
   | none => fail s!"no row for `{r}`"
 
@@ -282,13 +282,13 @@ referenced result, the 64-bit signed return otherwise, which carries
 the failure signal of a scalar-result row. -/
 def execKernel (K : Kernel) (h : String) (args : List Val) : M Val := do
   let st ← get
-  let some row := st.env.prelude.call? h | fail s!"unknown kernel function `{h}`"
+  let some row := st.env.interface.call? h | fail s!"unknown kernel function `{h}`"
   let params ← match row.sig with
     | .fn params _ => pure params
     | .builtin => fail s!"`{h}` is a builtin"
   unless args.length == params.length do fail s!"`{h}` takes {params.length} arguments"
   let vs ← fitArgs params args
-  match ← op (Machine.call st.env.prelude K st.kind row vs) with
+  match ← op (Machine.call st.env.interface K st.kind row vs) with
   | .ok v =>
     match v with
     | some (.scalar x) => return Val.mkInt true 64 x

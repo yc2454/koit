@@ -37,7 +37,22 @@
 # llvm-mc is present, the words must disassemble to the bytecode
 # printed in LLVM's syntax, and that text must assemble back to the
 # words, under cpu v3 and v4. Both tools are optional: absent, the
-# stage notes it and checks the rest.
+# stage notes it and checks the rest. Every ok and run unit must also
+# emit its object as JSON; when python3 is present, tools/elf.py must
+# write the object file from it, llvm-readelf, when present, must
+# read that back, and the reader under tools/ must pass its self-test
+# on the picker's document, which parses the object file too.
+#
+# KOIT_STAGE=kernel runs each run unit on a real kernel, when
+# KOIT_KERNEL_HOST names an ssh host (user@node) with python3 and
+# root through sudo: the object is emitted here, copied there with
+# tools/, loaded and run by tools/load.py, and its report compared
+# with the unit's expected block and with `koitc run --bytecode`
+# minus printk lines. A unit whose header has `// kernel: verdict
+# only` compares verdicts alone; one with `// kernel: rejected TEXT`
+# passes when the kernel refuses it with TEXT in the verifier's log.
+# Without a host the stage is skipped, and it never builds Lean on
+# the node. KOIT_KERNEL_DIR names the directory used there.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
@@ -46,11 +61,12 @@ KOITC=.lake/build/bin/koitc
 STAGE=${KOIT_STAGE:-parse}
 CLANG=${KOIT_CLANG:-/opt/homebrew/opt/llvm/bin/clang}
 LLVM_MC=${KOIT_LLVM_MC:-/opt/homebrew/opt/llvm/bin/llvm-mc}
+LLVM_READELF=${KOIT_LLVM_READELF:-/opt/homebrew/opt/llvm/bin/llvm-readelf}
 # the stages in order, so that a stage includes the ones before it
 rank() {
   case "$1" in
     lex) echo 0 ;; parse) echo 1 ;; check) echo 2 ;; run) echo 3 ;;
-    lower) echo 4 ;; shape) echo 5 ;; emit) echo 6 ;; *) echo 1 ;;
+    lower) echo 4 ;; shape) echo 5 ;; emit) echo 6 ;; kernel) echo 7 ;; *) echo 1 ;;
   esac
 }
 RANK=$(rank "$STAGE")
@@ -251,6 +267,24 @@ if at_least emit; then
     if ! "$KOITC" emit --bytecode "$f" >"$TMP/words" 2>"$TMP/out"; then
       failed emit-bytecode "$f"; continue
     fi
+    if ! "$KOITC" emit --json "$f" >"$TMP/unit.json" 2>"$TMP/out"; then
+      failed emit-json "$f"; continue
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+      # the object file libbpf loads, from the document; readelf,
+      # when present, must read it back
+      if grep -q '"kind": "kfunc"' "$TMP/unit.json"; then
+        :
+      elif ! python3 tools/elf.py "$TMP/unit.json" -o "$TMP/unit.elf" >"$TMP/out" 2>&1; then
+        failed elf "$f"; continue
+      elif [ -x "$LLVM_READELF" ] && ! "$LLVM_READELF" -S -s -r "$TMP/unit.elf" >"$TMP/out" 2>&1; then
+        failed readelf "$f"; continue
+      fi
+      if [ "$f" = tests/run/picker-vlan.ko ] &&
+          ! python3 tools/test_koitobj.py "$TMP/unit.json" >"$TMP/out" 2>&1; then
+        failed koitobj "$f"; continue
+      fi
+    fi
     if [ -n "$HAVE_MC" ]; then
       ok=1
       for cpu in v3 v4; do
@@ -287,6 +321,65 @@ if at_least emit; then
     fi
     pass=$((pass + 1))
   done
+fi
+
+# the kernel: each run unit loaded and run on the host, its report
+# against the expected block and against the model
+if at_least kernel; then
+  HOST=${KOIT_KERNEL_HOST:-}
+  RDIR=${KOIT_KERNEL_DIR:-koit-kernel}
+  if [ -z "$HOST" ]; then
+    echo "note: KOIT_KERNEL_HOST is not set; nothing is run on a kernel"
+  else
+    ssh "$HOST" "mkdir -p $RDIR/logs" && scp -q tools/koitobj.py tools/load.py "$HOST:$RDIR/" ||
+      { echo "cannot reach $HOST"; fail=$((fail + 1)); }
+    for f in tests/run/*.ko; do
+      [ -e "$f" ] || continue
+      opts=$(sed -n '1s|^// run: ||p' "$f")
+      mark=$(sed -n 's|^// kernel: ||p' "$f" | head -1)
+      sed -n '2,/^$/{s|^// ||p;}' "$f" | grep -v '^kernel: ' >"$TMP/want"
+      if ! "$KOITC" emit --json "$f" >"$TMP/unit.json" 2>"$TMP/out"; then
+        failed emit-json "$f"; continue
+      fi
+      # shellcheck disable=SC2086
+      "$KOITC" run --bytecode $opts "$f" 2>&1 | grep -v ': printk: ' >"$TMP/model"
+      scp -q "$TMP/unit.json" "$HOST:$RDIR/unit.json" || { failed copy "$f"; continue; }
+      # shellcheck disable=SC2086
+      ssh "$HOST" "cd $RDIR && sudo python3 load.py unit.json $opts --log-dir logs" >"$TMP/out" 2>"$TMP/err"
+      status=$?
+      case "$mark" in
+        rejected*)
+          text=${mark#rejected }
+          if [ "$status" -eq 0 ]; then
+            echo "    the kernel accepted a unit marked rejected"; failed kernel "$f"
+          elif ! grep -qF -- "$text" "$TMP/err"; then
+            cat "$TMP/err" >>"$TMP/out"; failed kernel-cause "$f"
+          else
+            pass=$((pass + 1))
+          fi
+          continue ;;
+      esac
+      if [ "$status" -ne 0 ]; then
+        cat "$TMP/err" >>"$TMP/out"; failed kernel "$f"; continue
+      fi
+      if [ "$mark" = "verdict only" ]; then
+        grep -v '^map ' "$TMP/out" | grep -v '^  ' >"$TMP/got"
+        grep -v '^map ' "$TMP/want" | grep -v '^  ' >"$TMP/w2"
+        grep -v '^map ' "$TMP/model" | grep -v '^  ' >"$TMP/m2"
+      else
+        cp "$TMP/out" "$TMP/got"; cp "$TMP/want" "$TMP/w2"; cp "$TMP/model" "$TMP/m2"
+      fi
+      if ! cmp -s "$TMP/got" "$TMP/w2"; then
+        echo "    expected:"; sed 's/^/      /' "$TMP/w2"; cp "$TMP/got" "$TMP/out"
+        failed kernel-output "$f"
+      elif ! cmp -s "$TMP/got" "$TMP/m2"; then
+        echo "    model:"; sed 's/^/      /' "$TMP/m2"; cp "$TMP/got" "$TMP/out"
+        failed kernel-differs "$f"
+      else
+        pass=$((pass + 1))
+      fi
+    done
+  fi
 fi
 
 echo "$pass passed, $fail failed, $skipped skipped"

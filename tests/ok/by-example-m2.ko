@@ -1,5 +1,5 @@
 // From spec/mechanisms-by-example.md, M2: parsing headers.
-// Declarations marked "not in M2" come from 23.2 and the prelude.
+// Declarations marked "not in M2" come from 23.2 and the interface.
 
 // not in M2
 const ETH_P_IP = hton(0x0800)

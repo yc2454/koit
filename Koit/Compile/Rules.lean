@@ -57,13 +57,13 @@ def R_B (Γ : List Local) (names : List (String × String)) (stC : State)
 /-! ### Theorem B -/
 
 /-- The LIR program a Core program lowers to, in the lowered unit. -/
-def lowered (pre : Prelude) (u : CompUnit) (checked : Checked) (p : Program) :
+def lowered (pre : Interface) (u : CompUnit) (checked : Checked) (p : Program) :
     Option LIR.Program :=
   match lower pre (fold pre u checked) with
   | .ok U => U.programs.find? (·.name == p.name)
   | .error _ => none
 
-def loweredFns (pre : Prelude) (u : CompUnit) (checked : Checked) : List LIR.Fn :=
+def loweredFns (pre : Interface) (u : CompUnit) (checked : Checked) : List LIR.Fn :=
   match lower pre (fold pre u checked) with
   | .ok U => U.fns
   | .error _ => []
@@ -73,7 +73,7 @@ a unit the checker accepts, every halting run of a program is
 matched by a run of its lowering to the same verdict, with the
 shared state agreeing at the halt. Every test Core has, the lowering
 emits; the one branch it adds is dead under the Core derivation. -/
-theorem lower_correct (pre : Prelude) (u : CompUnit) (checked : Checked) (K : Kernel) :
+theorem lower_correct (pre : Interface) (u : CompUnit) (checked : Checked) (K : Kernel) :
     KernelOk K → Check.checkUnit pre u = .ok checked →
     ∀ p ∈ u.programs, ∀ P, lowered pre u checked p = some P →
     ∀ st v st', Sem.Initial pre u p st →
@@ -130,7 +130,7 @@ every other outcome the abnormal release has run once, and on a
 path through `move x` neither has, so that the LIR held stack after
 the statement is Core's. Stated as the `hold` case of the
 statement-level form of Theorem B on the held stacks alone. -/
-theorem hold_releases (pre : Prelude) (u : CompUnit) (checked : Checked) (K : Kernel)
+theorem hold_releases (pre : Interface) (u : CompUnit) (checked : Checked) (K : Kernel)
     (c : LCtx) (sp : Koit.Span) (r : Resource) (x : Option String) (acq : Fallible)
     (body : List Stmt) (els : Option (List Stmt)) (ss : List LIR.Stmt) (c' : LCtx)
     (st st' : State) (stL : LIR.Sem.State) (o : Sem.Outcome) (oL : LIR.Sem.Outcome)
@@ -149,7 +149,7 @@ theorem hold_releases (pre : Prelude) (u : CompUnit) (checked : Checked) (K : Ke
 /-- Theorem I, `inline_correct`: a run of a program of a well-formed
 LIR unit is a run of its inlined form to the same verdict, with the
 shared state agreeing; the locals of the inlined copies are fresh. -/
-theorem inline_correct (pre : Prelude) (U : LIR.CompUnit) (K : Kernel) :
+theorem inline_correct (pre : Interface) (U : LIR.CompUnit) (K : Kernel) :
     LIR.wf pre U = .ok () →
     ∀ P ∈ U.programs, ∀ P', (inline U).programs.find? (·.name == P.name) = some P' →
     ∀ st v st', LIR.Sem.ExecProgram K U.fns st P (.halt v) st' →
@@ -177,7 +177,7 @@ the loaded state to a halted one with the same verdict, the shared
 state agreeing. `R_C`, the relation the induction carries, holds the
 locals in scope in their registers in normal form and LIR's stack
 regions in the frame at the objects' bases. -/
-theorem flatten_correct (pre : Prelude) (cpu : BPF.Cpu) (P : LIR.Program) (B : BPF.BIR)
+theorem flatten_correct (pre : Interface) (cpu : BPF.Cpu) (P : LIR.Program) (B : BPF.BIR)
     (K : Kernel) :
     flattenProgram pre cpu P = .ok B →
     ∀ st v st', LIR.Sem.ExecProgram K [] st P (.halt v) st' →
@@ -230,7 +230,7 @@ theorem alloc_correct (X_B : BPF.Env BPF.VReg BPF.Label) (X : BPF.Env BPF.Reg In
 
 /-- The one property of the encoder: its words, with the relocations
 and the notes, decode to the program they came from. -/
-theorem encode_decode (pre : Prelude) (p : BPF.Bytecode) (o : Object) :
+theorem encode_decode (pre : Interface) (p : BPF.Bytecode) (o : Object) :
     encode pre p = .ok o → decode pre o = .ok p := by
   sorry
 
@@ -246,7 +246,7 @@ which T1 gives, is matched by the machine's run of its bytecode from
 the loaded state to a halted state with the source's verdict, the
 shared state agreeing. The existence of the Core derivation is T1's;
 this theorem adds the run, by the composition of the passes. -/
-theorem compile_correct (pre : Prelude) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
+theorem compile_correct (pre : Interface) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
     (C : Compiled) (K : Kernel) :
     KernelOk K → Check.checkUnit pre u = .ok checked → compile pre cpu u checked = .ok C →
     ∀ p ∈ u.programs, ∀ st, Sem.Initial pre u p st →
@@ -260,7 +260,7 @@ theorem compile_correct (pre : Prelude) (cpu : BPF.Cpu) (u : CompUnit) (checked 
 to say it never trips a check of the verifier's list; from
 `compile_correct`, since the step is a function and a halted state
 has no successor. -/
-theorem bytecode_safe (pre : Prelude) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
+theorem bytecode_safe (pre : Interface) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
     (C : Compiled) (K : Kernel) :
     KernelOk K → Check.checkUnit pre u = .ok checked → compile pre cpu u checked = .ok C →
     ∀ p ∈ u.programs, ∀ st, Sem.Initial pre u p st →
@@ -271,7 +271,7 @@ theorem bytecode_safe (pre : Prelude) (cpu : BPF.Cpu) (u : CompUnit) (checked : 
 /-- `bytecode_unique`: the run of `compile_correct` is the only run,
 and every halted state the loaded state reaches has the source's
 verdict, maps, packet, and trace. -/
-theorem bytecode_unique (pre : Prelude) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
+theorem bytecode_unique (pre : Interface) (cpu : BPF.Cpu) (u : CompUnit) (checked : Checked)
     (C : Compiled) (K : Kernel) :
     KernelOk K → Check.checkUnit pre u = .ok checked → compile pre cpu u checked = .ok C →
     ∀ p ∈ u.programs, ∀ st, Sem.Initial pre u p st →

@@ -1,0 +1,24 @@
+// run: --packet aaaaaaaaaaaabbbbbbbbbbbb08004500001400000000401100000a0000010a000002
+// tag: OK
+// map stats:
+//   [0] = { ip: 1, other: 0 }
+
+// A tc program, so that the kernel stage has one of each kind: the
+// ethertype read through a view, a counter per outcome, and the
+// writable context field set on the IPv4 path.
+type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
+type Stats = { ip: u32, other: u32 }
+map stats : array[1] of Stats
+
+program tag : tc fail pass
+  on short_packet { pass }
+{
+  let eth = pkt.view<EthHdr>(0)?
+  if eth.proto == ETH_P_IP {
+    stats[0].ip = stats[0].ip + 1
+    ctx.mark = 1
+  } else {
+    stats[0].other = stats[0].other + 1
+  }
+  pass
+}

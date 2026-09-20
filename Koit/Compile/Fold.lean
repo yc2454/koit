@@ -33,7 +33,7 @@ structure Folded where
 
 /-- The value of a constant expression, through Core's own evaluator
 on an empty frame; `none` when the expression is not constant. -/
-def constVal (env : Env) (row : Prelude.KindRow) (e : Expr) : Option Sem.Val :=
+def constVal (env : Env) (row : Interface.KindRow) (e : Expr) : Option Sem.Val :=
   if env.isConstExpr e then
     let st := Sem.initState env row ByteArray.empty [] [] 64
     match (Sem.evalExpr Machine.synthetic e).exec st with
@@ -55,7 +55,7 @@ def litOf (s : Span) (v : Sem.Val) : Option Expr :=
 
 mutual
 
-partial def foldExpr (env : Env) (row : Prelude.KindRow) (e : Expr) : Expr :=
+partial def foldExpr (env : Env) (row : Interface.KindRow) (e : Expr) : Expr :=
   match e with
   | .lit .. | .char .. | .bool .. | .str .. | .errno .. | .invalid .. => e
   | .var s x =>
@@ -85,21 +85,21 @@ partial def foldExpr (env : Env) (row : Prelude.KindRow) (e : Expr) : Expr :=
   | .move .. => e
   | .call s f args => .call s f (args.map (foldArg env row))
 
-partial def foldPlace (env : Env) (row : Prelude.KindRow) : Place → Place
+partial def foldPlace (env : Env) (row : Interface.KindRow) : Place → Place
   | .field s p f => .field s (foldPlace env row p) f
   | .index s p i => .index s (foldPlace env row p) (foldExpr env row i)
   | .slot s m i => .slot s m (foldExpr env row i)
   | .deref s e => .deref s (foldExpr env row e)
   | p => p
 
-partial def foldArg (env : Env) (row : Prelude.KindRow) : Arg → Arg
+partial def foldArg (env : Env) (row : Interface.KindRow) : Arg → Arg
   | .val e => .val (foldExpr env row e)
   | .place p => .place (foldPlace env row p)
   | a => a
 
 end
 
-def foldFallible (env : Env) (row : Prelude.KindRow) : Fallible → Fallible
+def foldFallible (env : Env) (row : Interface.KindRow) : Fallible → Fallible
   | .view s off t => .view s (foldExpr env row off) t
   | .lookup s m k => .lookup s m (foldPlace env row k)
   | .loadw s p => .loadw s (foldPlace env row p)
@@ -108,14 +108,14 @@ def foldFallible (env : Env) (row : Prelude.KindRow) : Fallible → Fallible
   | .callopt s f args => .callopt s f (args.map (foldArg env row))
   | .coerce s e t => .coerce s (foldExpr env row e) t
 
-def foldInit (env : Env) (row : Prelude.KindRow) : Init → Init
+def foldInit (env : Env) (row : Interface.KindRow) : Init → Init
   | .expr e => .expr (foldExpr env row e)
   | .place p => .place (foldPlace env row p)
   | .lit s fs => .lit s (fs.map fun f => { f with value := foldExpr env row f.value })
 
 /-- Whether a condition is a constant, and which branch it selects.
 The names a local shadows are not constants. -/
-def decided (env : Env) (row : Prelude.KindRow) (c : Expr) : Option Bool :=
+def decided (env : Env) (row : Interface.KindRow) (c : Expr) : Option Bool :=
   match constVal env row c with
   | some v => some v.truthy
   | none => none
@@ -125,13 +125,13 @@ mutual
 /-- A block, with each `if` on a constant replaced by its live
 branch. Locals shadow constants, so the environment tracks the
 names bound so far. -/
-partial def foldStmts (env : Env) (row : Prelude.KindRow) : List Stmt → List Stmt
+partial def foldStmts (env : Env) (row : Interface.KindRow) : List Stmt → List Stmt
   | [] => []
   | s :: rest =>
     let (ss, env') := foldStmt env row s
     ss ++ foldStmts env' row rest
 
-partial def foldStmt (env : Env) (row : Prelude.KindRow) (s : Stmt) :
+partial def foldStmt (env : Env) (row : Interface.KindRow) (s : Stmt) :
     List Stmt × Env :=
   let bindName (x : String) : Env :=
     env.bind { name := x, ty := .bool s.span, mutable := false, origin := .stack }
@@ -167,18 +167,18 @@ end
 
 /-- A function's body folded; a function has no kind, so the verdict
 names do not occur in it and any row serves. -/
-def foldFn (env : Env) (row : Prelude.KindRow) (f : Fn) : Fn :=
+def foldFn (env : Env) (row : Interface.KindRow) (f : Fn) : Fn :=
   let env := f.params.foldl (fun env p =>
     env.bind { name := p.name, ty := p.ty, mutable := false, origin := .stack }) env.top
   { f with body := foldStmts env row f.body }
 
 def foldProgram (env : Env) (p : Program) : Program :=
-  match env.prelude.kind? p.kind with
+  match env.interface.kind? p.kind with
   | some row =>
     let env := { env.top with kind := some row }
     { p with body := foldStmts env row p.body,
              handlers := p.handlers.map fun h =>
-               { h with body := foldStmts (env.bind { name := "reason", ty := Prelude.tU32,
+               { h with body := foldStmts (env.bind { name := "reason", ty := Interface.tU32,
                                                        mutable := false, origin := .stack })
                                   row h.body } }
   | none => p
@@ -191,8 +191,8 @@ def isDirect (env : Env) (d : MapDecl) : Bool :=
   | _ => false
 
 /-- Pass A on a checked unit. -/
-def fold (pre : Prelude) (u : CompUnit) (checked : Checked) : Folded :=
-  let env : Env := { prelude := pre, license := u.license.map (·.2), types := u.types,
+def fold (pre : Interface) (u : CompUnit) (checked : Checked) : Folded :=
+  let env : Env := { interface := pre, license := u.license.map (·.2), types := u.types,
                      consts := u.consts, configs := u.configs, maps := u.maps,
                      fns := u.fns, contracts := u.contracts }
   let row := pre.kinds.head?.getD default
@@ -202,14 +202,14 @@ def fold (pre : Prelude) (u : CompUnit) (checked : Checked) : Folded :=
     caps := checked.caps }
 
 /-- The environment of a folded unit, as the state carries it. -/
-def foldEnv (pre : Prelude) (u : CompUnit) (checked : Checked) (env : Env) : Env :=
+def foldEnv (pre : Interface) (u : CompUnit) (checked : Checked) (env : Env) : Env :=
   { env with fns := (fold pre u checked).unit.fns }
 
 /-- Theorem A: a run of a program is a run of its folded form, over
 the folded unit's functions. A constant evaluates to its value by the
 rules for names, and a folded conditional takes the branch its
 condition selects. Stated now, proved after the design settles. -/
-theorem fold_correct (pre : Prelude) (u : CompUnit) (checked : Checked) (K : Machine.Kernel) :
+theorem fold_correct (pre : Interface) (u : CompUnit) (checked : Checked) (K : Machine.Kernel) :
     Check.checkUnit pre u = .ok checked →
     ∀ p ∈ u.programs, ∀ st o st',
       Sem.ExecProgram K st p o st' ↔

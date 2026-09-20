@@ -1,22 +1,31 @@
 import Koit.Core.Syntax
+import Koit.Interface.Kernel
 
 /-!
-The prelude's row types: the six tables a kernel version supplies to
+The interface's row types. The six tables a kernel version supplies to
 the core, which the checker, the interpreter, and the lowering all
-read. Program kinds with their verdicts, default failure, packet
+read: program kinds with their verdicts, default failure, packet
 access, and sleepability; context fields per kind; calls with
 signatures, effects, availability, and license; resources with their
 acquisition and its argument form, release, forbidden effects, and
-nesting; region kinds; slot types with their layout and homes. The
-hand-written value for stage 1 is `Stage1.lean`; a generator will later
-emit a value of the same type from the kernel's own sources.
+nesting; region kinds; slot types with their layout and homes.
+
+Two layers. The joined rows below (`KindRow`, `CallRow`, ...) are
+what the compiler reads, complete with the kernel's numbers and
+offsets. They are computed, never written: `Join.lean` fills them
+from the koit side, the hand-written `Spec` at the end of this file,
+which decides how each kernel operation is typed and names the
+kernel function it corresponds to, and from the kernel side
+(`Kernel.lean`), transcribed from the kernel's sources. The join
+checks the two against each other, so a hand-written correspondence
+that disagrees with the kernel's own prototype is a build error.
 -/
 
-namespace Koit.Prelude
+namespace Koit.Interface
 
 open Koit (Span)
 open Koit.Core
-/-- The span every prelude node carries: a prelude row has no source
+/-- The span every interface node carries: a interface row has no source
 position, and a diagnostic about one names the call site instead. -/
 def noSpan : Span := Span.point Koit.Pos.origin
 
@@ -69,6 +78,9 @@ structure CtxBound where
 
 structure KindRow where
   name    : String
+  /-- The kernel's program type, `BPF_PROG_TYPE_XDP`, the key into
+  the kernel side. -/
+  progType : String := ""
   /-- The libbpf section name the lowering emits. -/
   section_ : String
   /-- Whether the packet region exists, so `pkt` is in scope. -/
@@ -260,12 +272,13 @@ structure SlotRow where
 /-- The kernel's limit on special fields in one value, `BTF_FIELDS_MAX`. -/
 def maxSlots : Nat := 11
 
-end Koit.Prelude
+end Koit.Interface
 
-open Koit.Prelude Koit.Core in
+open Koit.Interface Koit.Core in
 /-- The six tables of one kernel version, with its constants and
 types. -/
-structure Koit.Prelude where
+structure Koit.Interface where
+  /-- The kernel tag, `v6.8`. -/
   kernel    : String
   kinds     : List KindRow
   calls     : List CallRow
@@ -274,37 +287,130 @@ structure Koit.Prelude where
   slots     : List SlotRow
   consts    : List ConstDecl
   types     : List TypeDecl
+  /-- The kernel side the rows were joined with. -/
+  side      : Kernel.Side
+  /-- Rows of the koit side this kernel lacks, with the reason, for
+  the diagnostic that names the kernel. -/
+  missing   : List (String × String) := []
   deriving Inhabited
 
-namespace Koit.Prelude
+namespace Koit.Interface
 
 open Koit.Core
 
-def kind? (p : Prelude) (name : String) : Option KindRow :=
+def kind? (p : Interface) (name : String) : Option KindRow :=
   p.kinds.find? (·.name == name)
 
-def call? (p : Prelude) (name : String) : Option CallRow :=
+def call? (p : Interface) (name : String) : Option CallRow :=
   p.calls.find? (·.name == name)
 
-def resource? (p : Prelude) (r : Resource) : Option ResourceRow :=
+def resource? (p : Interface) (r : Resource) : Option ResourceRow :=
   p.resources.find? (·.res == r)
 
 /-- The resource a surface acquirer such as `lock` or `sk_lookup_tcp`
 denotes. -/
-def acquirer? (p : Prelude) (name : String) : Option ResourceRow :=
+def acquirer? (p : Interface) (name : String) : Option ResourceRow :=
   p.resources.find? (·.acquirers.contains name)
 
-def const? (p : Prelude) (name : String) : Option ConstDecl :=
+def const? (p : Interface) (name : String) : Option ConstDecl :=
   p.consts.find? (·.name == name)
 
-def type? (p : Prelude) (name : String) : Option TypeDecl :=
+def type? (p : Interface) (name : String) : Option TypeDecl :=
   p.types.find? (·.name == name)
 
-def slot? (p : Prelude) (name : String) : Option SlotRow :=
+def slot? (p : Interface) (name : String) : Option SlotRow :=
   p.slots.find? (·.name == name)
 
-def region? (p : Prelude) (name : String) : Option RegionRow :=
+def region? (p : Interface) (name : String) : Option RegionRow :=
   p.regions.find? (·.name == name)
 
-end Koit.Prelude
+/-- Why a name the koit side knows is absent on this kernel. -/
+def missing? (p : Interface) (name : String) : Option String :=
+  p.missing.lookup name
+
+/-- A helper's number on this kernel, by its name without `bpf_`. -/
+def helperId? (p : Interface) (name : String) : Option Nat :=
+  (p.side.helper? name).map (·.id)
+
+/-! ### The koit side
+
+The hand-written half of every row: what is decided, with the name
+of the kernel object it corresponds to and nothing the kernel's
+sources state. `Join.lean` turns a `Spec` and a `Kernel.Side` into an
+`Interface`. -/
+
+/-- A context field as koit sees it: the kernel side supplies the
+offset. -/
+structure CtxSpec where
+  name     : String
+  ty       : Ty
+  writable : Bool
+  deriving Repr, Inhabited
+
+/-- A program kind: the kernel's program type it corresponds to, the
+section name chosen among those libbpf maps to that type, and the
+verdicts as pairs of koit's name and the kernel's value name, whose
+numbers the kernel side supplies. -/
+structure KindSpec where
+  name      : String
+  progType  : String
+  section_  : String
+  hasPkt    : Bool
+  verdictTy : Ty
+  verdicts  : List (String × String)
+  sugar     : List (String × String)
+  defaultExit : DefaultExit
+  pktWritable : Bool := false
+  sleep     : Bool
+  ctx       : List CtxSpec
+  /-- The location-yielding context rows by field name, with whether
+  the row is the packet's end. -/
+  ctxBounds : List (String × Bool) := []
+  deriving Repr, Inhabited
+
+/-- How a call corresponds to the kernel: a helper by its name
+without `bpf_` with the layout of the kernel's arguments in terms of
+koit's, a kfunc by name with the layout, or an inline sequence with
+no call. The helper's number is the kernel side's. -/
+inductive Link where
+  | helper (name : String) (abi : List AbiArg)
+  | kfunc (name : String) (abi : List AbiArg)
+  | inline
+  deriving Repr, Inhabited
+
+structure CallSpec where
+  name     : String
+  sig      : Sig
+  effects  : List Effect
+  fails    : Option Kind := none
+  acquires : Option Resource := none
+  /-- The kinds koit offers the call in; empty means every kind the
+  kernel does. Checked to be within the kernel's availability. -/
+  kinds    : List String := []
+  /-- What the row is, for the printout: "byte swap". -/
+  note     : String := ""
+  link     : Link := .inline
+  linkByKind : List (String × Link) := []
+  deriving Repr, Inhabited
+
+/-- A constant by the kernel's name for its value, byte-swapped when
+the source uses it in network order. -/
+structure ConstSpec where
+  name   : String
+  kernel : String
+  hton   : Bool := false
+  deriving Repr, Inhabited
+
+/-- The koit side of the interface. -/
+structure Spec where
+  kinds     : List KindSpec
+  calls     : List CallSpec
+  resources : List ResourceRow
+  regions   : List RegionRow
+  slots     : List SlotRow
+  consts    : List ConstSpec
+  types     : List TypeDecl
+  deriving Inhabited
+
+end Koit.Interface
 

@@ -31,7 +31,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (KindRow CallRow AcqArg Home tU32 tU64)
+open Koit.Interface (KindRow CallRow AcqArg Home tU32 tU64)
 open Koit.Facts (Facts Caps Entails)
 open Koit.Effects (Effs)
 
@@ -116,12 +116,12 @@ inductive Synth : Env → Ctx → Expr → Ty → Prop
       (d.fails → K.mayFail) → d.ret = some t →
       (∀ s' t', t ≠ .opt s' t') →
       Synth env K (.call s f args) t
-  /-- A prelude call with a signature. -/
-  | callPrelude {env K s f args row params t} :
-      env.fn? f = none → env.prelude.call? f = some row →
+  /-- A interface call with a signature. -/
+  | callInterface {env K s f args row params t} :
+      env.fn? f = none → env.interface.call? f = some row →
       row.acquires = none →
       row.fails = none → row.sig = .fn params (some t) →
-      PreludeOk env K s row → ArgsOk env K f params args →
+      InterfaceOk env K s row → ArgsOk env K f params args →
       Synth env K (.call s f args) t
   /-- `errno` in the `else` of a helper call. -/
   | errno {env K s} : K.errnoOk → Synth env K (.errno s) tU32
@@ -267,13 +267,13 @@ inductive ArgsOk : Env → Ctx → String → List Param → List Arg → Prop
       env.eqv t t' = .ok true → ArgsOk env K f ps as →
       ArgsOk env K f (p :: ps) (.val (.move s x) :: as)
 
-/-- A prelude call's availability and license. -/
-inductive PreludeOk : Env → Ctx → Span → CallRow → Prop
+/-- A interface call's availability and license. -/
+inductive InterfaceOk : Env → Ctx → Span → CallRow → Prop
   | mk {env K s row} :
       (row.name.startsWith "pkt." → ∃ r, env.kind = some r ∧ r.hasPkt) →
       (∀ k, env.kind = some k → row.kinds ≠ [] →
         row.kinds.contains k.name) →
-      (row.gplOnly → env.gplCompatible) → PreludeOk env K s row
+      (row.gplOnly → env.gplCompatible) → InterfaceOk env K s row
 
 end
 
@@ -303,10 +303,10 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
         { ty := some (.refined s f fd.ty pred), origin := .stack }
   /-- A fallible helper. -/
   | call {env K s f args row params ret} :
-      env.fn? f = none → env.prelude.call? f = some row →
+      env.fn? f = none → env.interface.call? f = some row →
       row.acquires = none →
       row.fails ≠ none → row.sig = .fn params ret →
-      PreludeOk env K s row →
+      InterfaceOk env K s row →
       ArgsOk env K f params args →
       FallibleOk env K (.call s f args) { ty := ret, origin := .stack }
   /-- A function returning `T?`. -/
@@ -325,26 +325,26 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
   /-- An acquisition whose row takes a place of a slot type, in one of
   the slot's homes. -/
   | acquireSlot {env K s r f t p info s' slot row srow m} :
-      env.prelude.resource? r = some row → row.arg = .place slot →
+      env.interface.resource? r = some row → row.arg = .place slot →
       PlaceOf env K p info → env.norm info.ty = .ok (.slot s' slot) →
-      env.prelude.slot? slot = some srow → info.origin = .map m →
+      env.interface.slot? slot = some srow → info.origin = .map m →
       srow.homes.contains .mapValue = true →
       FallibleOk env K (.acquire s r f t [.place p]) { ty := none }
   /-- A scope-only acquisition. -/
   | acquireScope {env K s r f t row} :
-      env.prelude.resource? r = some row → row.arg = .scope →
+      env.interface.resource? r = some row → row.arg = .scope →
       FallibleOk env K (.acquire s r f t []) { ty := none }
   /-- An acquisition through a kernel function's row: the result is
   `own T`, bound by `hold`. -/
   | acquireCall {env K s r f args row crow params ret} :
-      env.prelude.resource? r = some row → row.arg = .call →
-      env.prelude.call? f = some crow → crow.sig = .fn params ret →
-      PreludeOk env K s crow → ArgsOk env K f params args →
+      env.interface.resource? r = some row → row.arg = .call →
+      env.interface.call? f = some crow → crow.sig = .fn params ret →
+      InterfaceOk env K s crow → ArgsOk env K f params args →
       FallibleOk env K (.acquire s r f none args)
         { ty := ret, origin := .kernel }
   /-- A ring-buffer record, the one acquiring builtin. -/
   | acquireReserve {env K s r s' m t d n sz row} :
-      env.prelude.resource? r = some row → row.arg = .call →
+      env.interface.resource? r = some row → row.arg = .call →
       env.map? m = some d → d.kind = .ringbuf n →
       env.notRepresentable t false = .ok none → env.layout t = .ok sz →
       FallibleOk env K (.acquire s r "reserve" (some t) [.map s' m])
@@ -511,7 +511,7 @@ inductive StmtOk :
   row must allow to nest. -/
   | holdScope {env K s r acq body row Fb E Eb} :
       FallibleOk env K acq { ty := none } →
-      env.prelude.resource? r = some row →
+      env.interface.resource? r = some row →
       row.fails = none →
       checkNesting K s row = .ok () →
       BlockOk env (holdCtx env K s row none acq) body Fb Eb →
@@ -522,7 +522,7 @@ inductive StmtOk :
   /-- (Hold), value-yielding, with the tail as `else`. -/
   | holdValue {env K s r x acq body els row b t Fb Fe E Eb Ee} :
       FallibleOk env K acq b → b.ty = some t →
-      env.prelude.resource? r = some row → row.fails ≠ none →
+      env.interface.resource? r = some row → row.fails ≠ none →
       checkNesting K s row = .ok () →
       BlockOk (env.bind { name := x, ty := t, mutable := false,
                           origin := .kernel })
@@ -624,7 +624,7 @@ effects against the preserved regions `W`, which the statement rules
 check where the effects arise. -/
 inductive ProgramOk : Env → Program → Prop
   | mk {env p row} :
-      env.prelude.kind? p.kind = some row →
+      env.interface.kind? p.kind = some row →
       checkClauses env row p.verdicts p.preserved = .ok () →
       (∀ h ∈ p.handlers, ∃ F E,
         BlockOk (handlerEnv env row)
@@ -638,9 +638,9 @@ inductive ProgramOk : Env → Program → Prop
 /-- A well-typed unit: declarations well-formed, with every predicate
 on an array map's value holding of the zero value, functions and
 programs well-typed, the call graph acyclic. -/
-inductive UnitOk : Prelude → CompUnit → Prop
+inductive UnitOk : Interface → CompUnit → Prop
   | mk {pre u env} :
-      env = { prelude := pre, license := u.license.map (·.2), types := u.types,
+      env = { interface := pre, license := u.license.map (·.2), types := u.types,
               consts := u.consts, configs := u.configs, maps := u.maps,
               fns := u.fns, contracts := u.contracts } →
       checkNames u = .ok () →
@@ -657,7 +657,7 @@ inductive UnitOk : Prelude → CompUnit → Prop
 /-- Soundness of the checker: a unit `checkUnit` accepts is well-typed.
 Stated now, proved after the design settles; the demands rest on
 `entails_sound`. -/
-theorem check_sound (pre : Prelude) (u : CompUnit) (out : Checked) :
+theorem check_sound (pre : Interface) (u : CompUnit) (out : Checked) :
     checkUnit pre u = .ok out → UnitOk pre u := by
   sorry
 

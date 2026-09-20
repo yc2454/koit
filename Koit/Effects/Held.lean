@@ -1,4 +1,4 @@
-import Koit.Prelude.Tables
+import Koit.Interface.Rows
 import Koit.Effects.Effects
 
 /-!
@@ -18,7 +18,7 @@ namespace Koit.Effects
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (ResourceRow Nesting)
+open Koit.Interface (ResourceRow Nesting)
 
 /-- One held resource. -/
 structure HeldEntry where

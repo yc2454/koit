@@ -1,6 +1,6 @@
 // From spec/examples/bmc-request-path.md: BMC's request path as one
 // program. Declarations marked "not in the example" are what it relies
-// on from the prelude or from language.md 23; see spec/ISSUES.md,
+// on from the interface or from language.md 23; see spec/ISSUES.md,
 // entries 4 and 5. Field names follow the example (`protocol`, `dest`).
 
 // not in the example

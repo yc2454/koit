@@ -28,7 +28,7 @@ Its theorem, `alloc_correct`, is stated in `Rules.lean`.
 namespace Koit.Compile
 
 open Koit.BPF (Instr Src Cls VReg Label Reg BIR Bytecode Cpu)
-open Koit.Prelude (KindRow CallRow AbiArg)
+open Koit.Interface (KindRow CallRow AbiArg)
 
 /-- What the allocation yields: the bytecode, the slot of each
 virtual register, and the bytecode index each BIR instruction starts
@@ -69,13 +69,13 @@ def r2 : Reg := .r2
 def r3 : Reg := .r3
 
 /-- What an expansion reads: the slots, the program, the kind's row,
-the prelude, and the sizes of the types the kernel functions' memory
+the interface, and the sizes of the types the kernel functions' memory
 parameters name. -/
 structure ACtx where
   slots  : List (VReg × Int)
   prog   : BIR
   kind   : KindRow
-  pre    : Prelude
+  pre    : Interface
   sizeOf : Core.Ty → Option Nat
 
 abbrev AM := ReaderT ACtx (Except String)
@@ -254,7 +254,7 @@ def expand (ins : Instr VReg Label) : AM Code := do
 def fitsJump (off : Int) : Bool := -32768 ≤ off && off < 32768
 
 /-- Pass D on one program. -/
-def allocate (pre : Prelude) (sizeOf : Core.Ty → Option Nat) (p : BIR) :
+def allocate (pre : Interface) (sizeOf : Core.Ty → Option Nat) (p : BIR) :
     Except String Allocated := do
   let some kind := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
   let slots := slotTable p
@@ -308,12 +308,12 @@ def allocate (pre : Prelude) (sizeOf : Core.Ty → Option Nat) (p : BIR) :
            slots, starts }
 
 /-- Pass D on a unit's programs. -/
-def allocateAll (pre : Prelude) (sizeOf : Core.Ty → Option Nat) (ps : List BIR) :
+def allocateAll (pre : Interface) (sizeOf : Core.Ty → Option Nat) (ps : List BIR) :
     Except String (List Allocated) :=
   ps.mapM (allocate pre sizeOf)
 
 /-- The machine's environment for a bytecode program. -/
-def bytecodeEnv (pre : Prelude) (env : Check.Env) (O : Bytecode) :
+def bytecodeEnv (pre : Interface) (env : Check.Env) (O : Bytecode) :
     Except String (BPF.Env Reg Int) := do
   let some kind := pre.kind? O.kind | throw s!"unknown kind `{O.kind}`"
   return { pre, kind, conv := BPF.bytecodeConv, prog := O,

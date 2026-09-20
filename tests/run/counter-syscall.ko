@@ -1,0 +1,26 @@
+// run:
+// bump: 0
+// map hits:
+//   [0] = { n: 1 }
+// map seen:
+//   { id: 3 } => { v: 9 }
+//   { id: 7 } => { v: 42 }
+
+// A syscall program, so that the kernel stage has one of each kind:
+// an array slot incremented and two hash entries inserted, which the
+// loader reads back by key walk; the report lists them by key.
+type Key = { id: u32 }
+type Hit = { n: u32 }
+type Seen = { v: u32 }
+map hits : array[1] of Hit
+map seen : hash[16] of Key -> Seen
+
+program bump : syscall {
+  hits[0].n = hits[0].n + 1
+  let k = { id: 7 }
+  let v = { v: 42 }
+  seen.insert(k, v)?
+  let k2 = { id: 3 }
+  let v2 = { v: 9 }
+  seen.insert(k2, v2)?
+}

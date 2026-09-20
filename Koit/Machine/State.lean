@@ -1,5 +1,5 @@
 import Koit.Machine.Bytes
-import Koit.Prelude.Tables
+import Koit.Interface.Rows
 
 /-!
 The world every level of the semantics acts on: the part of a run's
@@ -23,7 +23,7 @@ argument is the bytes the kernel received.
 namespace Koit.Machine
 
 open Koit.Core (Ty MapDecl Resource)
-open Koit.Prelude (ResourceRow)
+open Koit.Interface (ResourceRow)
 
 /-! ### Regions and what the kernel sees -/
 

@@ -38,7 +38,7 @@ namespace Koit.Compile
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env Ctx Local Checked synth check)
-open Koit.Prelude (CallRow ResourceRow KindRow)
+open Koit.Interface (CallRow ResourceRow KindRow)
 open Koit.Facts (Origin)
 
 /-! ### The monad and the context -/
@@ -158,7 +158,7 @@ or the expected type, or `u64`. -/
 def operandTy (c : LCtx) (l r : Expr) (expected : Option Ty) : LM Ty := do
   if !isPoly c l then synthTy c l
   else if !isPoly c r then synthTy c r
-  else return expected.getD Prelude.tU64
+  else return expected.getD Interface.tU64
 
 def lit (w : Nat) (k : Nat) : LIR.Expr := .lit w (k % 2 ^ w)
 
@@ -296,7 +296,7 @@ partial def lowerExpr (c : LCtx) (sp : Span) (e : Expr) (expected : Option Ty) :
           (row.verdicts.lookup x).map (row, ·) then
         let vt ← lty c row.verdictTy
         return { pre := [], e := lit (intParts vt).2 n, ty := vt }
-      else if let some d := c.env.prelude.const? x then
+      else if let some d := c.env.interface.const? x then
         lowerExpr c sp d.value (d.ty <|> expected)
       else lerr s!"unknown name `{x}`"
   | .arith _ op l r =>
@@ -309,7 +309,7 @@ partial def lowerExpr (c : LCtx) (sp : Span) (e : Expr) (expected : Option Ty) :
     return { pre := L.pre ++ R.pre, e := .arith op s w L.e R.e, ty := t }
   | .cmp .. | .not .. | .and .. | .or .. => boolValue c sp e
   | .cast _ e' t =>
-    let src ← if isPoly c e' then pure Prelude.tU64 else synthTy c e'
+    let src ← if isPoly c e' then pure Interface.tU64 else synthTy c e'
     let srcN ← normTy c src
     let E ← lowerExpr c sp e' (some srcN)
     let tgt ← lty c t
@@ -458,7 +458,7 @@ partial def lowerPlace (c : LCtx) (sp : Span) (p : Place) : LM (List LIR.Stmt ×
         | .array _ elem n => pure (elem, n)
         | _ => lerr s!"`{q.print}` is not an array"
       let esz ← sizeOfTy c elem
-      let it ← if isPoly c i then pure Prelude.tU64 else synthTy c i
+      let it ← if isPoly c i then pure Interface.tU64 else synthTy c i
       let I ← lowerExpr c sp i (some it)
       match I.e with
       | .lit _ k => return (pre ++ I.pre, .mem (plusAddr a (k * esz)) elem)
@@ -481,7 +481,7 @@ partial def lowerPlace (c : LCtx) (sp : Span) (p : Place) : LM (List LIR.Stmt ×
       | _ => lerr s!"`{m}` has no slots"
     if c.direct.contains m then return ([], .mem (.mapval m 0) v)
     -- the lookup by helper, with the branch the verifier requires
-    let it ← if isPoly c i then pure Prelude.tU64 else synthTy c i
+    let it ← if isPoly c i then pure Interface.tU64 else synthTy c i
     let I ← lowerExpr c sp i (some it)
     let idx := if I.ty == .u32 then I.e else
       let (s, w) := intParts I.ty
@@ -489,7 +489,7 @@ partial def lowerPlace (c : LCtx) (sp : Span) (p : Place) : LM (List LIR.Stmt ×
     let k ← freshName "k"
     let r ← freshName "r"
     let pre := I.pre ++
-      [.frame sp k 4 (some Prelude.tU32), .store sp 32 (.var k) idx,
+      [.frame sp k 4 (some Interface.tU32), .store sp 32 (.var k) idx,
        .builtin sp (some r) (.lookup m) [.addr (.var k)],
        .ite sp { op := .eq, signed := false, w := 64, l := .var r, r := lit 64 0 }
          (deadBranch c sp) []]
@@ -570,7 +570,7 @@ partial def lowerCall (c : LCtx) (sp : Span) (f : String) (args : List Arg)
         | none => freshName "t"
       return (pre ++ [.call sp (some x) f args' unwind none], some (.var x, lt))
     | none => return (pre ++ [.call sp none f args' unwind none], none)
-  let some row := c.env.prelude.call? f | lerr s!"unknown function `{f}`"
+  let some row := c.env.interface.call? f | lerr s!"unknown function `{f}`"
   match row.sig with
   | .fn params ret =>
     let (pre, args') ← lowerArgs c sp params args
@@ -605,7 +605,7 @@ partial def lowerCall (c : LCtx) (sp : Span) (f : String) (args : List Arg)
       | _, _ => lerr "`copy` takes two aggregate places"
     | "fill", [.place dst, .val b] =>
       let (pd, rd) ← lowerPlace c sp dst
-      let B ← lowerExpr c sp b (some Prelude.tU8)
+      let B ← lowerExpr c sp b (some Interface.tU8)
       match rd with
       | .mem da dt =>
         let n ← sizeOfTy c dt
@@ -620,7 +620,7 @@ partial def releaseStmt (c : LCtx) (sp : Span) (row : ResourceRow) (normal : Boo
   let objArgs := match obj with
     | some a => [LIR.Expr.addr a]
     | none => []
-  match Machine.releaseOf c.env.prelude row normal with
+  match Machine.releaseOf c.env.interface row normal with
   | .ok .leave => return .builtin sp none (.leave row.res) []
   | .ok .unlock => return .builtin sp none .unlock objArgs
   | .ok .submit => return .builtin sp none .submit objArgs
@@ -695,7 +695,7 @@ def boundTy (c : LCtx) (f : Fallible) : LM (Option Ty × Origin) := do
     | _ => lerr "a marked load reads a field"
   | .loadw .. => lerr "a marked load reads a field"
   | .call _ h _ =>
-    match c.env.prelude.call? h with
+    match c.env.interface.call? h with
     | some row =>
       match row.sig with
       | .fn _ ret => return (ret, .stack)
@@ -710,7 +710,7 @@ def boundTy (c : LCtx) (f : Fallible) : LM (Option Ty × Origin) := do
     | none => lerr s!"unknown function `{f}`"
   | .coerce _ _ t => return (some t, .stack)
   | .acquire s r f t args =>
-    match c.env.prelude.resource? r with
+    match c.env.interface.resource? r with
     | some row =>
       match row.arg with
       | .place _ | .scope => return (none, .kernel)
@@ -720,7 +720,7 @@ def boundTy (c : LCtx) (f : Fallible) : LM (Option Ty × Origin) := do
           | some t => return (some (.own s t), .kernel)
           | none => lerr "`reserve` takes a record type"
         else
-          match c.env.prelude.call? f with
+          match c.env.interface.call? f with
           | some row =>
             match row.sig with
             | .fn _ ret => return (ret, .kernel)
@@ -830,7 +830,7 @@ partial def lowerStmt (c : LCtx) (s : Stmt) : LM (List LIR.Stmt × LCtx) := do
     let (e', _) ← lowerStmts c els
     return (pre ++ [.ite sp cnd t' e'], { c with mu := muT })
   | .loop _ n body =>
-    let N ← lowerExpr c sp n (some Prelude.tU64)
+    let N ← lowerExpr c sp n (some Interface.tU64)
     let cnt ← freshName "i"
     let cb := (pushConstruct (pushConstruct (pushConstruct c .exitBlock) .loop) .bodyBlock)
     let (body', _) ← lowerStmts cb body
@@ -840,8 +840,8 @@ partial def lowerStmt (c : LCtx) (s : Stmt) : LM (List LIR.Stmt × LCtx) := do
         .loop sp [.ite sp test [.br sp 1] [], .block sp body',
                   .assign sp cnt (.arith .add false 64 (.var cnt) (lit 64 1))]]], c)
   | .«for» _ x lo hi body =>
-    let L ← lowerExpr c sp lo (some Prelude.tU64)
-    let H ← lowerExpr c sp hi (some Prelude.tU64)
+    let L ← lowerExpr c sp lo (some Interface.tU64)
+    let H ← lowerExpr c sp hi (some Interface.tU64)
     let (L, H) ← combine sp L H
     let x' ← nameFor x
     let hi' ← freshName "hi"
@@ -881,7 +881,7 @@ partial def lowerStmt (c : LCtx) (s : Stmt) : LM (List LIR.Stmt × LCtx) := do
       LIR.Expr.cast s0 w0 s1 w1 E.e
     return (E.pre ++ rel ++ [.ret sp (some e')], c)
   | .raise _ k e =>
-    let E ← lowerExpr c sp e (some Prelude.tU32)
+    let E ← lowerExpr c sp e (some Interface.tU32)
     let c ← takeMoves c
     let rel ← releasesAll c sp
     return (E.pre ++ rel ++ [.raise sp k E.e], c)
@@ -945,7 +945,7 @@ partial def lowerTry (c : LCtx) (sp : Span) (x : String) (f : Fallible)
   let zero64 : LIR.Cond := { op := .eq, signed := false, w := 64, l := .var "", r := lit 64 0 }
   match f with
   | .view _ off t =>
-    let O ← lowerExpr c sp off (some Prelude.tU64)
+    let O ← lowerExpr c sp off (some Interface.tU64)
     let n ← sizeOfTy c t
     let h ← if x == "_" then freshName "h" else nameFor x
     let c ← takeMoves c
@@ -1018,7 +1018,7 @@ partial def lowerTry (c : LCtx) (sp : Span) (x : String) (f : Fallible)
             { c with mu := muT })
   | .coerce .. => lerr "a coercion targets a refinement type"
   | .call _ h args =>
-    let some row := c.env.prelude.call? h | lerr s!"unknown function `{h}`"
+    let some row := c.env.interface.call? h | lerr s!"unknown function `{h}`"
     match row.sig with
     | .fn params ret =>
       let (pre, args') ← lowerArgs c sp params args
@@ -1093,7 +1093,7 @@ a block under the release action, the normal release after it. -/
 partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
     (acq : Fallible) (body : List Stmt) (els : Option (List Stmt)) :
     LM (List LIR.Stmt × LCtx) := do
-  let some row := c.env.prelude.resource? r | lerr s!"no row for `{r}`"
+  let some row := c.env.interface.resource? r | lerr s!"no row for `{r}`"
   let (bt, _) ← boundTy c acq
   let zero64 (x : String) : LIR.Cond :=
     { op := .eq, signed := false, w := 64, l := .var x, r := lit 64 0 }
@@ -1131,7 +1131,7 @@ partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
           pure ([], LIR.Stmt.builtin sp (some x') (.reserve m sz) [])
         | _, _ => lerr "`reserve` takes a ring buffer and a record type"
       else
-        match c.env.prelude.call? f with
+        match c.env.interface.call? f with
         | some row =>
           match row.sig with
           | .fn params _ =>
@@ -1201,7 +1201,7 @@ def lowerFn (env : Env) (fns : List Fn) (direct : List String) (d : Fn) : LM LIR
 
 def lowerProgram (env : Env) (fns : List Fn) (direct : List String) (p : Program) :
     LM LIR.Program := do
-  let some row := env.prelude.kind? p.kind | lerr s!"unknown kind `{p.kind}`"
+  let some row := env.interface.kind? p.kind | lerr s!"unknown kind `{p.kind}`"
   resetNames
   let env := { env.top with kind := some row }
   let c0 : LCtx := { env, K := synthCtx, ret := .program .u32, kind := some row, direct, fns }
@@ -1212,7 +1212,7 @@ def lowerProgram (env : Env) (fns : List Fn) (direct : List String) (p : Program
   for h in p.handlers do
     resetNames
     let reason ← nameFor "reason"
-    let ch := bindLocal { c with ret := .handler vt } "reason" Prelude.tU32 false .stack reason
+    let ch := bindLocal { c with ret := .handler vt } "reason" Interface.tU32 false .stack reason
     let (hb, _) ← lowerStmts ch h.body
     handlers := handlers ++ [{ kind := h.kind, body := hb }]
   return { span := p.span, name := p.name, kind := p.kind, body, handlers }
@@ -1247,9 +1247,9 @@ def foldMapDecl (env : Env) (d : MapDecl) : MapDecl :=
       | .ringbuf n => .ringbuf (count n) }
 
 /-- Pass B on a folded unit. -/
-def lower (pre : Prelude) (folded : Folded) : Except String LIR.CompUnit := do
+def lower (pre : Interface) (folded : Folded) : Except String LIR.CompUnit := do
   let u := folded.unit
-  let env : Env := { prelude := pre, license := u.license.map (·.2), types := u.types,
+  let env : Env := { interface := pre, license := u.license.map (·.2), types := u.types,
                      consts := u.consts, configs := u.configs, maps := u.maps,
                      fns := u.fns, contracts := u.contracts }
   let fns ← u.fns.mapM fun f => runLM (lowerFn env u.fns folded.direct f)

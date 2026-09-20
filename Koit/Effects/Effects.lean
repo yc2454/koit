@@ -58,7 +58,7 @@ def print : Eff → String
 /-- Structural equality, with expressions compared by their text. -/
 def same (a b : Eff) : Bool := a.print == b.print
 
-/-- The effect a prelude row declares. A row's `write(pkt[a..b))`
+/-- The effect a interface row declares. A row's `write(pkt[a..b))`
 keeps its range; its `write(pkt)` is the whole packet. -/
 def ofCore : Core.Effect → Eff
   | .call => .call | .resize => .resize | .sleep => .sleep | .fail => .fail
@@ -96,7 +96,7 @@ def union (E F : Effs) : Effs := E.addAll F.effs
 
 def ofList (es : List Eff) : Effs := empty.addAll es
 
-/-- The effects a prelude row declares. `resize` and `sleep` imply
+/-- The effects a interface row declares. `resize` and `sleep` imply
 `call`. -/
 def ofCore (es : List Core.Effect) : Effs :=
   let E := ofList (es.map Eff.ofCore)

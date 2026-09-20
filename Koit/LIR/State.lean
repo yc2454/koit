@@ -16,7 +16,7 @@ namespace Koit.LIR.Sem
 
 open Koit.Core.Sem (Val Loc Region Abort)
 open Koit.Check (Env)
-open Koit.Prelude (KindRow)
+open Koit.Interface (KindRow)
 open Koit.Machine (slice blit)
 
 structure State where

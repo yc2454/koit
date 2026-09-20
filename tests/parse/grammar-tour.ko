@@ -1,6 +1,6 @@
 // Parse-only coverage of the grammar of spec/language.md sections 5 to
 // 9, 14, and 15, in one unit. It is not meant to type-check: it mixes
-// program kinds, calls prelude names, and ignores effects.
+// program kinds, calls interface names, and ignores effects.
 
 license "GPL"
 

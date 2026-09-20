@@ -1,0 +1,16 @@
+// The atomic updates as statements, whose old value nobody reads:
+// the lowering emits the kernel's non-fetching forms for them, the
+// fetching ones only where the value is bound. The corpus had the
+// bound forms only (forms.ko); this unit puts the others in front
+// of the machine and of LLVM's tools.
+type Q = { n: u64, k: u32, f: u32 }
+map q : array[1] of Q
+
+program touch : syscall {
+  atomic_add(q[0].n, 5)
+  atomic_and(q[0].k, 0xff)
+  atomic_or(q[0].k, 0x100)
+  atomic_xor(q[0].f, 1)
+  let old = atomic_add(q[0].n, 1)
+  q[0].f = old as u32
+}

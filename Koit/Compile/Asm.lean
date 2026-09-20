@@ -67,7 +67,7 @@ def dataCls (w : Nat) : Cls := if w < 64 then .w32 else .w64
 
 /-- One instruction in LLVM's syntax; the callee's number needs the
 call table. -/
-def asmInstr (pre : Prelude) (kind : String) (ins : Instr Reg Int) : Except String String := do
+def asmInstr (pre : Interface) (kind : String) (ins : Instr Reg Int) : Except String String := do
   match ins with
   | .alu op cls d s => return s!"{asmReg cls d} {asmAlu op}= {asmSrc cls s}"
   | .mov cls d s => return s!"{asmReg cls d} = {asmSrc cls s}"
@@ -114,7 +114,7 @@ def asmInstr (pre : Prelude) (kind : String) (ins : Instr Reg Int) : Except Stri
   | .exit => return "exit"
 
 /-- A program, one instruction per line under a comment naming it. -/
-def printAsm (pre : Prelude) (p : Bytecode) : Except String String := do
+def printAsm (pre : Interface) (p : Bytecode) : Except String String := do
   let lines ← p.code.toList.mapM (asmInstr pre p.kind)
   return "\n".intercalate (s!"# program {p.name}" :: lines) ++ "\n"
 

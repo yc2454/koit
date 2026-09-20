@@ -18,7 +18,7 @@ its own clock, and never a level's private state.
 namespace Koit.Machine
 
 open Koit.Core (Effect)
-open Koit.Prelude (KindRow CallRow)
+open Koit.Interface (KindRow CallRow)
 
 /-- What a kernel function does when called. -/
 inductive HelperOut where

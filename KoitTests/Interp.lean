@@ -1,7 +1,7 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
 import Koit.Core.Interp
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the evaluator over small programs: verdicts, handlers,
@@ -17,12 +17,12 @@ private def run (s : String) (packet : String := "") (ctx : List (String × Nat)
   let u ← match parse s with
     | .ok u => pure u
     | .error e => throw s!"parse: {e.msg}"
-  let core := desugar Prelude.stage1 u
-  match checkUnit Prelude.stage1 core with
+  let core := desugar Interface.v6_8 u
+  match checkUnit Interface.v6_8 core with
   | .error d => throw s!"check: {d}"
   | .ok _ => pure ()
   let some bytes := parseHex packet | throw "bad hex"
-  let (reports, maps) ← runUnit Prelude.stage1 core bytes ctx none 100000
+  let (reports, maps) ← runUnit Interface.v6_8 core bytes ctx none 100000
   return (reports.map fun r => s!"{r.program}: {r.verdict}" ++
     String.join (r.log.map fun l => s!" [{l}]"), maps)
 

@@ -3,7 +3,7 @@
 // classifier: after bpf_skb_store_bytes and the checksum-replace
 // helpers, which may change the packet, the old packet pointers are
 // used; the verifier reports "R1 type=scalar expected=fp, pkt, ...".
-// Stage 1's prelude has no store-bytes helper, so the port uses
+// Stage 1's interface has no store-bytes helper, so the port uses
 // adjust_tail as the packet-changing helper; what the rule turns on
 // is the resize effect of the row, not the helper's name.
 type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }

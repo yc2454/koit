@@ -27,7 +27,7 @@ namespace Koit.Compile
 open Koit (Span)
 open Koit.Core (ArithOp CmpOp AtomicOp Kind Resource)
 open Koit.BPF (Instr Src Cls AluOp Cmp VReg Label FrameObj RegClass Cpu BIR)
-open Koit.Prelude (KindRow CallRow)
+open Koit.Interface (KindRow CallRow)
 
 /-! ### The translation state -/
 
@@ -55,7 +55,7 @@ structure FState where
   exitLabel  : Label := ⟨0⟩
   cpu        : Cpu := .v3
   kind       : KindRow := default
-  pre        : Prelude := default
+  pre        : Interface := default
   deriving Inhabited
 
 abbrev FM := StateT FState (Except String)
@@ -679,7 +679,7 @@ def fallOffVerdict (kind : KindRow) : Nat :=
   else 0
 
 /-- One LIR program flattened. -/
-def flattenProgram (pre : Prelude) (cpu : Cpu) (p : LIR.Program) : Except String BIR := do
+def flattenProgram (pre : Interface) (cpu : Cpu) (p : LIR.Program) : Except String BIR := do
   let some kind := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
   let translate : FM Unit := do
     let exitLabel ← newLabel
@@ -711,14 +711,14 @@ def flattenProgram (pre : Prelude) (cpu : Cpu) (p : LIR.Program) : Except String
            regs := s.classes.reverse.map fun (n, c) => (VReg.v n, c), cpu }
 
 /-- Pass C on a closed LIR unit: one BIR program per program. -/
-def flatten (pre : Prelude) (cpu : Cpu) (u : LIR.CompUnit) : Except String (List BIR) := do
+def flatten (pre : Interface) (cpu : Cpu) (u : LIR.CompUnit) : Except String (List BIR) := do
   unless u.fns.isEmpty do throw "the flattening takes closed LIR; inline first"
   u.programs.mapM (flattenProgram pre cpu)
 
-/-- The machine's environment for a BIR program: the prelude, the
+/-- The machine's environment for a BIR program: the interface, the
 kind's row, BIR's convention, and the checker's layout for the sizes
 of the kernel functions' memory parameters. -/
-def birEnv (pre : Prelude) (env : Check.Env) (B : BIR) : Except String (BPF.Env VReg Label) := do
+def birEnv (pre : Interface) (env : Check.Env) (B : BIR) : Except String (BPF.Env VReg Label) := do
   let some kind := pre.kind? B.kind | throw s!"unknown kind `{B.kind}`"
   return { pre, kind, conv := BPF.birConv, prog := B,
            sizeOf := fun t => match env.layout t with

@@ -21,7 +21,7 @@ load and a rejection from the kernel can be matched against the list.
 namespace Koit.BPF
 
 open Koit.Machine (toNatMod wrap leBytes ofLe HeldObj)
-open Koit.Prelude (KindRow)
+open Koit.Interface (KindRow)
 
 /-! ### Regions and values -/
 
@@ -295,12 +295,12 @@ def bytecodeConv : Conv Reg Int :=
     resolve := fun _ pc off => if (pc : Int) + 1 + off ≥ 0 then some ((pc : Int) + 1 + off).toNat else none,
     name := Reg.print }
 
-/-- What a step reads besides the state: the prelude, the kind's
+/-- What a step reads besides the state: the interface, the kind's
 row, the convention, the program, and the sizes of the types the
 kernel functions' memory parameters name, which the caller supplies
 from the checker's layout so that the machine reads no type. -/
 structure Env (ρ τ : Type) where
-  pre    : Prelude
+  pre    : Interface
   kind   : KindRow
   conv   : Conv ρ τ
   prog   : Program ρ τ

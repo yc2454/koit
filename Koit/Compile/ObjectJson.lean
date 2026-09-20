@@ -1,0 +1,160 @@
+import Lean.Data.Json
+import Koit.Compile.Compile
+import Koit.Compile.CPrint
+
+/-!
+The interchange form from `koitc` to the kernel-facing tools, `koitc
+emit --json`: one self-contained document per unit, so that the
+loader, the ELF writer, and the runner's kernel stage never read Lean
+or the interface. The header names the kernel tag, the cpu, the unit,
+and its license; the named types carry their layouts as the checker
+computed them, what a BTF encoder needs; each map its koit kind, the
+kernel's map type by name and number, its key and value types with
+their byte sizes, its entries, whether the compiler marked it for
+direct value access, and where its value holds a spin lock; each
+program its kind, the kernel's program type by name and number, its
+section, the words as sixteen-digit hex strings so that no reader
+rounds a 64-bit value, the relocations, and the notes. The numbers a
+tool needs come from the kernel side of the interface here, so a
+tool never re-derives a kernel fact.
+-/
+
+namespace Koit.Compile
+
+open Lean (Json ToJson toJson)
+open Koit.Core
+
+/-- The layout of a type as a JSON description: ints with sign and
+width, big-endian ints, arrays with element and length, structs with
+fields at their offsets, slot types with the kernel's name, size,
+and alignment, and references to named types by name. -/
+partial def typeJson (env : Check.Env) : Ty → Except String Json
+  | .int _ s w => pure <| Json.mkObj [("kind", "int"), ("signed", Json.bool s), ("bits", toJson w)]
+  | .be _ w => pure <| Json.mkObj [("kind", "be"), ("bits", toJson w)]
+  | .bool _ => pure <| Json.mkObj [("kind", "bool")]
+  | .named _ n => pure <| Json.mkObj [("kind", "named"), ("name", n)]
+  | .refined _ _ t _ => typeJson env t
+  | .slot s n =>
+    match env.interface.slot? n with
+    | some row => pure <| Json.mkObj [("kind", "slot"), ("name", n), ("kernel", row.kernel),
+                                      ("size", toJson row.size), ("align", toJson row.align)]
+    | none => throw s!"{s.start}: unknown slot type `{n}`"
+  | t@(.array s elem n) => do
+    let some len := env.evalConst n | throw s!"{s.start}: the array length is not a constant"
+    let (size, align) ← layoutOf env t
+    pure <| Json.mkObj [("kind", "array"), ("elem", ← typeJson env elem), ("len", toJson len),
+                        ("size", toJson size), ("align", toJson align)]
+  | t@(.struct _ fields) => do
+    let (size, align) ← layoutOf env t
+    let mut off := 0
+    let mut fs : Array Json := #[]
+    for f in fields do
+      let (sz, al) ← layoutOf env f.ty
+      off := (off + al - 1) / al * al
+      fs := fs.push (Json.mkObj [("name", f.name), ("offset", toJson off), ("type", ← typeJson env f.ty)])
+      off := off + sz
+    pure <| Json.mkObj [("kind", "struct"), ("size", toJson size), ("align", toJson align),
+                        ("fields", Json.arr fs)]
+  | t => throw s!"{t.span.start}: `{t.print}` names a place, not data"
+where
+  layoutOf (env : Check.Env) (t : Ty) : Except String (Nat × Nat) :=
+    match env.layout t with
+    | .ok r => pure r
+    | .error d => throw d.msg
+
+/-- The byte offset of the spin lock in a map value, when it holds
+one at the top level, where the kernel looks for it. -/
+def spinLockOffset (env : Check.Env) (t : Ty) : Option Nat :=
+  match env.norm t with
+  | .ok (.struct _ fields) =>
+    let rec go (fields : List Field) (off : Nat) : Option Nat :=
+      match fields with
+      | [] => none
+      | f :: rest =>
+        match env.layout f.ty with
+        | .ok (sz, al) =>
+          let off := (off + al - 1) / al * al
+          match env.norm f.ty with
+          | .ok (.slot _ "spinlock") => some off
+          | _ => go rest (off + sz)
+        | .error _ => none
+    go fields 0
+  | _ => none
+
+def mapJson (pre : Interface) (env : Check.Env) (direct : List String) (d : MapDecl) :
+    Except String Json := do
+  let sizeOf (t : Ty) : Except String Nat :=
+    match env.layout t with
+    | .ok (n, _) => pure n
+    | .error e => throw e.msg
+  let entries (n : Expr) : Except String Int :=
+    match env.evalConst n with
+    | some k => pure k
+    | none => throw s!"{d.span.start}: the size of map `{d.name}` is not a constant"
+  let typeName := C.mapTypeName d.kind
+  let some typeId := pre.side.mapTypes.lookup typeName
+    | throw s!"{pre.kernel} has no {typeName}"
+  let u32 : Ty := .int d.span false 32
+  let (kind, key, value, n) ← match d.kind with
+    | .array n v => pure ("array", some u32, some v, n)
+    | .percpu n v => pure ("percpu", some u32, some v, n)
+    | .hash n k v => pure ("hash", some k, some v, n)
+    | .ringbuf n => pure ("ringbuf", none, none, n)
+  let keyJson ← match key with
+    | some k => pure (← typeJson env k)
+    | none => pure Json.null
+  let valueJson ← match value with
+    | some v => pure (← typeJson env v)
+    | none => pure Json.null
+  pure <| Json.mkObj [
+    ("name", d.name), ("kind", kind), ("type", typeName), ("type_id", toJson typeId),
+    ("key", keyJson), ("key_size", toJson (← match key with | some k => sizeOf k | none => pure 0)),
+    ("value", valueJson),
+    ("value_size", toJson (← match value with | some v => sizeOf v | none => pure 0)),
+    ("entries", toJson (← entries n)), ("flags", toJson (0 : Nat)),
+    ("direct", Json.bool (direct.contains d.name)),
+    ("spin_lock", match value.bind (spinLockOffset env) with
+      | some o => toJson o
+      | none => Json.null)]
+
+def relocJson (r : Reloc) : Json :=
+  match r.kind with
+  | .mapFd m => Json.mkObj [("index", toJson r.index), ("kind", "map_fd"), ("map", m)]
+  | .mapValue m off =>
+    Json.mkObj [("index", toJson r.index), ("kind", "map_value"), ("map", m), ("offset", toJson off)]
+  | .kfunc n => Json.mkObj [("index", toJson r.index), ("kind", "kfunc"), ("name", n)]
+
+def objectJson (pre : Interface) (o : Object) : Except String Json := do
+  let some row := pre.kind? o.kind | throw s!"unknown kind `{o.kind}`"
+  let some pt := pre.side.progType? row.progType | throw s!"{pre.kernel} has no {row.progType}"
+  let result := match row.verdictTy with
+    | .int _ true w => s!"i{w}"
+    | .int _ false w => s!"u{w}"
+    | t => t.print
+  pure <| Json.mkObj [
+    ("name", o.name), ("kind", o.kind), ("prog_type", pt.name), ("prog_type_id", toJson pt.id),
+    ("section", o.section_), ("result", result),
+    ("verdicts", Json.mkObj (row.verdicts.map fun (n, v) => (n, toJson v))),
+    ("words", Json.arr (o.words.map fun w => Json.str (hex16 w))),
+    ("relocs", Json.arr (o.relocs.map relocJson).toArray),
+    ("notes", Json.arr (o.notes.map fun n =>
+      Json.mkObj [("index", toJson n.index), ("callee", n.callee.print)]).toArray)]
+
+/-- The document of a compiled unit. -/
+def unitJson (pre : Interface) (unit : String) (cpu : BPF.Cpu) (core : CompUnit) (C : Compiled) :
+    Except String Json := do
+  let env := envOf pre core
+  -- the interface's types first, so that a unit's own shadow them
+  let types ← (pre.types ++ core.types).mapM fun d => do
+    pure <| Json.mkObj [("name", d.name), ("type", ← typeJson env d.ty)]
+  let maps ← core.maps.mapM (mapJson pre env C.lir.direct)
+  let programs ← C.objects.mapM (objectJson pre)
+  pure <| Json.mkObj [
+    ("koit", toJson (1 : Nat)), ("kernel", pre.kernel),
+    ("cpu", match cpu with | .v3 => "v3" | .v4 => "v4"),
+    ("unit", unit),
+    ("license", match core.license with | some (_, l) => Json.str l | none => Json.null),
+    ("types", Json.arr types.toArray), ("maps", Json.arr maps.toArray),
+    ("programs", Json.arr programs.toArray)]
+
+end Koit.Compile

@@ -1,7 +1,7 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
 import Koit.Check.Decl
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the base checker over small units: `ok` accepts, `has`
@@ -17,7 +17,7 @@ private def chk (s : String) : Except Diag Unit :=
   match parse s with
   | .error e => .error { span := e.span, msg := s!"parse: {e.msg}" }
   | .ok u =>
-    (checkUnit Prelude.stage1 (desugar Prelude.stage1 u)).map fun _ => ()
+    (checkUnit Interface.v6_8 (desugar Interface.v6_8 u)).map fun _ => ()
 
 private def ok (s : String) : Bool := (chk s).toOption.isSome
 
@@ -77,7 +77,7 @@ private def unit (decls : List String) (body : List String) : String :=
 #guard has (unit ["const A = B", "const B = A"] []) "in terms of itself"
 #guard has (unit ["const A = f(1)"] []) "constant expression"
 
--- the prelude is an outer scope: the unit shadows it
+-- the interface is an outer scope: the unit shadows it
 #guard ok (unit ["const IPPROTO_UDP = 17"] ["  let x: u8 = IPPROTO_UDP"])
 #guard ok (sys ["  let x: u8 = IPPROTO_UDP"])
 #guard ok (xdp [V, "  if eth.proto == ETH_P_IP { pass }"])

@@ -7,8 +7,12 @@ import Koit.Syntax.Print
 import Koit.Core.Syntax
 import Koit.Core.Print
 import Koit.Core.Desugar
-import Koit.Prelude.Tables
-import Koit.Prelude.Stage1
+import Koit.Interface.Kernel
+import Koit.Interface.Rows
+import Koit.Interface.Join
+import Koit.Interface.KoitSide
+import Koit.Interface.Kernel.V6_8
+import Koit.Interface.Kernel.V7_0_rc1
 import Koit.Facts.Domain
 import Koit.Facts.Facts
 import Koit.Facts.Smt
@@ -41,6 +45,8 @@ import Koit.BPF.Semantics
 import Koit.BPF.Interp
 import Koit.BPF.Print
 import Koit.BPF.Wf
+import Koit.Interface.Interface
+import Koit.Interface.Print
 import Koit.Compile.Fold
 import Koit.Compile.Lower
 import Koit.Compile.Inline
@@ -50,5 +56,6 @@ import Koit.Compile.Alloc
 import Koit.Compile.Encode
 import Koit.Compile.Asm
 import Koit.Compile.Compile
+import Koit.Compile.ObjectJson
 import Koit.Compile.Shape
 import Koit.Compile.Rules

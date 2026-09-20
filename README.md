@@ -50,11 +50,12 @@ values, the positions of fallible operations, exits) is done and whose
 facts, entailment, effects, and resources are sessions 3 and 4; the
 Core interpreter follows; the C backend and the kernel interface's
 transcriber are the phase after. `tests/run.sh` runs the corpus; `KOIT_STAGE=check`
-runs the checker over it. The stage-1 kernel interface, the tables of
-section 13 for `xdp`, `tc`, and `syscall`, is `Koit/Prelude/Stage1.lean`
-over the row types of `Koit/Prelude/Tables.lean`; the module becomes
-`Koit/Interface/` with the split into a koit side and a transcribed
-kernel side in session 8. The checker is
+runs the checker over it. The kernel interface, the tables of section
+13 for `xdp`, `tc`, and `syscall`, is `Koit/Interface/`: the koit side
+in `KoitSide.lean`, the kernel side per tag under `Kernel/`, written
+by `tools/transcribe/transcribe.py` from a Linux tree and never
+edited, and their join with its checks in `Join.lean`, run at build
+time by `Interface.lean`. The checker is
 `Koit/Check/` (one judgment: `Env`, `Types`, `Expr`, `Stmt`, `Decl`,
 and `Rules` for the judgment as a proposition); the refinement layer
 (`Koit/Facts/`) and the effect layer (`Koit/Effects/`) are its next

@@ -22,7 +22,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (tU32 tU64 AcqArg)
+open Koit.Interface (tU32 tU64 AcqArg)
 open Koit.Facts (Origin Facts Fact Scope)
 open Koit.Effects (Eff Effs Conflict Held HeldEntry)
 
@@ -55,7 +55,7 @@ def structForLiteral (env : Env) (span : Span) (declared : Option Ty)
        "
   | none =>
     let mut found : List TypeDecl := []
-    for d in env.types ++ env.prelude.types do
+    for d in env.types ++ env.interface.types do
       match ← env.norm d.ty with
       | .struct _ fs =>
         if fs.map (·.name) == names then found := found ++ [d]
@@ -83,10 +83,10 @@ def refinementFacts (env : Env) : List Fact :=
     | _ => none
 
 /-- Whether a call may write shared state: a function of the unit, or
-a prelude call with the `call` effect. -/
+a interface call with the `call` effect. -/
 def callKills (env : Env) (f : String) : Bool :=
   if (env.fn? f).isSome then true
-  else match env.prelude.call? f with
+  else match env.interface.call? f with
     | some row => row.effects.any fun
       | .call => true
       | _ => false
@@ -231,15 +231,15 @@ end
 
 /-! ### Guards -/
 
-/-- Whether a call has the `resize` effect: a prelude row that says
+/-- Whether a call has the `resize` effect: a interface row that says
 so, or a function of the unit whose summary has it. -/
 def resizes (env : Env) (f : String) : Bool :=
-  match env.prelude.call? f with
+  match env.interface.call? f with
   | some row => (Effs.ofCore row.effects).has .resize
   | none => ((env.fnEffects.lookup f).map (·.has .resize)).getD false
 
 /-- The call as the programmer names it: `adjust_head` for the
-prelude's `pkt.adjust_head`. -/
+interface's `pkt.adjust_head`. -/
 def callSpelling (f : String) : String :=
   if f.startsWith "pkt." then (f.drop 4).toString else f
 
@@ -723,7 +723,7 @@ def holdEntry (env : Env) (K : Ctx) (isCall : Bool) (acq : Fallible) : Facts :=
 
 /-- The context of a `hold` body: the acquisition's facts, and the
 resource pushed onto the held set with the name it binds. -/
-def holdCtx (env : Env) (K : Ctx) (span : Span) (row : Prelude.ResourceRow)
+def holdCtx (env : Env) (K : Ctx) (span : Span) (row : Interface.ResourceRow)
     (x : Option String) (acq : Fallible) : Ctx :=
   { K with facts := holdEntry env K (row.arg == .call) acq,
            held := { row, name := x, what := acqSpelling acq, span } :: K.held }
@@ -855,7 +855,7 @@ def writesOf (env : Env) (K : Ctx) (p : Place) : M Effs := do
 
 /-- The effects of a call: a function of the unit contributes its
 summary instantiated on the arguments, the writes through its `ref`
-and `view` parameters becoming writes to what was passed; a prelude
+and `view` parameters becoming writes to what was passed; a interface
 call contributes its row, with the writes of `copy`, `fill`,
 `insert`, and `delete` from their place or map argument. -/
 def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
@@ -875,7 +875,7 @@ def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
           R := R.add (← pktWrite env K q lo hi)
       | e => R := R.add e
     return R
-  match env.prelude.call? f with
+  match env.interface.call? f with
   | some row =>
     let mut R := Effs.ofCore row.effects
     match f, args with
@@ -943,7 +943,7 @@ def checkHeld (env : Env) (K : Ctx) (span : Span) (E : Effs) : M Unit := do
 
 /-- A resource acquired while an instance of it is held, when its row
 does not nest. -/
-def checkNesting (K : Ctx) (span : Span) (row : Prelude.ResourceRow) :
+def checkNesting (K : Ctx) (span : Span) (row : Interface.ResourceRow) :
     M Unit := do
   if let some h := K.held.nestingConflict row then
     err span s!"{row.describe} cannot be held inside another: `hold \
@@ -1042,9 +1042,12 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     unless info.mutable do
       match p, info.origin with
       | .field _ _ f, .ctx =>
+        let row := env.kind.get!
+        let writable := (row.ctx.filter (·.writable)).map (·.name)
         err span s!"the context field `{f}` is not writable in \
-          {article (env.kind.map (·.name)).get!} \
-          `{(env.kind.map (·.name)).get!}` program"
+          {article row.name} `{row.name}` program; \
+          {if writable.isEmpty then "none of its fields is" else
+            "the writable fields are " ++ ", ".intercalate writable}"
       | _, _ =>
         err span s!"`{p.print}` is immutable; declare it with `var` to \
           assign to it"
@@ -1151,7 +1154,7 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     -- (Hold): the body under the resource, which its row must allow
     -- to nest; `move` consistency comes with ownership
     let b ← fallibleTy env K acq
-    let row ← match env.prelude.resource? r with
+    let row ← match env.interface.resource? r with
       | some row => pure row
       | none => err span s!"`{r}` has no row in the resource table"
     match row.fails, els with

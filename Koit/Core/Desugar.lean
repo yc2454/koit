@@ -2,12 +2,12 @@ import Koit.Syntax.AST
 import Koit.Syntax.Print
 import Koit.Core.Syntax
 import Koit.Core.Print
-import Koit.Prelude.Tables
+import Koit.Interface.Rows
 
 /-!
 Desugaring, surface to Core: the syntactic rewrite of each surface
 construct into its Core form. It is a total
-function over the unit's declarations and the prelude tables, and it
+function over the unit's declarations and the interface tables, and it
 uses no types: what needs a type stays in Core (functions, constant
 conditionals, `for`, and a binding whose right side is a place).
 
@@ -33,13 +33,13 @@ checker reports the error at the source line. Fresh names contain
 namespace Koit.Core
 
 open Koit (Span)
-open Koit.Prelude (KindRow)
+open Koit.Interface (KindRow)
 
 namespace Desugar
 
-/-- What the desugaring reads from the unit and the prelude. -/
+/-- What the desugaring reads from the unit and the interface. -/
 structure Info where
-  prelude   : Prelude
+  interface   : Interface
   types     : List String
   maps      : List (String × Syntax.MapType)
   fns       : List Syntax.FnDecl
@@ -134,7 +134,7 @@ def isValueField (c : Ctx) : Syntax.Expr → Bool
 for an acquisition. -/
 def kindOf (c : Ctx) : Fallible → Kind
   | .acquire _ r .. =>
-    match c.info.prelude.resource? r with
+    match c.info.interface.resource? r with
     | some row => row.fails.getD .helper
     | none => .helper
   | f => f.kind?.getD .helper
@@ -201,7 +201,7 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
     | _ => return none
   | .tcall s (.var _ m) "reserve" ty [] => do
     -- the ring-buffer record's resource, from its row
-    match c.map? m, c.info.prelude.acquirer? "reserve" with
+    match c.map? m, c.info.interface.acquirer? "reserve" with
     | some _, some row =>
       return some (.op (.acquire s row.res "reserve" (some (← dTy c ty))
         [.map s m]))
@@ -212,13 +212,13 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
       | some (.ty (.opt ..)) =>
         return some (.op (.callopt s f (← args.mapM (dArg c))))
       | _ => return none
-    if let some row := c.info.prelude.call? f then
+    if let some row := c.info.interface.call? f then
       if let some r := row.acquires then
         return some (.op (.acquire s r f none (← args.mapM (dArg c))))
       if row.fails.isSome then
         return some (.op (.call s f (← args.mapM (dArg c))))
       return none
-    if let some row := c.info.prelude.acquirer? f then
+    if let some row := c.info.interface.acquirer? f then
       return some (.op (.acquire s row.res f none (← args.mapM (dArg c))))
     return none
   | .call s (.field _ (.var _ "pkt") n) args => do
@@ -235,7 +235,7 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
     return none
   | .var s f => do
     -- a scope-only resource, `hold rcu { }`
-    match c.info.prelude.acquirer? f with
+    match c.info.interface.acquirer? f with
     | some row => return some (.op (.acquire s row.res f none []))
     | none => return none
   | _ => return none
@@ -294,7 +294,7 @@ partial def dExpr (c : Ctx) (e : Syntax.Expr) : M Expr := do
     return .invalid s "a struct literal appears only as the initializer \
       of `let` or `var`"
 
-/-- The name a call's callee denotes: a function, a prelude call, or
+/-- The name a call's callee denotes: a function, a interface call, or
 a method on `pkt` or a map spelled with its receiver. -/
 partial def calleeName (c : Ctx) : Syntax.Expr → M String
   | .var _ f => pure f
@@ -314,7 +314,7 @@ partial def callArgs (c : Ctx) : Syntax.Expr → M (List Arg)
 partial def dArg (c : Ctx) (e : Syntax.Expr) : M Arg := do
   match e with
   | .var s m =>
-    -- a map, a local place, or a constant of the unit or prelude
+    -- a map, a local place, or a constant of the unit or interface
     if (c.map? m).isSome then return .map s m
     if c.isLocal m then return .place (.var s m)
     return .val (.var s m)
@@ -515,10 +515,21 @@ partial def dStmts (c : Ctx) : List Syntax.Stmt → M (List Stmt)
         let s' : Stmt := .hold span r name f (← dBlock c' body) els
         return s' :: (← dStmts c rest)
       | none =>
-        let s' : Stmt := .invalid acq.span s!"`{acq.print}` is not a \
-          resource acquisition: the rows of the resource table are \
-          `lock(p)`, `rcu`, `preempt_off`, `irq_off`, `rb.reserve<T>()`, \
-          `sk_lookup_tcp(t)`, and `sk_lookup_udp(t)`"
+        let pre := c.info.interface
+        let head := match acq with
+          | .call _ (.var _ f) _ | .var _ f => f
+          | _ => acq.print
+        let msg := match pre.missing? head with
+          | some why => s!"`{head}` is not on kernel {pre.kernel}: {why}"
+          | none =>
+            let rows := pre.resources.flatMap fun r => r.acquirers.map fun a =>
+              match r.arg with
+              | .place _ => s!"`{a}(p)`"
+              | .scope => s!"`{a}`"
+              | .call => if a == "reserve" then "`rb.reserve<T>()`" else s!"`{a}(t)`"
+            s!"`{acq.print}` is not a resource acquisition on kernel {pre.kernel}: \
+              the rows of the resource table are {", ".intercalate rows}"
+        let s' : Stmt := .invalid acq.span msg
         return s' :: (← dStmts c rest)
     | .check span cond tail =>
       let p ← dExpr c cond
@@ -703,7 +714,7 @@ def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
   return (table, problems)
 
 def dProgram (info : Info) (p : Syntax.Program) : M Program := do
-  let c : Ctx := { info, kind := info.prelude.kind? p.kind }
+  let c : Ctx := { info, kind := info.interface.kind? p.kind }
   let (verdicts, preserved) ← dClauses c p.clauses
   let (verdicts, preserved) ← match p.implements.bind fun n =>
       info.contracts.find? (·.name == n) with
@@ -754,11 +765,11 @@ def dItem (info : Info) (u : CompUnit) : Syntax.Item → M CompUnit
 
 end Desugar
 
-/-- Desugars a unit against a prelude. Total: every surface unit has a
+/-- Desugars a unit against a interface. Total: every surface unit has a
 Core form, in which ill-formed constructs are `invalid` nodes. -/
-def desugar (pre : Prelude) (u : Syntax.CompUnit) : CompUnit :=
+def desugar (pre : Interface) (u : Syntax.CompUnit) : CompUnit :=
   let info : Desugar.Info :=
-    { prelude := pre,
+    { interface := pre,
       types := u.items.filterMap fun
         | .type _ n _ => some n
         | _ => none,

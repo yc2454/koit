@@ -1,7 +1,7 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
 import Koit.Check.Decl
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on ownership: `move` consumes its name on the path, the two
@@ -15,7 +15,7 @@ private def chk (s : String) : Except Diag Unit :=
   match parse s with
   | .error e => .error { span := e.span, msg := s!"parse: {e.msg}" }
   | .ok u =>
-    (checkUnit Prelude.stage1 (desugar Prelude.stage1 u)).map fun _ => ()
+    (checkUnit Interface.v6_8 (desugar Interface.v6_8 u)).map fun _ => ()
 
 private def ok (s : String) : Bool := (chk s).toOption.isSome
 

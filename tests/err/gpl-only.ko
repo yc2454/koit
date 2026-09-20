@@ -2,6 +2,6 @@
 // From spec/language.md 6: kernel functions marked GPL-only are
 // available only under a GPL-compatible license.
 program p : syscall {
-  let t = ktime()
+  printk("hello")
   return 0
 }

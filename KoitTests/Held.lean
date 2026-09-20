@@ -1,7 +1,7 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
 import Koit.Check.Decl
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the held set: the effects a row forbids while its resource
@@ -14,7 +14,7 @@ private def chk (s : String) : Except Diag Unit :=
   match parse s with
   | .error e => .error { span := e.span, msg := s!"parse: {e.msg}" }
   | .ok u =>
-    (checkUnit Prelude.stage1 (desugar Prelude.stage1 u)).map fun _ => ()
+    (checkUnit Interface.v7_0_rc1 (desugar Interface.v7_0_rc1 u)).map fun _ => ()
 
 private def ok (s : String) : Bool := (chk s).toOption.isSome
 

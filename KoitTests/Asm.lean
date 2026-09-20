@@ -1,5 +1,5 @@
 import Koit.Compile.Asm
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the LLVM-syntax printer and the byte lines: the spellings
@@ -11,7 +11,7 @@ these pin the forms it exercises least.
 open Koit Koit.Compile Koit.BPF
 
 private def asm (ins : Instr Reg Int) : String :=
-  match asmInstr Prelude.stage1 "xdp" ins with
+  match asmInstr Interface.v6_8 "xdp" ins with
   | .ok s => s
   | .error e => s!"error: {e}"
 

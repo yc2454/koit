@@ -1,13 +1,13 @@
 import Koit.Core.Syntax
 import Koit.Core.Print
-import Koit.Prelude.Tables
+import Koit.Interface.Rows
 import Koit.Facts.Entail
 import Koit.Effects.Held
 import Koit.Check.Diag
 
 /-!
 The typing environments: `G` as `Env`, with the unit's declarations,
-the prelude, the program kind, and the locals in scope; `K` as `Ctx`,
+the interface, the program kind, and the locals in scope; `K` as `Ctx`,
 with what the statement rules read from it (whether the context may
 fail, whether inside a loop, what `return` returns to), the facts `F`
 on the current path, the program's preserved regions, which every
@@ -19,7 +19,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Prelude (KindRow)
+open Koit.Interface (KindRow)
 open Koit.Facts (Origin Facts)
 open Koit.Effects (Effs Held)
 
@@ -33,9 +33,9 @@ structure Local where
   deriving Repr, Inhabited
 
 /-- The typing environment `G`. Lookup order for a name is locals, the unit's
-declarations, the verdicts of the program kind, then the prelude. -/
+declarations, the verdicts of the program kind, then the interface. -/
 structure Env where
-  prelude   : Prelude
+  interface   : Interface
   license   : Option String
   types     : List TypeDecl
   consts    : List ConstDecl
@@ -59,10 +59,10 @@ structure Env where
 namespace Env
 
 def type? (env : Env) (n : String) : Option TypeDecl :=
-  env.types.find? (·.name == n) <|> env.prelude.type? n
+  env.types.find? (·.name == n) <|> env.interface.type? n
 
 def const? (env : Env) (n : String) : Option ConstDecl :=
-  env.consts.find? (·.name == n) <|> env.prelude.const? n
+  env.consts.find? (·.name == n) <|> env.interface.const? n
 
 def config? (env : Env) (n : String) : Option ConfigDecl :=
   env.configs.find? (·.name == n)

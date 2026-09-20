@@ -1,10 +1,10 @@
 // From spec/language.md 23.3: a memcached cache in the shape of BMC.
 // Declarations marked "not in 23.3" are what the section relies on
-// from 23.2 or from the prelude; see spec/ISSUES.md, entry 2.
+// from 23.2 or from the interface; see spec/ISSUES.md, entry 2.
 
 // not in 23.3: from 23.2
 const ETH_P_IP = hton(0x0800)
-// not in 23.3: a prelude constant, the IANA protocol number
+// not in 23.3: a interface constant, the IANA protocol number
 const IPPROTO_UDP = 17
 
 const MAX_KEY   = 250

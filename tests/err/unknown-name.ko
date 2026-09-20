@@ -1,6 +1,6 @@
 // expect: unknown name `nothing`
 // Name resolution: every name is a local, a declaration of the unit,
-// a verdict of the program's kind, or a prelude name.
+// a verdict of the program's kind, or a interface name.
 program p : syscall {
   let x = nothing + 1
   return 0

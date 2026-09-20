@@ -13,3 +13,4 @@ import KoitTests.Lower
 import KoitTests.BPF
 import KoitTests.Shape
 import KoitTests.Asm
+import KoitTests.Interface

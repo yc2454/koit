@@ -22,8 +22,8 @@ def usage : String := String.intercalate "\n"
    "  parse   parse FILE and list its declarations",
    "  print   parse FILE and print it back as source",
    "  desugar parse FILE and print its Core",
-   "  check   type-check FILE against the prelude of kernel TAG",
-   "          (default and only prelude in stage 1: v7.0); with --smt,",
+   "  check   type-check FILE against the interface of kernel TAG",
+   "          (default v6.8; also v7.0-rc1); with --smt,",
    "          trace each accepted entailment as an SMT-LIB query on stderr",
    "  run     check FILE, then interpret its programs in order:",
    "          --packet HEX     the input packet (default: empty)",
@@ -40,11 +40,19 @@ def usage : String := String.intercalate "\n"
    "  emit    check FILE, then print the C of its LIR; with --bytecode,",
    "          the words of its programs in hex with their relocations;",
    "          --asm the bytecode in LLVM's syntax, --words the words as",
-   "          byte lines for llvm-mc; --cpu v3|v4 as for run",
+   "          byte lines for llvm-mc; --json the object for the tools",
+   "          under tools/, maps and types included; --cpu v3|v4 as",
+   "          for run",
    "  shape   compile FILE and test the shape of every program: each",
    "          test a conditional jump, each cast an instruction of the",
    "          table, each packet access and index under a test on its",
-   "          path; --cpu v3|v4 as for run"] ++ "\n"
+   "          path; --cpu v3|v4 as for run",
+   "  interface [--kernel TAG] [KIND]",
+   "          print what a program may refer to on kernel TAG: the",
+   "          kinds with their context fields and verdicts, the calls",
+   "          with their signatures, effects, and failure kinds, the",
+   "          resources, regions, slots, constants, and types; with",
+   "          KIND, only what that kind sees"] ++ "\n"
 
 /-- Reads a source file, warning when its name does not end in `.ko`. -/
 def readSource (path : String) : IO String := do
@@ -78,19 +86,20 @@ def notYet (cmd session : String) : IO UInt32 := do
   IO.eprintln s!"koitc {cmd}: not implemented yet ({session})"
   return 2
 
-/-- The preludes the compiler carries, one per kernel tag. -/
-def preludes : List Prelude := [Prelude.stage1]
+/-- The interfaces the compiler carries, one per kernel tag, the
+default first. -/
+def interfaces : List Interface := Interface.all
 
-/-- The prelude for a kernel tag; the first one when no tag is given. -/
-def preludeFor (tag : Option String) : IO (Option Prelude) := do
+/-- The interface for a kernel tag; the first one when no tag is given. -/
+def interfaceFor (tag : Option String) : IO (Option Interface) := do
   match tag with
-  | none => return preludes.head?
+  | none => return interfaces.head?
   | some t =>
-    match preludes.find? (·.kernel == t) with
+    match interfaces.find? (·.kernel == t) with
     | some p => return some p
     | none =>
-      IO.eprintln s!"koitc: no prelude for kernel {t}; available: \
-        {", ".intercalate (preludes.map (·.kernel))}"
+      IO.eprintln s!"koitc: no interface for kernel {t}; available: \
+        {", ".intercalate (interfaces.map (·.kernel))}"
       return none
 
 /-- Splits `[--kernel TAG] [--smt] FILE` into the tag, the flag, and
@@ -150,12 +159,13 @@ partial def emitOpts : List String → EmitOpts → EmitOpts
   | "--bytecode" :: r, o => emitOpts r { o with mode := "bytecode" }
   | "--asm" :: r, o => emitOpts r { o with mode := "asm" }
   | "--words" :: r, o => emitOpts r { o with mode := "words" }
+  | "--json" :: r, o => emitOpts r { o with mode := "json" }
   | "--cpu" :: "v3" :: r, o => emitOpts r { o with cpu := .v3 }
   | "--cpu" :: "v4" :: r, o => emitOpts r { o with cpu := .v4 }
   | r, o => { o with rest := r }
 
 /-- A checked unit lowered through passes A and B, and I when asked. -/
-def lowerUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
+def lowerUnit (pre : Interface) (core : Core.CompUnit) (checked : Check.Checked)
     (inline : Bool) : Except String LIR.CompUnit := do
   let lir ← Compile.lower pre (Compile.fold pre core checked)
   let lir := if inline then Compile.inline lir else lir
@@ -164,11 +174,11 @@ def lowerUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
 
 /-- A checked unit flattened: passes A, B, I, and C, with the
 machine's environment for each program. -/
-def flattenUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
+def flattenUnit (pre : Interface) (core : Core.CompUnit) (checked : Check.Checked)
     (cpu : BPF.Cpu) : Except String (List (BPF.Env BPF.VReg BPF.Label)) := do
   let lir ← lowerUnit pre core checked true
   let birs ← Compile.flatten pre cpu lir
-  let env : Check.Env := { prelude := pre, license := core.license.map (·.2),
+  let env : Check.Env := { interface := pre, license := core.license.map (·.2),
                            types := core.types, consts := core.consts,
                            configs := core.configs, maps := core.maps, fns := core.fns,
                            contracts := core.contracts }
@@ -179,7 +189,7 @@ def flattenUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
 
 /-- A checked unit allocated: pass D on the flattened unit, with the
 machine's environment for each program. -/
-def allocUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
+def allocUnit (pre : Interface) (core : Core.CompUnit) (checked : Check.Checked)
     (cpu : BPF.Cpu) : Except String (List (BPF.Env BPF.Reg Int)) := do
   let lir ← lowerUnit pre core checked true
   let birs ← Compile.flatten pre cpu lir
@@ -191,7 +201,7 @@ def allocUnit (pre : Prelude) (core : Core.CompUnit) (checked : Check.Checked)
     return X
 
 /-- A checked unit, or its diagnostic. -/
-def checkFile (file : String) (pre : Prelude) :
+def checkFile (file : String) (pre : Interface) :
     IO (Option (Core.CompUnit × Check.Checked)) := do
   let some u ← parseFile file | return none
   let core := Core.desugar pre u
@@ -228,15 +238,30 @@ def run (args : List String) : IO UInt32 := do
     | none => return 1
   | "desugar" :: rest => do
     let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
-    let some pre ← preludeFor tag | return 2
+    let some pre ← interfaceFor tag | return 2
     match ← parseFile file with
     | some u =>
       IO.print (Core.desugar pre u).print
       return 0
     | none => return 1
+  | "interface" :: rest => do
+    let (tag, kind) ← match rest with
+      | ["--kernel", t] => pure (some t, none)
+      | ["--kernel", t, k] | [k, "--kernel", t] => pure (some t, some k)
+      | [k] => pure (none, some k)
+      | [] => pure (none, none)
+      | _ => do IO.eprint usage; return 2
+    let some pre ← interfaceFor tag | return 2
+    if let some k := kind then
+      if (pre.kind? k).isNone then
+        IO.eprintln s!"koitc: kernel {pre.kernel} has no kind `{k}`; its kinds are \
+          {", ".intercalate (pre.kinds.map (·.name))}"
+        return 2
+    IO.print (pre.doc kind)
+    return 0
   | "check" :: rest => do
     let some (tag, smt, file) := kernelOpt rest | do IO.eprint usage; return 2
-    let some pre ← preludeFor tag | return 2
+    let some pre ← interfaceFor tag | return 2
     match ← parseFile file with
     | some u =>
       match Check.checkUnit pre (Core.desugar pre u) smt with
@@ -250,7 +275,7 @@ def run (args : List String) : IO UInt32 := do
   | "run" :: rest => do
     let some opts := runOpts rest {} | do IO.eprint usage; return 2
     let some file := opts.file | do IO.eprint usage; return 2
-    let some pre ← preludeFor opts.kernel | return 2
+    let some pre ← interfaceFor opts.kernel | return 2
     let some (core, checked) ← checkFile file pre | return 1
     let result ← if opts.bytecode then
         match allocUnit pre core checked opts.cpu with
@@ -286,7 +311,7 @@ def run (args : List String) : IO UInt32 := do
       | "--bytecode" :: rest => (true, rest)
       | rest => (false, rest)
     let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
-    let some pre ← preludeFor tag | return 2
+    let some pre ← interfaceFor tag | return 2
     let some (core, checked) ← checkFile file pre | return 1
     if bytecode then
       match allocUnit pre core checked .v3 with
@@ -317,7 +342,7 @@ def run (args : List String) : IO UInt32 := do
       | "--cpu" :: "v3" :: rest => (BPF.Cpu.v3, rest)
       | rest => (BPF.Cpu.v3, rest)
     let some (tag, _, file) := kernelOpt rest | do IO.eprint usage; return 2
-    let some pre ← preludeFor tag | return 2
+    let some pre ← interfaceFor tag | return 2
     let some (core, checked) ← checkFile file pre | return 1
     match lowerUnit pre core checked false, Compile.compile pre cpu core checked with
     | .ok openLir, .ok C =>
@@ -331,7 +356,7 @@ def run (args : List String) : IO UInt32 := do
   | "emit" :: rest => do
     let o := emitOpts rest {}
     let some (tag, _, file) := kernelOpt o.rest | do IO.eprint usage; return 2
-    let some pre ← preludeFor tag | return 2
+    let some pre ← interfaceFor tag | return 2
     let some (core, checked) ← checkFile file pre | return 1
     if o.mode == "c" then
       match lowerUnit pre core checked false with
@@ -343,7 +368,14 @@ def run (args : List String) : IO UInt32 := do
         return 1
     match Compile.compile pre o.cpu core checked with
     | .ok C =>
-      if o.mode == "bytecode" then
+      if o.mode == "json" then
+        let unit := (System.FilePath.mk file).fileStem.getD file
+        match Compile.unitJson pre unit o.cpu core C with
+        | .ok j => IO.println j.pretty
+        | .error m =>
+          IO.eprintln s!"{file}: {m}"
+          return 1
+      else if o.mode == "bytecode" then
         for ob in C.objects do IO.print (Compile.Object.print ob)
       else if o.mode == "words" then
         for ob in C.objects do IO.print (Compile.Object.printBytes ob)

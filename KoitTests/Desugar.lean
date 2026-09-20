@@ -1,6 +1,6 @@
 import Koit.Syntax.Parser
 import Koit.Core.Desugar
-import Koit.Prelude.Stage1
+import Koit.Interface.Interface
 
 /-!
 Checks on the desugaring over small units, one guard per rewrite:
@@ -14,7 +14,7 @@ open Koit Koit.Syntax Koit.Core
 /-- The Core body of the first program, printed. -/
 private def bodyOf (s : String) : Option String :=
   (parse s).toOption.bind fun u =>
-    match (desugar Prelude.stage1 u).programs with
+    match (desugar Interface.v6_8 u).programs with
     | p :: _ => some (Stmt.printBlock p.body 0)
     | [] => none
 
@@ -22,7 +22,7 @@ private def bodyOf (s : String) : Option String :=
 entry, bodies on one line. -/
 private def handlersOf (s : String) : Option (List String) :=
   (parse s).toOption.bind fun u =>
-    match (desugar Prelude.stage1 u).programs with
+    match (desugar Interface.v6_8 u).programs with
     | p :: _ => some (p.handlers.map fun h =>
         h.kind.print ++ ": " ++ " ".intercalate (h.body.map (·.print 0)))
     | [] => none
@@ -30,7 +30,7 @@ private def handlersOf (s : String) : Option (List String) :=
 /-- The first function, printed. -/
 private def fnOf (s : String) : Option String :=
   (parse s).toOption.bind fun u =>
-    match (desugar Prelude.stage1 u).fns with
+    match (desugar Interface.v6_8 u).fns with
     | f :: _ => some f.print
     | [] => none
 

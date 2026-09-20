@@ -17,14 +17,19 @@ it; a `raise` in a program body sets `reason` and jumps to the
 handler of its kind; a map read by direct value access is looked up
 once at entry with a null test that returns the kind's failure
 verdict, since C has no direct value access for a declared map; a
-frame is an aligned object and a pointer to it; the kernel functions
-are called through the templates of `kernelCall`, which add the
-arguments the helpers take and the source does not name.
+frame is an aligned object and a pointer to it; a kernel function is
+called by its row's correspondence, the layout of the kernel's
+arguments in terms of koit's, and declared at its number with the C
+prototype the kernel side transcribed, as are the context structs,
+each field pinned to its transcribed offset by a static assertion,
+so that the shim `koit.h` declares nothing the kernel states.
 -/
 
 namespace Koit.Compile
 
 open Koit.Core (Kind)
+open Koit.Interface (AbiArg CallRow)
+open Koit.Interface.Kernel (CtxStruct CtxField Helper Kfunc)
 
 namespace C
 
@@ -164,34 +169,55 @@ def kindIndex : Kind → Nat
 /-- Whether a function uses the status protocol. -/
 def statusFn (f : LIR.Fn) : Bool := f.fails || f.opt
 
-/-- The C context type and the kernel functions' templates per kind:
-the arguments the helpers take beyond the source's. -/
-def ctxType : String → String
-  | "xdp" => "struct xdp_md"
-  | "tc" => "struct __sk_buff"
-  | _ => "void"
+/-- The C context struct of a kind: the uapi struct the kernel side
+names for its program type. -/
+def ctxType (pre : Interface) (kind : String) : String :=
+  match (pre.kind? kind).bind fun r => (pre.side.progType? r.progType).bind (·.ctx) with
+  | some s => s
+  | none => "void"
 
-/-- The C call of a kernel function row, by the row's name. -/
-def kernelCall (kind : String) (h : String) (args : List String) : String :=
+/-- A C type of the kernel's prototypes as the shim spells it: every
+pointer is `void *`, since the emitted C never dereferences one. -/
+def kernelCTy (t : String) : String :=
+  if (t.splitOn "*").length > 1 then "void *" else t
+
+/-- The C call of a kernel function row, from its correspondence in
+the kind: the kernel's arguments laid out from koit's, the context,
+the constants the source does not name, and the size of a place
+argument as `sizeof` of its C type. An inline row prints its C form. -/
+def kernelCall (pre : Interface) (types : List Core.TypeDecl) (kind : String) (row : CallRow)
+    (args : List String) : String :=
   let a (i : Nat) := (args[i]?).getD "0"
-  match h with
-  | "redirect" => s!"bpf_redirect({a 0}, 0)"
-  | "pkt.adjust_head" =>
-    if kind == "xdp" then s!"bpf_xdp_adjust_head(ctx, {a 0})"
-    else s!"bpf_skb_change_head(ctx, {a 0}, 0)"
-  | "pkt.adjust_tail" =>
-    if kind == "xdp" then s!"bpf_xdp_adjust_tail(ctx, {a 0})"
-    else s!"bpf_skb_change_tail(ctx, {a 0}, 0)"
-  | "pkt.len" => "((u64)((long)ctx->data_end - (long)ctx->data))"
-  | "sk_lookup_tcp" =>
-    s!"bpf_sk_lookup_tcp(ctx, {a 0}, sizeof(struct koit_sock_tuple), BPF_F_CURRENT_NETNS, 0)"
-  | "sk_lookup_udp" =>
-    s!"bpf_sk_lookup_udp(ctx, {a 0}, sizeof(struct koit_sock_tuple), BPF_F_CURRENT_NETNS, 0)"
-  | "sk_release" => s!"bpf_sk_release({a 0})"
-  | "ktime" => "bpf_ktime_get_ns()"
-  | "csum_add" => s!"koit_csum_add({a 0}, {a 1})"
-  | "csum_fold" => s!"koit_csum_fold({a 0})"
-  | h => s!"{h}({", ".intercalate args})"
+  let byLayout (name : String) (abi : List AbiArg) : String :=
+    let params := match row.sig with
+      | .fn ps _ => ps
+      | .builtin => []
+    let one : AbiArg → String
+      | .arg i => a i
+      | .ctx => "ctx"
+      | .const k => if k < 0 then s!"({k})" else toString k
+      | .fmt => "0"
+      | .argSize i =>
+        match params[i]? with
+        | some p =>
+          let pointee := match p.ty with
+            | .ref _ t | .view _ t => t
+            | t => t
+          s!"sizeof({(cdecl types pointee "").trimAsciiEnd})"
+        | none => "0"
+    s!"{name}({", ".intercalate (abi.map one)})"
+  match row.implIn kind with
+  | .helper id abi =>
+    match pre.side.helpers.find? (·.id == id) with
+    | some h => byLayout s!"bpf_{h.name}" abi
+    | none => s!"/* no helper {id} on {pre.kernel} */ 0"
+  | .kfunc name abi => byLayout name abi
+  | .inline =>
+    match row.name with
+    | "pkt.len" => "((u64)((long)ctx->data_end - (long)ctx->data))"
+    | "csum_add" => s!"koit_csum_add({a 0}, {a 1})"
+    | "csum_fold" => s!"koit_csum_fold({a 0})"
+    | h => s!"{h}({", ".intercalate args})"
 
 /-- The C calls that enter and leave a scope resource. -/
 def scopeCall (r : Core.Resource) (enter : Bool) : String :=
@@ -207,8 +233,11 @@ def scopeCall (r : Core.Resource) (enter : Bool) : String :=
 
 /-- What the printer knows while printing a body. -/
 structure PCtx where
+  pre    : Interface
   types  : List Core.TypeDecl
   fns    : List LIR.Fn
+  /-- The program's kind, or empty in a function, whose calls take
+  each row's default correspondence. -/
   kind   : String
   /-- Inside a function using the status protocol. -/
   status : Bool
@@ -373,11 +402,14 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
       if fetch then return res (.int s w) call
       else return (line s!"(void){call};", c)
   | .kernel _ x h args =>
-    let call := kernelCall c.kind h (args.map (cexpr (!c.program)))
+    let some row := c.pre.call? h
+      | return (line s!"/* unknown kernel function {h} */", c)
+    let call := kernelCall c.pre c.types c.kind row (args.map (cexpr (!c.program)))
     match x with
     | some x =>
-      let t := match h with
-        | "sk_lookup_tcp" | "sk_lookup_udp" => LIR.Ty.ptr
+      -- a row yielding a reference or an owned object yields a pointer
+      let t := match row.sig with
+        | .fn _ (some (.own ..)) | .fn _ (some (.ref ..)) | .fn _ (some (.view ..)) => LIR.Ty.ptr
         | _ => .i64
       if t == .ptr then return (line s!"void *{cname x} = {call};", bind x t)
       else return (line s!"s64 {cname x} = (s64){call};", bind x t)
@@ -433,7 +465,7 @@ partial def boundedFns (fns : List LIR.Fn) (acc : List String := []) : List Stri
     else if mentionsBounds acc f.body then some f.name else none
   if acc'.isEmpty then acc else boundedFns fns (acc ++ acc')
 
-def cfn (types : List Core.TypeDecl) (fns : List LIR.Fn) (bounded : List String)
+def cfn (pre : Interface) (types : List Core.TypeDecl) (fns : List LIR.Fn) (bounded : List String)
     (f : LIR.Fn) : PM String := do
   let params := f.params.map fun p =>
     if p.ty == .ptr then s!"void *{cname p.name}" else s!"{cty p.ty} {cname p.name}"
@@ -444,7 +476,7 @@ def cfn (types : List Core.TypeDecl) (fns : List LIR.Fn) (bounded : List String)
   let ret := if statusFn f then "int" else match f.ret with
     | some t => cty t
     | none => "void"
-  let c : PCtx := { types, fns, kind := "", status := statusFn f, program := false,
+  let c : PCtx := { pre, types, fns, kind := "", status := statusFn f, program := false,
                     defaultVerdict := "0", bounded,
                     Γ := f.params.map fun p => (p.name, p.ty) }
   let (body, _) ← cstmts c 4 f.body
@@ -452,7 +484,7 @@ def cfn (types : List Core.TypeDecl) (fns : List LIR.Fn) (bounded : List String)
   return s!"static __always_inline {ret} {cname f.name}({ps})\n\{\n" ++
     "\n".intercalate body ++ "\n}\n"
 
-def cprogram (pre : Prelude) (u : LIR.CompUnit) (p : LIR.Program) : PM String := do
+def cprogram (pre : Interface) (u : LIR.CompUnit) (p : LIR.Program) : PM String := do
   let row := pre.kind? p.kind
   let hasPkt := (row.map (·.hasPkt)).getD false
   let vt := match row.map (·.verdictTy) with
@@ -465,10 +497,10 @@ def cprogram (pre : Prelude) (u : LIR.CompUnit) (p : LIR.Program) : PM String :=
       | .value v => Machine.toNatMod v (LIR.Ty.width vt)
     | none => 0
   let dv := clit (LIR.Ty.width vt) dflt
-  let c : PCtx := { types := u.types, fns := u.fns, kind := p.kind, status := false,
+  let c : PCtx := { pre, types := u.types, fns := u.fns, kind := p.kind, status := false,
                     program := true, defaultVerdict := dv, bounded := boundedFns u.fns,
                     Γ := [("reason", .u32)] }
-  let ctxTy := ctxType p.kind
+  let ctxTy := ctxType pre p.kind
   let direct := (directMapsIn u.direct (p.body ++ p.handlers.flatMap (·.body))).eraseDups
   let lookups := direct.flatMap fun m =>
     [s!"    void *{cname m}__val = bpf_map_lookup_elem(&{cname m}, &koit_zero);",
@@ -509,6 +541,13 @@ partial def orderedTypes (types : List Core.TypeDecl) : List Core.TypeDecl :=
       else go (done ++ ready) (pending.filter fun d => !ready.any (·.name == d.name)) fuel
   go [] types types.length
 
+/-- The kernel's map type of a map declaration, by its enum name. -/
+def mapTypeName : Core.MapKind → String
+  | .array .. => "BPF_MAP_TYPE_ARRAY"
+  | .percpu .. => "BPF_MAP_TYPE_PERCPU_ARRAY"
+  | .hash .. => "BPF_MAP_TYPE_HASH"
+  | .ringbuf .. => "BPF_MAP_TYPE_RINGBUF"
+
 def cmap (types : List Core.TypeDecl) (d : Core.MapDecl) : String :=
   let count (n : Core.Expr) : String := match n with
     | .lit _ v _ => toString v
@@ -533,25 +572,77 @@ def cmap (types : List Core.TypeDecl) (d : Core.MapDecl) : String :=
   match d.kind with
   | .array n v =>
     typeDef valueName v ++
-    s!"struct \{ __uint(type, BPF_MAP_TYPE_ARRAY); __uint(max_entries, {count n}); \
+    s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); \
       __type(key, u32); __type(value, {typeRef valueName v}); } {mname} SEC(\".maps\");\n"
   | .percpu n v =>
     typeDef valueName v ++
-    s!"struct \{ __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries, {count n}); \
+    s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); \
       __type(key, u32); __type(value, {typeRef valueName v}); } {mname} SEC(\".maps\");\n"
   | .hash n k v =>
     typeDef keyName k ++ typeDef valueName v ++
-    s!"struct \{ __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, {count n}); \
+    s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); \
       __type(key, {typeRef keyName k}); __type(value, {typeRef valueName v}); } {mname} \
       SEC(\".maps\");\n"
   | .ringbuf n =>
-    s!"struct \{ __uint(type, BPF_MAP_TYPE_RINGBUF); __uint(max_entries, {count n}); } \
+    s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); } \
       {mname} SEC(\".maps\");\n"
+
+/-- Whether the text calls a C function by name. -/
+def calls (text name : String) : Bool := (text.splitOn s!"{name}(").length > 1
+
+/-- The declarations the kernel side supplies for a unit's C: the
+context struct of each kind its programs have, laid out from the
+transcribed offsets with a static assertion per field; the helpers
+the body calls, each at its number with its transcribed prototype;
+and the kfuncs it calls as `__ksym` externs. The shim's `bpf_printk`
+expands to `bpf_trace_printk`, which is declared whenever the macro
+is used. -/
+def kernelDecls (pre : Interface) (u : LIR.CompUnit) (body : String) : String :=
+  let kinds := (u.programs.map (·.kind)).eraseDups
+  let ctxs := kinds.filterMap fun k =>
+    (pre.kind? k).bind fun r => (pre.side.progType? r.progType).bind fun t =>
+      t.ctx.bind pre.side.ctx?
+  let ctxDecl (s : CtxStruct) : String :=
+    let field (f : CtxField) (i : Nat) : String :=
+      let name := if f.name == "" then s!"koit_pad_{i}" else f.name
+      let decl := match f.size with
+        | 1 => s!"u8 {name}" | 2 => s!"u16 {name}" | 4 => s!"u32 {name}" | 8 => s!"u64 {name}"
+        | n => s!"u8 {name}[{n}]"
+      s!"\t{decl};\n"
+    let asserts := s.fields.filter (·.name != "") |>.map fun f =>
+      s!"_Static_assert(__builtin_offsetof({s.name}, {f.name}) == {f.offset}, \"{s.name}.{f.name}\");\n"
+    s!"/* {s.name}, include/uapi/linux/bpf.h of {pre.kernel} */\n{s.name} \{\n" ++
+      String.join (s.fields.zipIdx.map fun (f, i) => field f i) ++ "};\n" ++
+      s!"_Static_assert(sizeof({s.name}) == {s.size}, \"{s.name}\");\n" ++ String.join asserts
+  let helperDecl (h : Helper) : String :=
+    let args := h.args.map fun (t, n) => if t == "..." then "..." else s!"{kernelCTy t} {n}"
+    let ps := if args.isEmpty then "void" else ", ".intercalate args
+    s!"static {kernelCTy h.ret} (*bpf_{h.name})({ps}) = (void *){h.id};\n"
+  let used (h : Helper) : Bool :=
+    calls body s!"bpf_{h.name}" || (h.name == "trace_printk" && calls body "bpf_printk")
+  let helpers := pre.side.helpers.filter used
+  let kfuncDecl (k : Kfunc) : String :=
+    let args := k.args.map fun (t, n) => s!"{kernelCTy t} {n}"
+    let ps := if args.isEmpty then "void" else ", ".intercalate args
+    s!"extern {kernelCTy (if k.ret == "" then "void" else k.ret)} {k.name}({ps}) __ksym;\n"
+  let kfuncs := pre.side.kfuncs.filter fun k => calls body k.name
+  let mapTypes := pre.side.mapTypes.filter fun (n, _) =>
+    (u.maps.map fun d => C.mapTypeName d.kind).contains n
+  let values := ["BPF_ANY"].filterMap fun n => (pre.side.value? n).map (n, ·)
+  s!"/* enum bpf_map_type and the flags, include/uapi/linux/bpf.h of {pre.kernel} */\nenum \{\n" ++
+  String.join (mapTypes.map fun (n, v) => s!"\t{n} = {v},\n") ++
+  String.join (values.map fun (n, v) => s!"\t{n} = {v},\n") ++ "};\n\n" ++
+  String.join (ctxs.map (· |> ctxDecl |>.push '\n')) ++
+  (if helpers.isEmpty then "" else
+    s!"/* the helpers, by their numbers in enum bpf_func_id of {pre.kernel} */\n" ++
+    String.join (helpers.map helperDecl) ++ "\n") ++
+  (if kfuncs.isEmpty then "" else
+    s!"/* the kfuncs of {pre.kernel} */\n" ++ String.join (kfuncs.map kfuncDecl) ++ "\n")
 
 end C
 
 /-- The C of a unit's LIR, before inlining. -/
-def emitC (pre : Prelude) (u : LIR.CompUnit) : String :=
+def emitC (pre : Interface) (u : LIR.CompUnit) : String :=
   let types := C.orderedTypes (u.types.filter fun d => match d.ty with
     | .struct _ (_ :: _) => true
     | _ => false)
@@ -563,16 +654,17 @@ def emitC (pre : Prelude) (u : LIR.CompUnit) : String :=
     | _ => ""
   let go : C.PM (List String × List String) := do
     let bounded := C.boundedFns u.fns
-    let fns ← u.fns.mapM (C.cfn u.types u.fns bounded)
+    let fns ← u.fns.mapM (C.cfn pre u.types u.fns bounded)
     let progs ← u.programs.mapM (C.cprogram pre u)
     return (fns, progs)
   let ((fns, progs), _) := go.run 0
+  let body := String.join (fns.map (· ++ "\n")) ++ String.join (progs.map (· ++ "\n"))
   "/* emitted by koitc from LIR; the total-arithmetic shim is koit.h */\n" ++
   "#include \"koit.h\"\n\n" ++
+  C.kernelDecls pre u body ++
   String.join (typeDefs.map (· ++ "\n")) ++
   String.join (u.maps.map fun d => C.cmap u.types d ++ "\n") ++
-  String.join (fns.map (· ++ "\n")) ++
-  String.join (progs.map (· ++ "\n")) ++
+  body ++
   s!"char _license[] SEC(\"license\") = \"{u.license.getD "GPL"}\";\n"
 
 end Koit.Compile

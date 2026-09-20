@@ -44,10 +44,10 @@ def run (X : Env ρ τ) (K : Kernel) (m : State ρ) : Nat → Except Refusal (Ha
 /-- A unit's programs run in order over one map state on the machine,
 each from its own environment, reporting as Core's `runUnit` does so
 that the runner compares the levels line by line. -/
-def runUnit (pre : Prelude) (core : Core.CompUnit) (progs : List (Env ρ τ))
+def runUnit (pre : Interface) (core : Core.CompUnit) (progs : List (Env ρ τ))
     (packet : ByteArray) (ctx : List (String × Nat)) (only : Option String) (fuel : Nat) :
     Except String (List Core.Sem.Report × List String) := do
-  let env : Check.Env := { prelude := pre, license := core.license.map (·.2),
+  let env : Check.Env := { interface := pre, license := core.license.map (·.2),
                            types := core.types, consts := core.consts,
                            configs := core.configs, maps := core.maps, fns := core.fns,
                            contracts := core.contracts }

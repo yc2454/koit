@@ -30,7 +30,7 @@ namespace Koit.Core.Sem
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env UnitOk)
-open Koit.Prelude (KindRow CallRow ResourceRow AcqArg Sig)
+open Koit.Interface (KindRow CallRow ResourceRow AcqArg Sig)
 open Koit.Machine (Kernel toNatMod wrap zeros arith compare bswap)
 
 /-- What an expression or a fallible operation produces. -/
@@ -83,10 +83,10 @@ inductive EvalExpr (K : Kernel) : State → Expr → Res Val → State → Prop
       st.local? x = none → st.env.consts.find? (·.name == x) = none →
       st.env.config? x = none → st.kind.verdicts.lookup x = some n →
       EvalExpr K st (.var s x) (.ok (Val.u32 n)) st
-  | varPrelude {st s x d r st'} :
+  | varInterface {st s x d r st'} :
       st.local? x = none → st.env.consts.find? (·.name == x) = none →
       st.env.config? x = none → st.kind.verdicts.lookup x = none →
-      st.env.prelude.const? x = some d → EvalConst K st d r st' →
+      st.env.interface.const? x = some d → EvalConst K st d r st' →
       EvalExpr K st (.var s x) r st'
   /-- The total arithmetic of the kernel, the operands meeting at one
   width. -/
@@ -272,18 +272,18 @@ inductive Call (K : Kernel) : State → Span → String → List Arg → Res (Op
   | fn {st s f args d r st1} :
       st.env.fn? f = some d → ExecFn K st d args r st1 → Call K st s f args r st1
   | builtin {st s f args row r st1} :
-      st.env.fn? f = none → st.env.prelude.call? f = some row → row.sig = .builtin →
+      st.env.fn? f = none → st.env.interface.call? f = some row → row.sig = .builtin →
       Builtin K st s f args r st1 → Call K st s f args r st1
   /-- A kernel function: what the kernel does on the arguments,
   through the machine, which appends the trace event and pushes or
   pops the held stack per the row. -/
   | helper {st s f args row params ret vs v st1 st2} :
-      st.env.fn? f = none → st.env.prelude.call? f = some row → row.sig = .fn params ret →
+      st.env.fn? f = none → st.env.interface.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 →
       prim (kernelCall K row params ret vs) st1 = .ok (some v, st2) →
       Call K st s f args (.ok v) st2
   | helperArgsAbort {st s f args row params ret a st1} :
-      st.env.fn? f = none → st.env.prelude.call? f = some row → row.sig = .fn params ret →
+      st.env.fn? f = none → st.env.interface.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.error a) st1 → Call K st s f args (.error a) st1
 
 /-- The builtins: `copy`, `fill`, `insert`, `delete`, `printk`. -/
@@ -423,25 +423,25 @@ inductive ExecFall (K : Kernel) :
   /-- A fallible helper: the kernel's answer through the machine,
   with `errno` on a failure. -/
   | callOk {st s f args row params ret vs v st1 st2} :
-      st.env.prelude.call? f = some row → row.sig = .fn params ret →
+      st.env.interface.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 →
       prim (kernelCall K row params ret vs) st1 = .ok (some v, st2) →
       ExecFall K st (.call s f args) (.ok (some (v.map bindingOf))) st2
   | callFailed {st s f args row params ret vs st1 st2} :
-      st.env.prelude.call? f = some row → row.sig = .fn params ret →
+      st.env.interface.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 →
       prim (kernelCall K row params ret vs) st1 = .ok (none, st2) →
       ExecFall K st (.call s f args) (.ok none) st2
   | callBuiltinOk {st s f args row v st1} :
-      st.env.prelude.call? f = some row → row.sig = .builtin →
+      st.env.interface.call? f = some row → row.sig = .builtin →
       Builtin K st s f args (.ok v) st1 →
       ExecFall K st (.call s f args) (.ok (some (v.map .val))) st1
   | callBuiltinFailed {st s f args row r st1} :
-      st.env.prelude.call? f = some row → row.sig = .builtin →
+      st.env.interface.call? f = some row → row.sig = .builtin →
       Builtin K st s f args (.error (.raise .helper r)) st1 →
       ExecFall K st (.call s f args) (.ok none) { st1 with errno := wrap true 32 r }
   | callAbort {st s f args row params ret a st1} :
-      st.env.prelude.call? f = some row → row.sig = .fn params ret →
+      st.env.interface.call? f = some row → row.sig = .fn params ret →
       EvalArgs K st params args (.error a) st1 → ExecFall K st (.call s f args) (.error a) st1
   /-- A `T?` function: a value, or absence from a bare `return`. -/
   | callopt {st s f args d v st1} :
@@ -462,24 +462,24 @@ inductive ExecFall (K : Kernel) :
   /-- (Hold-in) for a lock: the slot's place, then the lock taken on
   the machine, which refuses one while another is held. -/
   | acquirePlace {st s r f ty p row slot l obj st1 st2} :
-      st.env.prelude.resource? r = some row → row.arg = .place slot →
+      st.env.interface.resource? r = some row → row.arg = .place slot →
       EvalPlace K st p (.ok (.mem l)) st1 → l.heldObj = some obj →
       prim (op (Machine.lock row obj)) st1 = .ok ((), st2) →
       ExecFall K st (.acquire s r f ty [.place p]) (.ok (some none)) st2
   | acquireScope {st s r f ty row st1} :
-      st.env.prelude.resource? r = some row → row.arg = .scope →
+      st.env.interface.resource? r = some row → row.arg = .scope →
       prim (op (Machine.enter row)) st = .ok ((), st1) →
       ExecFall K st (.acquire s r f ty []) (.ok (some none)) st1
   /-- A ring-buffer record: a fresh kernel object of the record's
   size while the ring has room, held. -/
   | reserveOk {st s r sp m t row n id st1} :
-      st.env.prelude.resource? r = some row → row.arg = .call →
+      st.env.interface.resource? r = some row → row.arg = .call →
       prim (sizeOf t) st = .ok (n, st) →
       prim (op (Machine.reserve row m n)) st = .ok (some id, st1) →
       ExecFall K st (.acquire s r "reserve" (some t) [.map sp m])
         (.ok (some (some (.place { region := .kernel id, off := 0, ty := t })))) st1
   | reserveFull {st s r sp m t row n st1} :
-      st.env.prelude.resource? r = some row → row.arg = .call →
+      st.env.interface.resource? r = some row → row.arg = .call →
       prim (sizeOf t) st = .ok (n, st) →
       prim (op (Machine.reserve row m n)) st = .ok (none, st1) →
       ExecFall K st (.acquire s r "reserve" (some t) [.map sp m]) (.ok none)
@@ -487,11 +487,11 @@ inductive ExecFall (K : Kernel) :
   /-- An acquiring kernel function: its owned result, which the call
   through the machine has already pushed on the held stack. -/
   | acquireCall {st s r f args row l st1} :
-      st.env.prelude.resource? r = some row → row.arg = .call → f ≠ "reserve" →
+      st.env.interface.resource? r = some row → row.arg = .call → f ≠ "reserve" →
       ExecFall K st (.call s f args) (.ok (some (some (.place l)))) st1 →
       ExecFall K st (.acquire s r f none args) (.ok (some (some (.place l)))) st1
   | acquireCallFailed {st s r f args row st1} :
-      st.env.prelude.resource? r = some row → row.arg = .call → f ≠ "reserve" →
+      st.env.interface.resource? r = some row → row.arg = .call → f ≠ "reserve" →
       ExecFall K st (.call s f args) (.ok none) st1 →
       ExecFall K st (.acquire s r f none args) (.ok none) st1
 
@@ -756,10 +756,10 @@ abbrev KernelOk := Machine.KernelOk
 /-- The initial state of a program of a unit: any packet, any context
 values, the maps as some earlier program of the unit left them or
 fresh. -/
-def Initial (pre : Prelude) (u : CompUnit) (p : Program) (st : State) : Prop :=
+def Initial (pre : Interface) (u : CompUnit) (p : Program) (st : State) : Prop :=
   ∃ row packet ctx maps fuel,
     pre.kind? p.kind = some row ∧
-    st = initState { prelude := pre, license := u.license.map (·.2), types := u.types,
+    st = initState { interface := pre, license := u.license.map (·.2), types := u.types,
                      consts := u.consts, configs := u.configs, maps := u.maps,
                      fns := u.fns, contracts := u.contracts }
           row packet ctx maps fuel
@@ -769,7 +769,7 @@ program of a well-typed unit halts with a verdict from every initial
 state, and no run of it reaches an error. Stated now; the proof, by
 induction on the derivation with the typing judgment as the
 invariant, comes after the design settles. -/
-theorem safety (pre : Prelude) (u : CompUnit) (K : Kernel) :
+theorem safety (pre : Interface) (u : CompUnit) (K : Kernel) :
     KernelOk K → UnitOk pre u →
     ∀ p ∈ u.programs, ∀ st, Initial pre u p st →
       (∃ v st', ExecProgram K st p (.halt v) st') ∧

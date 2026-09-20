@@ -38,7 +38,7 @@ namespace Koit.Compile
 
 open Koit.Core (CmpOp)
 open Koit.BPF (Instr Src Cls AluOp Cmp VReg Label RegClass Cpu BIR Bytecode)
-open Koit.Prelude (KindRow)
+open Koit.Interface (KindRow)
 
 /-! ### L1, the tests -/
 
@@ -353,7 +353,7 @@ def LState.resized (st : LState) : LState :=
 
 /-- The analysis of one program. -/
 structure L3 where
-  pre  : Prelude
+  pre  : Interface
   kind : KindRow
   B    : BIR
 
@@ -601,7 +601,7 @@ def ShapeReport.print (r : ShapeReport) : List String :=
   let pre := if r.name.isEmpty then "" else s!"{r.name}: "
   (r.errors ++ r.lines).map (pre ++ ·)
 
-def shapeProgram (pre : Prelude) (p : LIR.Program) (B : BIR) (A : Bytecode) : ShapeReport :=
+def shapeProgram (pre : Interface) (p : LIR.Program) (B : BIR) (A : Bytecode) : ShapeReport :=
   let body := p.body ++ p.handlers.flatMap (·.body)
   let (e1, nTests, nA) := passL1 body B A
   let (e2, nCasts) := passL2 body B
@@ -619,7 +619,7 @@ def shapeProgram (pre : Prelude) (p : LIR.Program) (B : BIR) (A : Bytecode) : Sh
 
 /-- The check on a compiled unit: pass B on the LIR before inlining,
 then L1 to L3 on every program. -/
-def shapeUnit (pre : Prelude) (core : Core.CompUnit) (openLir : LIR.CompUnit)
+def shapeUnit (pre : Interface) (core : Core.CompUnit) (openLir : LIR.CompUnit)
     (C : Compiled) : List ShapeReport :=
   let (eB, markers, tests) := passB core openLir
   let unitLines := if eB.isEmpty then
