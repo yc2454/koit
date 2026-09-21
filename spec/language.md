@@ -36,7 +36,7 @@ re-derived the mechanisms against the kernel's own state
 12. Slot types: the storage side of M3 is a table like the acquisition
     side; `spinlock` is its one stage-1 row, not a keyword (sections
     5, 7, 11, 18.1).
-13. The kernel interface's six tables are specified: kinds, context fields,
+13. The kernel interface's seven tables are specified: kinds, context fields,
     calls, resources, regions, slots; the target kernel is a compiler
     input; `const` parameters; sleepable kinds as rows; the trusted
     columns (sections 6, 7, 12, 13, 16, 20).
@@ -345,7 +345,7 @@ comparisons, non-associative; `&&`; `||`.
 
 A file is one compilation unit and compiles to one object whose programs
 share the unit's maps. The kernel interface, header types, kernel
-function signatures, slot types, and the six tables of section 13, is
+function signatures, slot types, and the seven tables of section 13, is
 what the kernel offers a program of each kind as koit states it; the
 compiler carries one per kernel it can compile for, named by its
 `--kernel` option; stage 1 was written under the label `v7.0` with
@@ -478,6 +478,38 @@ protocol storage, dynptrs, iterators, and IRQ flags, lives in stack
 slots the verifier types; koit has no user type for those, because
 they are `hold`-bound names (section 11).
 
+**Enumeration types.** A kernel interface names finite sets of
+integers that mean something: the actions a program kind may return,
+protocol numbers, map flags, error codes. koit calls them enumeration
+types. An enumeration type is an opaque scalar supplied by the
+interface's enumeration table and named like any type. It has a width
+and a set of named constants, and its values are those constants and
+no others: it is data, so a place of one is read, written, compared,
+and refined, but arithmetic on it is a type error, and no cast
+converts to or from it, since a value of the underlying width becomes
+one only through the coercion of section 8.3. It is the same shape as
+a slot type, an opaque constructor whose meaning is a row, and it
+differs from one on a single column: a slot is not data and an
+enumeration is.
+
+| column | meaning |
+|---|---|
+| name, kernel name | the koit spelling and the enumeration the kernel declares |
+| width | the integer width its values occupy |
+| constants | the named values, each with its number |
+
+In this draft an enumeration is a value type and not a data type: it
+is a local, a parameter, or a result, and it is not a map value, a
+view, or a struct field. A stored one would be read without a test,
+and map contents are untrusted (P8); when storing one is wanted, the
+marked load of an enumeration field is the same shape as the marked
+load of a `where` field, with the row's constants as the predicate.
+
+Stage 1 has two rows, `XdpAction` for `enum xdp_action` and
+`TcAction` for the `TC_ACT_` constants, which are the verdict types of
+section 13. The extensions add the protocol and flag enumerations the
+calls take.
+
 **Arrays.** `T[n]` for constant `n`. Indexing demands `i < n` of an
 unsigned index.
 
@@ -606,6 +638,7 @@ The following are fallible and may appear only in the positions section
 | expression | result | failure kind |
 |---|---|---|
 | `e as {v: T \| P}` | `{v: T \| P}` | `bound` |
+| `e as E` for an enumeration `E`, `e` of its width | `E` | `bound` |
 | `pkt.view<T>(off)`, and `r.view<T>(off)` for any region `r` of dynamic extent an extension defines | `view T` | `short_packet` |
 | `pkt[off]` | `u8` | `short_packet`, sugar for a one-byte view read |
 | `m[k]` for a hash map, `k` a place of type `K` | `ref V` | `missing` |
@@ -622,6 +655,13 @@ runtime: after `let x = e as {v: T | P}?`, `x` has the refined type and
 `P[v := x]` is a fact. `check P` is sugar for it (section 10.4), and
 the marked load of a `where` field is the same coercion with the
 predicate taken from the declaration. There is no `assume`.
+
+`e as E?` for an enumeration type `E` is the same coercion with the
+predicate taken from the row: it tests that `e` is one of `E`'s
+constants and gives the result the type `E`. It is the one way an
+integer becomes a value of an enumeration, so a number another party
+wrote is a verdict, a protocol, or a flag only after this program has
+tested it (P8).
 
 ### 8.4 Constant expressions
 
@@ -998,10 +1038,10 @@ and writability are their koit side, offsets their kernel side
 The context table carries, besides each field's name, type, and
 writability, its offset in the kernel's layout, which the lowering
 and the target machine read and no source-level surface shows
-(decision 55). A kind's row is one of six tables the kernel interface
+(decision 55). A kind's row is one of seven tables the kernel interface
 carries for a kernel: kinds, context fields per kind, calls with their
 signatures and effects and availability per kind, resources, regions,
-and slots. Every row has a koit side and a kernel side (decision 58).
+slots, and enumerations. Every row has a koit side and a kernel side (decision 58).
 The koit side is written by hand and holds the decisions: a kind's
 verdicts, default failure, and packet access; a context field's name,
 type, and writability; a call's signature, effects, failure kind, and
@@ -1037,11 +1077,21 @@ range, and an empty held set; the extensions define those rows.
 Verdict statements and `return` end the program, releasing held
 resources on the way. A `syscall` body may also fall off its end,
 which returns 0; the body of a packet kind must end in an exit, as a
-handler must. The verdict type of a kind is `u32` restricted to
-the kind's named constants, so a verdict can be computed and compared
-like an integer; `return e` demands that `e` lie in the kind's set,
-further restricted by the program's verdict set if it has one (section
-14).
+handler must. The verdict type of a kind is an enumeration type
+(section 7) whose constants are the kind's verdicts: `XdpAction` for
+`xdp`, `TcAction` for `tc`. Inside a program the alias `verdict` names
+the enclosing kind's type, so in an `xdp` body `verdict` and
+`XdpAction` are one type; a function has no kind and names the row. A
+`syscall` program has no such row, since its result is `i32` with no
+named constants. `return e` demands that `e` have the kind's verdict
+type, further restricted by the program's verdict set if it has one
+(section 14); the kind's own range is the type, so nothing states it
+as a separate demand. A verdict statement is sugar for a return of the
+constant the kind's table names it with: `pass` is `return PASS` in an
+`xdp` program and `return OK` in a `tc` one, which is why `tc` has
+`pass` and `drop` and no `tx`. Arithmetic on a verdict is a type
+error, and an integer becomes one only through the coercion `e as
+verdict?`, so a verdict read from a map is tested where it is read.
 
 ## 14. Contracts
 
@@ -1053,7 +1103,8 @@ would state without reading it.
 ### 14.1 Clauses
 
 **Verdict set.** `verdict in { PASS, DROP }` refines the program's
-return type to `{v : Verdict | v in S}`. Every exit is a demand: a
+return type to `{v: XdpAction | v == PASS || v == DROP}`, the kind's
+verdict type under the disjunction of the equalities the set names. Every exit is a demand: a
 verdict statement is a constant and checks syntactically; `return e`
 demands `e in S` from the facts; a verdict loaded from a map gets its
 fact from the marked load. Every handler's exit and the default failure
@@ -1184,12 +1235,16 @@ every item exists in every variant.
 ```
 Pred ::= Expr
 ```
-restricted to integer literals, constants, and configuration constants;
-the refined name; sibling field names on a struct field; parameters on a
-result; arithmetic, bitwise, and comparison operators; `&&`, `||`, `!`.
+restricted to integer literals, constants, configuration constants, and
+the constants of an enumeration type; the refined name; sibling field
+names on a struct field; parameters on a result; arithmetic, bitwise,
+and comparison operators, with `==` and `!=` the only ones over an
+enumeration; `&&`, `||`, `!`.
 No calls, no map or packet access, no byte-order casts. Every predicate
 is a quantifier-free bit-vector formula, so a runtime test compiles to a
-few instructions and a proof needs nothing beyond bit-vector reasoning.
+few instructions and a proof needs nothing beyond bit-vector reasoning;
+an enumeration of width `w` is a bit-vector of that width, so admitting
+its constants adds no theory.
 
 A field predicate is an invariant of every value stored by this unit. A
 store `p.f = e` demands `P[f := e]` with sibling fields read from `p`; a
@@ -2117,6 +2172,21 @@ session 8:
     per-kind availability stay hand-written until the kernel's
     switches are parsed (entry 40).
 
+59. A kind's verdict type is an enumeration type, a row of a seventh
+    interface table, not `u32`. The core learns one constructor, a
+    scalar whose values are a named finite set, and never learns what
+    a verdict is, so section 1 holds: a program type contributes its
+    verdict type as a table the core consumes, and `syscall`, whose
+    result is a bare `i32`, needs no case. Arithmetic on one is a type
+    error and no cast reaches it, so the kind's range holds by the
+    type; an integer becomes one through the coercion of 8.3, which
+    is where a verdict another party wrote is tested. The row's name
+    is the type's, `XdpAction`, and `verdict` is an alias for the
+    enclosing program's kind. Rejected: a `verdict` constructor in the
+    core, which contradicts section 1 and makes `syscall` a special
+    case; and keeping `u32` with the kind's range as a second demand
+    on `return`, which closes the range alone.
+
 Open questions, with the default the checker implements until decided:
 
 - Q1. Handlers on functions. Default: no; a function-level handler is
@@ -2419,6 +2489,8 @@ contract Monitor : xdp {
   preserve maps except stats
 }
 
+// the values are written by userspace, so the map holds integers and
+// the program coerces; DROP is 1 and PASS is 2
 map verdicts : hash[65536] of Flow -> { v: u32 where 1 <= v && v <= 2 }
 
 program filter : xdp
@@ -2432,10 +2504,12 @@ program filter : xdp
   // write(pkt[22..23)): disjoint from [0, 14)
   ip.ttl = ip.ttl - 1
   let f = verdicts[key] else { pass }
-  // v : {v | 1 <= v && v <= 2}
+  // v : {v | 1 <= v && v <= 2}, from the marked load
   let v = f.v?
-  // demand v in {PASS, DROP}: entailed, DROP = 1, PASS = 2
-  return v
+  // another party wrote it, so it is a verdict only once tested;
+  // the refinement above entails the coercion's own demand
+  let a = v as {v: verdict | v == PASS || v == DROP}?
+  return a
 }
 ```
 

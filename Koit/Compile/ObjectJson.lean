@@ -144,8 +144,14 @@ def objectJson (pre : Interface) (o : Object) : Except String Json := do
 def unitJson (pre : Interface) (unit : String) (cpu : BPF.Cpu) (core : CompUnit) (C : Compiled) :
     Except String Json := do
   let env := envOf pre core
-  -- the interface's types first, so that a unit's own shadow them
-  let types ← (pre.types ++ core.types).mapM fun d => do
+  -- the interface's types first, so that a unit's own shadow them; an
+  -- enumeration is a value type, never a map value, a view, or a
+  -- field, so nothing a tool builds needs its layout
+  let named := (pre.types ++ core.types).filter fun d =>
+    match d.ty with
+    | .enum .. => false
+    | _ => true
+  let types ← named.mapM fun d => do
     pure <| Json.mkObj [("name", d.name), ("type", ← typeJson env d.ty)]
   let maps ← core.maps.mapM (mapJson pre env C.lir.direct)
   let programs ← C.objects.mapM (objectJson pre)

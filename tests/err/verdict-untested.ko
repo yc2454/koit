@@ -1,0 +1,6 @@
+// expect: expected `XdpAction`, found `u32`
+// An integer is a verdict only after the coercion has tested it.
+program p : xdp fail drop {
+  let n = ctx.rx_queue_index
+  return n
+}

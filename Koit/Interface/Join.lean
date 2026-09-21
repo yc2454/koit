@@ -121,6 +121,7 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
 
   -- kinds
   let mut kinds : List KindRow := []
+  let mut enums : List EnumRow := []
   for ks in spec.kinds do
     match k.progType? ks.progType with
     | none => problems := problems ++ problem s!"kind `{ks.name}`: {k.tag} has no {ks.progType}"
@@ -161,6 +162,10 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
                            verdictTy := ks.verdictTy, verdicts, sugar := ks.sugar,
                            defaultExit := ks.defaultExit, pktWritable := ks.pktWritable,
                            sleep := ks.sleep, ctx := fields, ctxBounds := bounds }]
+      -- the kind's enumeration, its constants the verdicts just joined
+      if let some es := ks.verdictEnum then
+        enums := enums ++ [{ name := es.name, kernel := es.kernel,
+                             width := es.width, constants := verdicts }]
 
   -- calls
   let allKinds := spec.kinds.map (·.name)
@@ -283,6 +288,6 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
     throw ("the koit side of the interface disagrees with " ++ k.tag ++ ":\n  " ++
       "\n  ".intercalate problems)
   return { kernel := k.tag, kinds, calls, resources, regions := spec.regions, slots := spec.slots,
-           consts, types := spec.types, side := k, missing }
+           enums, consts, types := spec.types, side := k, missing }
 
 end Koit.Interface

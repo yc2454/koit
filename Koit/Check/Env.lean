@@ -59,7 +59,12 @@ structure Env where
 namespace Env
 
 def type? (env : Env) (n : String) : Option TypeDecl :=
-  env.types.find? (·.name == n) <|> env.interface.type? n
+  -- `verdict` is the alias for the enclosing program's kind's verdict
+  -- type; a function has no kind and names the row instead.
+  if n == "verdict" then
+    env.kind.map fun row =>
+      { span := row.verdictTy.span, name := "verdict", ty := row.verdictTy }
+  else env.types.find? (·.name == n) <|> env.interface.type? n
 
 def const? (env : Env) (n : String) : Option ConstDecl :=
   env.consts.find? (·.name == n) <|> env.interface.const? n

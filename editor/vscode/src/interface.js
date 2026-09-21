@@ -135,6 +135,11 @@ function parse(text, kernel) {
       continue;
     }
 
+    // An enumeration row: an opaque scalar whose values are named.
+    if ((m = head.match(/^enum\s+([A-Za-z_][A-Za-z0-9_]*)/))) {
+      put(m[1], `enumeration, kernel ${kernel}`, whole);
+      continue;
+    }
     if ((m = head.match(/^resource\s+([A-Za-z_][A-Za-z0-9_]*)/))) {
       put(m[1], `resource, kernel ${kernel}`, whole);
       continue;

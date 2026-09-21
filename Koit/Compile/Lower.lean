@@ -128,13 +128,18 @@ structure LE where
 def normTy (c : LCtx) (t : Ty) : LM Ty := liftC (c.env.norm t)
 
 /-- The LIR type of a Core type: integers at their width, byte-order
-values as unsigned patterns, booleans as bytes, places as
-locations. -/
+values as unsigned patterns, enumerations as unsigned integers of
+their row's width, booleans as bytes, places as locations. Below this
+point no type of the source language exists. -/
 def lty (c : LCtx) (t : Ty) : LM LIR.Ty := do
   match ← normTy c t with
   | .int _ s w => return .int s w
   | .be _ w => return .int false w
   | .bool _ => return .u8
+  | .enum s n =>
+    match c.env.interface.enum? n with
+    | some row => return .int false row.width
+    | none => lerr s!"{s.start}: unknown enumeration `{n}`"
   | _ => return .ptr
 
 def intParts : LIR.Ty → Bool × Nat
@@ -405,6 +410,11 @@ partial def lowerCond (c : LCtx) (sp : Span) (e : Expr) : LM (List LIR.Stmt × L
     let (s, w) ← match tn with
       | .int _ s w => pure (s, w)
       | .be _ w => pure (false, w)
+      -- an enumeration compares as the unsigned integer it is
+      | .enum _ n =>
+        match c.env.interface.enum? n with
+        | some row => pure (false, row.width)
+        | none => lerr s!"unknown enumeration `{n}`"
       | _ => lerr "a comparison of values that are not integers"
     let L ← lowerExpr c sp l (some tn)
     let R ← lowerExpr c sp r (some tn)

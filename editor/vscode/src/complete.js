@@ -237,6 +237,9 @@ function typeOfName(doc, line, name) {
 function typeItems(doc, model) {
   const items = PRIMITIVES.map((t) =>
     item(t, K.TypeParameter, "a machine type", keywordDoc(t)));
+  // `verdict` names the enclosing program's kind's verdict type.
+  items.push(item("verdict", K.TypeParameter,
+                  "the enclosing kind's verdict type", keywordDoc("verdict")));
   for (const q of ["own", "ref", "view"]) {
     items.push(item(q, K.Keyword, "a qualifier on what follows",
                     keywordDoc(q)));

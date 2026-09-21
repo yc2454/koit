@@ -50,6 +50,7 @@ partial def Ty.print : Ty → String
   | .be _ w => "be" ++ toString w
   | .bool _ => "bool"
   | .slot _ n => n
+  | .enum _ n => n
   | .named _ n => n
   | .struct _ [] => "{ }"
   | .struct _ fields =>

@@ -8,7 +8,8 @@ that reuses the surface grammar's signatures and adds, after each
 one, the clauses the grammar has no place for, a call's effects,
 failure kind, acquisition, availability, and GPL mark. The form is
 not source and is not read back. Tables print in a fixed order,
-kinds, calls, resources, regions, slots, constants, types, each
+kinds, calls, resources, regions, slots, enumerations, constants,
+types, each
 alphabetical, so that two kernels diff line by line; the kernel side
 never prints, no number, offset, or origin. With a kind, only what
 that kind sees.
@@ -119,6 +120,10 @@ def SlotRow.doc (s : SlotRow) : String :=
     (if s.unique then ["one per value"] else []) ++
     [s!"in {", ".intercalate (s.homes.map Home.doc)}", s!"named by {s.namedBy}"]))
 
+def EnumRow.doc (e : EnumRow) : String :=
+  "\n".intercalate ([s!"enum {e.name} : u{e.width}  // {e.kernel}"] ++
+    wrap 4 (e.constants.map fun (n, v) => s!"{n} = {v}"))
+
 def ConstDecl.doc (c : ConstDecl) : String :=
   s!"const {c.name} = {c.value.print}"
 
@@ -154,6 +159,8 @@ def doc (i : Interface) (kind? : Option String := none) : String :=
     section_ "resources" [("\n\n".intercalate ((sortByName (·.res.name) resources).map ResourceRow.doc))] ++
     section_ "regions" ((sortByName (·.name) i.regions).map RegionRow.doc) ++
     section_ "slots" ((sortByName (·.name) i.slots).map SlotRow.doc) ++
+    section_ "enumerations"
+      [("\n\n".intercalate ((sortByName (·.name) i.enums).map EnumRow.doc))] ++
     section_ "constants" ((sortByName (·.name) i.consts).map ConstDecl.doc) ++
     section_ "types" ((sortByName (·.name) i.types).map TypeDecl.print) ++
     section_ s!"absent on {i.kernel}" missing) ++ "\n"

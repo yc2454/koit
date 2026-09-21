@@ -80,6 +80,12 @@ inductive Synth : Env → Ctx → Expr → Ty → Prop
   | cmpBe {env K s op l r t s' w} :
       isCmpBe op → Synth env K l t → env.norm t = .ok (.be s' w) →
       Check env K r (.be s' w) → Synth env K (.cmp s op l r) (.bool s)
+  /-- (CmpEnum): the values of an enumeration are named, not ordered,
+  so they compare only for equality. -/
+  | cmpEnum {env K s op l r t tn} :
+      isCmpBe op → Synth env K l t → env.norm t = .ok tn →
+      tn.enumName?.isSome → Check env K r tn →
+      Synth env K (.cmp s op l r) (.bool s)
   | not {env K s e} :
       Check env K e (.bool s) → Synth env K (.not s e) (.bool s)
   | and {env K s l r} :
@@ -316,7 +322,20 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
       FallibleOk env K (.callopt s f args) { ty := some t, origin := .stack }
   /-- (Coerce): the coercion to a refinement type. -/
   | coerce {env K s e s' v base pred bn} :
-      env.norm base = .ok bn → bn.isScalar → Check env K e base →
+      env.norm base = .ok bn → bn.isScalar → bn.enumName? = none →
+      Check env K e base →
+      checkPred env
+        [{ name := v, ty := base, mutable := false, origin := .stack }]
+        pred = .ok () →
+      FallibleOk env K (.coerce s e (.refined s' v base pred))
+        { ty := some (.refined s' v base pred), origin := .stack }
+  /-- (CoerceEnum): the value arrives as an unsigned integer of the
+  row's width and leaves as one of the row's constants, which is the
+  one way an integer becomes a value of an enumeration. -/
+  | coerceEnum {env K s e s' v base pred bn n row} :
+      env.norm base = .ok bn → bn.enumName? = some n →
+      env.interface.enum? n = some row →
+      Check env K e (.int s false row.width) →
       checkPred env
         [{ name := v, ty := base, mutable := false, origin := .stack }]
         pred = .ok () →

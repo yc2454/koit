@@ -51,8 +51,10 @@ program p : xdp verdict in { PASS, DROP } fail drop {
   // a postcondition, a fact at the call site
   let h = clamp(q * 3)
   let g = tab[0].v[h]
-  // a constant verdict and a computed one
+  // a constant verdict and a computed one: a number becomes a verdict
+  // through the coercion, whose predicate the kind's row states
   if q == 1 { pass }
-  let v: u32 = 1
+  let n: u32 = 1
+  let v = n as {v: verdict | v == PASS || v == DROP}?
   return v
 }

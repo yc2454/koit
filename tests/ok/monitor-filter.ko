@@ -43,8 +43,10 @@ program filter : xdp
   // write(pkt[22..23)): disjoint from [0, 14)
   ip.ttl = ip.ttl - 1
   let f = verdicts[key] else { pass }
-  // v : {v | 1 <= v && v <= 2}
+  // v : {v | 1 <= v && v <= 2}, from the marked load
   let v = f.v?
-  // demand v in {PASS, DROP}: entailed, DROP = 1, PASS = 2
-  return v
+  // another party wrote it, so it is a verdict only once tested; the
+  // refinement above entails the coercion's own demand
+  let a = v as {v: verdict | v == PASS || v == DROP}?
+  return a
 }

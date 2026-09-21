@@ -23,7 +23,10 @@ open Koit.Core
 `xdp_is_valid_access`, none writable. -/
 def xdpKind : KindSpec :=
   { name := "xdp", progType := "BPF_PROG_TYPE_XDP", section_ := "xdp",
-    hasPkt := true, pktWritable := true, verdictTy := tU32,
+    hasPkt := true, pktWritable := true,
+    verdictTy := .named noSpan "XdpAction",
+    verdictEnum := some { name := "XdpAction", kernel := "enum xdp_action",
+                          width := 32 },
     verdicts := [("ABORTED", "XDP_ABORTED"), ("DROP", "XDP_DROP"),
                  ("PASS", "XDP_PASS"), ("TX", "XDP_TX"),
                  ("REDIRECT", "XDP_REDIRECT")],
@@ -39,7 +42,10 @@ def xdpKind : KindSpec :=
 of which `mark` is writable. -/
 def tcKind : KindSpec :=
   { name := "tc", progType := "BPF_PROG_TYPE_SCHED_CLS", section_ := "tc",
-    hasPkt := true, pktWritable := true, verdictTy := tU32,
+    hasPkt := true, pktWritable := true,
+    verdictTy := .named noSpan "TcAction",
+    verdictEnum := some { name := "TcAction", kernel := "TC_ACT_*",
+                          width := 32 },
     verdicts := [("OK", "TC_ACT_OK"), ("SHOT", "TC_ACT_SHOT"),
                  ("UNSPEC", "TC_ACT_UNSPEC"), ("PIPE", "TC_ACT_PIPE"),
                  ("REDIRECT", "TC_ACT_REDIRECT")],
@@ -59,9 +65,11 @@ def syscallKind : KindSpec :=
 
 /-! ### Calls -/
 
-/-- `redirect(ifindex)` yields `{v | v == REDIRECT}`. -/
+/-- `redirect(ifindex)` yields `{v: verdict | v == REDIRECT}`: the
+verdict type of the kind it is called in, since `xdp` and `tc` have
+different ones. -/
 def redirectRet : Ty :=
-  .refined noSpan "v" tU32
+  .refined noSpan "v" (.named noSpan "verdict")
     (.cmp noSpan .eq (.var noSpan "v") (.var noSpan "REDIRECT"))
 
 def sockTuple : Ty := .ref noSpan (.named noSpan "SockTuple")
@@ -213,6 +221,8 @@ def constSpecs : List ConstSpec := [
 member, the argument of the socket lookups. -/
 def typeRows : List TypeDecl := [
   { span := noSpan, name := "spinlock", ty := .slot noSpan "spinlock" },
+  { span := noSpan, name := "XdpAction", ty := .enum noSpan "XdpAction" },
+  { span := noSpan, name := "TcAction", ty := .enum noSpan "TcAction" },
   { span := noSpan, name := "Sock", ty := .struct noSpan [] },
   { span := noSpan, name := "SockTuple",
     ty := .struct noSpan [field "saddr" tBe32, field "daddr" tBe32,
@@ -223,6 +233,6 @@ def typeRows : List TypeDecl := [
 def koitSide : Spec :=
   { kinds := [xdpKind, tcKind, syscallKind], calls := callSpecs,
     resources := resourceRows, regions := regionRows, slots := slotRows,
-    consts := constSpecs, types := typeRows }
+    enums := [], consts := constSpecs, types := typeRows }
 
 end Koit.Interface

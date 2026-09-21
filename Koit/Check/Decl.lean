@@ -34,6 +34,12 @@ partial def checkDataTy (env : Env) (t : Ty) (fuel : Nat := 64) : M Unit := do
   if fuel == 0 then err t.span "type nesting too deep"
   match t with
   | .int .. | .be .. | .bool .. | .slot .. => pure ()
+  -- A stored enumeration would be read without a test, and what the
+  -- environment wrote is untrusted: store the integer and coerce.
+  | .enum s n =>
+    err s s!"`{n}` is an enumeration, which this draft holds in a local, a \
+      parameter, or a result, and not in a map, a view, or a struct; store \
+      the integer and read it back with `as {n}?`"
   | .named s n =>
     match env.type? n with
     | some _ =>

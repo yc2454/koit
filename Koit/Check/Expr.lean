@@ -157,9 +157,15 @@ partial def Env.refinement? (env : Env) (t : Ty) (fuel : Nat := 64) :
   | _ => return none
 
 /-- The shape of a head-normal type for the domain. -/
-def shapeOf : Ty → Shape
+def shapeOf (env : Env) : Ty → Shape
   | .int _ s w => .int s w
   | .bool _ => .bool
+  -- an enumeration is an unsigned integer of its row's width for the
+  -- domain, which is why admitting its constants adds no theory
+  | .enum _ n =>
+    match env.interface.enum? n with
+    | some row => .int false row.width
+    | none => .other
   | _ => .other
 
 /-- What a failed demand says: the site, the predicate, and the two
@@ -248,6 +254,10 @@ partial def synth (env : Env) (K : Ctx) (e : Expr) : M Ty := do
     | .be _ w =>
       unless op == .eq || op == .ne do
         err s s!"a `be{w}` compares only with `==` and `!=`"
+    | .enum _ n =>
+      unless op == .eq || op == .ne do
+        err s s!"`{n}` is an enumeration: its values compare only with \
+          `==` and `!=`, since they are named and not ordered"
     | .bool _ =>
       err s "comparison takes two integers; `bool` values are combined \
         with `&&`, `||`, and `!`"
@@ -505,7 +515,7 @@ partial def scope (env : Env) (K : Ctx) : Scope :=
       match placeTy env K p with
       | .ok info =>
         match env.norm info.ty with
-        | .ok tn => some (info.origin, shapeOf tn)
+        | .ok tn => some (info.origin, shapeOf env tn)
         | .error _ => some (info.origin, .other)
       | .error _ => none,
     const := fun n =>
@@ -514,7 +524,7 @@ partial def scope (env : Env) (K : Ctx) : Scope :=
         | some _ =>
           env.kind.bind fun row => (row.verdicts.lookup n).map Int.ofNat
         | none => env.evalConst (.var Koit.Facts.noSpan n),
-    sort := fun t => (env.norm t).toOption.map shapeOf,
+    sort := fun t => (env.norm t).toOption.map (shapeOf env),
     size := fun t => (env.layout t).toOption.map (·.1),
     smt := env.smt }
 
@@ -790,7 +800,9 @@ def checkPred (env : Env) (bound : List Local) (p : Expr) : M Unit := do
       literals, constants, the refined name, sibling fields or parameters, \
       arithmetic, comparisons, `&&`, `||`, `!`; no calls, no map or packet \
       access, no byte-order casts"
-  let env' := { env.top with locals := bound }
+  -- the kind stays, so that a predicate may name the constants of an
+  -- enumeration and the `verdict` alias
+  let env' := { env.top with locals := bound, kind := env.kind }
   check env' { mayFail := false, ret := .fn "" none } p (.bool p.span)
 
 /-- The kind a `try` on `f` raises. -/
@@ -923,12 +935,19 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
       let bn ← env.norm base
       unless bn.isScalar do
         err s "a coercion refines a scalar"
-      check env K e base
+      -- An enumeration is reached from an integer of its width: the
+      -- coercion is where a number becomes a named value.
+      match bn with
+      | .enum _ n =>
+        match env.interface.enum? n with
+        | some row => check env K e (.int s false row.width)
+        | none => err s s!"unknown enumeration `{n}`"
+      | _ => check env K e base
       checkPred env
         [{ name := v, ty := base, mutable := false, origin := .stack }] pred
       return { ty := some t }
     | _ =>
-      err s "the target of `as ...?` is a refinement type `{v: T | P}` \
-       "
+      err s "the target of `as ...?` is a refinement type `{v: T | P}`, \
+        or an enumeration"
 
 end Koit.Check

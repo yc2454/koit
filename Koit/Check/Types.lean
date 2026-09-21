@@ -37,10 +37,15 @@ def _root_.Koit.Core.Ty.isIntTy : Ty → Bool
   | .int .. => true
   | _ => false
 
+/-- The enumeration a head-normal type names, if it names one. -/
+def _root_.Koit.Core.Ty.enumName? : Ty → Option String
+  | .enum _ n => some n
+  | _ => none
+
 /-- The scalars: integers, byte-order integers, booleans.
 `t` is head-normal. -/
 def _root_.Koit.Core.Ty.isScalar : Ty → Bool
-  | .int .. | .be .. | .bool .. => true
+  | .int .. | .be .. | .bool .. | .enum .. => true
   | _ => false
 
 /-- The place types: a name of a place, not a value. -/
@@ -127,6 +132,9 @@ partial def Env.notRepresentable (env : Env) (t : Ty) (allowSlots : Bool)
   | .int .. | .be .. | .bool .. => return none
   | .slot _ n =>
     return if allowSlots then none else some s!"the slot type `{n}`"
+  -- A stored enumeration would be read without a test, and what the
+  -- environment wrote is untrusted: store the integer and coerce.
+  | .enum _ n => return some s!"the enumeration `{n}`, a value and not data"
   | .struct _ fields =>
     for f in fields do
       if let some why ← env.notRepresentable f.ty allowSlots (fuel - 1) then
@@ -199,6 +207,7 @@ partial def Env.eqv (env : Env) (a b : Ty) (fuel : Nat := 64) : M Bool := do
   | .be _ w, .be _ w' => return w == w'
   | .bool _, .bool _ => return true
   | .slot _ a, .slot _ b => return a == b
+  | .enum _ a, .enum _ b => return a == b
   | .struct _ fs, .struct _ gs =>
     if fs.length != gs.length then return false
     for (f, g) in fs.zip gs do

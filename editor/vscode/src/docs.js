@@ -135,7 +135,11 @@ const KEYWORDS = {
     "tracepoint on this verdict, so a failure stays observable."
   ],
   verdict: [
-    "`verdict in { ... }` — the verdicts this program may return",
+    "`verdict` — the clause, and the enclosing kind's verdict type",
+    "As a type it names the kind's enumeration, `XdpAction` in an `xdp`",
+    "program and `TcAction` in a `tc` one; an integer becomes one only",
+    "through `e as verdict?`, which tests it. As a clause,",
+    "`verdict in { ... }` states the verdicts this program may return.",
     "A header clause, not a value. The names inside the braces are the",
     "kind's own verdicts, written bare; every exit of the program, every",
     "handler's exit, and the default failure verdict are checked against",

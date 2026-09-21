@@ -70,6 +70,27 @@ def Ctx.nested (c : Ctx) : Ctx := { c with tailIsResult := false }
 
 def Ctx.isLocal (c : Ctx) (x : String) : Bool := c.locals.contains x
 
+/-- The enumeration a type name names, if it names one: a row of the
+interface's table, or `verdict`, which is the enclosing kind's. A
+coercion to one is fallible, since the value tested comes in as an
+integer. -/
+def Ctx.enumNamed? (c : Ctx) : Syntax.Ty → Option String
+  | .named _ n =>
+    if c.isLocal n then none
+    else if n == "verdict" then
+      c.kind.bind fun row =>
+        match row.verdictTy with
+        | .named _ e => (c.info.interface.enum? e).map (·.name)
+        | .enum _ e => some e
+        | _ => none
+    else match c.info.interface.type? n with
+      | some d =>
+        match d.ty with
+        | .enum _ e => some e
+        | _ => none
+      | none => none
+  | _ => none
+
 /-- The map `x` names, unless a local shadows it. -/
 def Ctx.map? (c : Ctx) (x : String) : Option Syntax.MapType :=
   if c.isLocal x then none else c.info.maps.lookup x
@@ -187,6 +208,20 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
     let t' ← dTy c t
     let p' ← dExpr (c.bind v) p
     return some (.op (.coerce s (← dExpr c e) (.refined ts v t' p')))
+  | .cast s e t => do
+    match c.enumNamed? t with
+    | none => return none
+    | some n =>
+      -- `e as E?` is the coercion whose predicate the row states: one
+      -- of its constants, and no other value.
+      let row := c.info.interface.enum? n
+      let atoms := (row.map (·.constants)).getD [] |>.map fun (k, _) =>
+        Expr.cmp s .eq (.var s "v") (.var s k)
+      let pred := match atoms with
+        | [] => Expr.invalid s s!"the enumeration `{n}` has no constants"
+        | a :: rest => rest.foldl (fun P q => Expr.or s P q) a
+      return some (.op (.coerce s (← dExpr c e)
+        (.refined s "v" (← dTy c t) pred)))
   | .tcall s (.var _ "pkt") "view" ty args => do
     let off ← match args with
       | [e] => dExpr c e

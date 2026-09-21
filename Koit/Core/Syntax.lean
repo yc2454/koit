@@ -127,6 +127,12 @@ inductive Ty where
   pointer fields. Only a interface type declaration has this body; the
   source names it like any type. -/
   | slot (span : Span) (name : String)
+  /-- An enumeration type, opaque, from the interface's enumeration
+  table: a kind's verdicts, and in the extensions the protocol and
+  flag enumerations the calls take. A scalar whose values are the
+  row's named constants; unlike a slot it is data. Only an interface
+  type declaration has this body; the source names it like any type. -/
+  | enum (span : Span) (name : String)
   | named (span : Span) (name : String)
   | struct (span : Span) (fields : List Field)
   | array (span : Span) (elem : Ty) (len : Expr)
@@ -220,9 +226,9 @@ end
 deriving instance Repr, Inhabited for Ty, Field, Expr, Place, Arg, Fallible
 
 def Ty.span : Ty → Span
-  | .int s .. | .be s .. | .bool s | .slot s .. | .named s .. | .struct s ..
-  | .array s .. | .ref s .. | .view s .. | .own s .. | .refined s ..
-  | .opt s .. => s
+  | .int s .. | .be s .. | .bool s | .slot s .. | .enum s .. | .named s ..
+  | .struct s .. | .array s .. | .ref s .. | .view s .. | .own s ..
+  | .refined s .. | .opt s .. => s
 
 def Field.span : Field → Span
   | .mk s .. => s

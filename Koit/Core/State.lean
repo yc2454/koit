@@ -302,7 +302,8 @@ their given values or zero, and the maps as they are. -/
 def initState (env : Env) (row : KindRow) (packet : ByteArray)
     (ctx : List (String × Nat)) (maps : List (String × Machine.MapState)) (fuel : Nat) :
     State :=
-  { env, kind := row, fuel,
+  -- the kind is on the environment too, so that `verdict` resolves
+  { env := { env with kind := some row }, kind := row, fuel,
     machine := { maps, packet },
     ctx := row.ctx.map fun f =>
       (f.name, Val.mkInt false 32 ((ctx.lookup f.name).getD 0)) }

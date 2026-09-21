@@ -1,0 +1,6 @@
+// expect: the enumeration `XdpAction`, a value and not data
+// A stored verdict would be read without a test, and what the
+// environment wrote is untrusted: store the integer and coerce.
+map m : array[1] of { v: XdpAction }
+
+program p : xdp fail drop { pass }

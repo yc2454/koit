@@ -269,6 +269,23 @@ structure SlotRow where
   namedBy : String
   deriving Repr, Inhabited
 
+/-- An enumeration type: a scalar whose values are the named
+constants of this row and no others. The same shape as a slot row, an
+opaque type the interface names, differing on one column: a slot is
+not data and an enumeration is. A kind's verdict type is a row of
+this table. -/
+structure EnumRow where
+  name      : String
+  /-- The enumeration the kernel declares, `enum xdp_action`, or the
+  family its constants belong to when the kernel spells them as
+  macros. -/
+  kernel    : String
+  /-- The width its values occupy. -/
+  width     : Nat
+  /-- The named values, each with its number. -/
+  constants : List (String × Nat)
+  deriving Repr, Inhabited
+
 /-- The kernel's limit on special fields in one value, `BTF_FIELDS_MAX`. -/
 def maxSlots : Nat := 11
 
@@ -285,6 +302,7 @@ structure Koit.Interface where
   resources : List ResourceRow
   regions   : List RegionRow
   slots     : List SlotRow
+  enums     : List EnumRow
   consts    : List ConstDecl
   types     : List TypeDecl
   /-- The kernel side the rows were joined with. -/
@@ -297,6 +315,14 @@ structure Koit.Interface where
 namespace Koit.Interface
 
 open Koit.Core
+
+def enum? (p : Interface) (name : String) : Option EnumRow :=
+  p.enums.find? (·.name == name)
+
+/-- The value a constant of an enumeration names, with its row. -/
+def enumConst? (p : Interface) (n : String) : Option (EnumRow × Nat) :=
+  p.enums.findSome? fun row =>
+    (row.constants.lookup n).map fun v => (row, v)
 
 def kind? (p : Interface) (name : String) : Option KindRow :=
   p.kinds.find? (·.name == name)
@@ -347,6 +373,15 @@ structure CtxSpec where
   writable : Bool
   deriving Repr, Inhabited
 
+/-- The koit side of an enumeration row: the constants are not
+repeated here, since the kind's `verdicts` already state them and the
+kernel side supplies their numbers. -/
+structure EnumSpec where
+  name   : String
+  kernel : String
+  width  : Nat
+  deriving Repr, Inhabited
+
 /-- A program kind: the kernel's program type it corresponds to, the
 section name chosen among those libbpf maps to that type, and the
 verdicts as pairs of koit's name and the kernel's value name, whose
@@ -358,6 +393,9 @@ structure KindSpec where
   hasPkt    : Bool
   verdictTy : Ty
   verdicts  : List (String × String)
+  /-- The enumeration the verdicts form, when the kind has named
+  ones; `syscall`, whose result is a bare `i32`, has none. -/
+  verdictEnum : Option EnumSpec := none
   sugar     : List (String × String)
   defaultExit : DefaultExit
   pktWritable : Bool := false
@@ -408,6 +446,7 @@ structure Spec where
   resources : List ResourceRow
   regions   : List RegionRow
   slots     : List SlotRow
+  enums     : List EnumRow
   consts    : List ConstSpec
   types     : List TypeDecl
   deriving Inhabited

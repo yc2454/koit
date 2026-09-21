@@ -1,0 +1,7 @@
+// expect: arithmetic takes integers, found `XdpAction`
+// A verdict is not a number: the kind's range holds by the type, so
+// nothing has to check it at the return.
+program p : xdp fail drop {
+  let v = PASS + 100
+  return v
+}

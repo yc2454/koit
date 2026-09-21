@@ -227,6 +227,11 @@ partial def parseTypeAtom : M Ty := do
   | .ident name =>
     advance
     return primType l.span name
+  -- `verdict` names the enclosing program's kind's verdict type; the
+  -- checker resolves it, and outside a program there is none.
+  | .keyword .«verdict» =>
+    advance
+    return .named l.span "verdict"
   | .punct .lbrace => withNl false do
     advance
     let (name, nspan) ← expectIdent "a field name"
@@ -247,7 +252,8 @@ partial def parseTypeAtom : M Ty := do
       fields := fields ++ [← parseFieldRest ns n t]
     let close ← expectPunct .rbrace
     return .struct (l.span.merge close) fields
-  | _ => unexpected "a type: a primitive, a name, `{`, `ref`, `view`, or `own`"
+  | _ => unexpected "a type: a primitive, a name, `verdict`, `{`, `ref`, \
+      `view`, or `own`"
 
 /-- The optional `where P` of a struct field, after its type. -/
 partial def parseFieldRest (start : Span) (name : String) (ty : Ty) :
