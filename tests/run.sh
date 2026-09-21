@@ -7,6 +7,10 @@
 #                     `koitc check` must reject the file with a
 #                     diagnostic containing the text after
 #                     `// expect: ` on line 1
+#
+# At the check stage `koitc check --json` must agree with the text
+# form on every file, so that the object an editor reads never says
+# a unit was accepted when the text form says it was not.
 #   tests/parse/*.ko  must parse and desugar; nothing is claimed about
 #                     typing
 #   tests/corpus/*.ko ports of the coverage cases, named by case id;
@@ -117,10 +121,12 @@ done
 
 if at_least check; then
   for f in tests/ok/*.ko; do
-    if "$KOITC" check "$f" >"$TMP/out" 2>&1; then
-      pass=$((pass + 1))
-    else
+    if ! "$KOITC" check "$f" >"$TMP/out" 2>&1; then
       failed check "$f"
+    elif ! "$KOITC" check --json "$f" 2>/dev/null | grep -qF '"ok": true'; then
+      failed check-json "$f"
+    else
+      pass=$((pass + 1))
     fi
   done
   for f in tests/err/*.ko tests/corpus/*.ko; do
@@ -137,6 +143,8 @@ if at_least check; then
     elif ! grep -qF -- "$expect" "$TMP/out"; then
       echo "    expected: $expect"
       failed diagnostic "$f"
+    elif ! "$KOITC" check --json "$f" 2>/dev/null | grep -qF '"ok": false'; then
+      failed check-json "$f"
     else
       pass=$((pass + 1))
     fi

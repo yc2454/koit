@@ -1,0 +1,406 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "koit",
+  "scopeName": "source.koit",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#handlers"
+    },
+    {
+      "include": "#refinement"
+    },
+    {
+      "include": "#literals"
+    },
+    {
+      "include": "#views"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#calls"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.koit",
+          "begin": "//",
+          "end": "$"
+        },
+        {
+          "name": "comment.block.koit",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "program NAME : KIND [fail VERDICT]",
+          "match": "\\b(program)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.declaration.koit"
+            },
+            "2": {
+              "name": "entity.name.section.program.koit"
+            },
+            "3": {
+              "name": "punctuation.separator.koit"
+            },
+            "4": {
+              "name": "support.class.kind.koit"
+            }
+          }
+        },
+        {
+          "comment": "contract NAME : KIND",
+          "match": "\\b(contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.declaration.koit"
+            },
+            "2": {
+              "name": "entity.name.type.contract.koit"
+            }
+          }
+        },
+        {
+          "comment": "fn NAME(",
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_.]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.declaration.koit"
+            },
+            "2": {
+              "name": "entity.name.function.koit"
+            }
+          }
+        },
+        {
+          "comment": "type NAME =",
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.declaration.koit"
+            },
+            "2": {
+              "name": "entity.name.type.koit"
+            }
+          }
+        },
+        {
+          "comment": "map NAME : STORAGE[N] of T",
+          "match": "\\b(map)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.declaration.koit"
+            },
+            "2": {
+              "name": "variable.other.map.koit"
+            },
+            "3": {
+              "name": "punctuation.separator.koit"
+            },
+            "4": {
+              "name": "support.type.storage.koit"
+            }
+          }
+        },
+        {
+          "comment": "const NAME = / config NAME :",
+          "match": "\\b(const|config)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.declaration.koit"
+            },
+            "2": {
+              "name": "variable.other.constant.koit"
+            }
+          }
+        },
+        {
+          "comment": "let / var NAME",
+          "match": "\\b(let|var)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.declaration.koit"
+            },
+            "2": {
+              "name": "variable.other.koit"
+            }
+          }
+        },
+        {
+          "match": "\\b(license|implements)\\b",
+          "name": "keyword.other.declaration.koit"
+        }
+      ]
+    },
+    "handlers": {
+      "comment": "on short_packet { ... } -- the failure-kind handler table",
+      "match": "\\b(on)\\s+(short_packet|missing|invariant|bound|helper|program)?",
+      "captures": {
+        "1": {
+          "name": "keyword.control.handler.koit"
+        },
+        "2": {
+          "name": "support.constant.failure-kind.koit"
+        }
+      }
+    },
+    "refinement": {
+      "comment": "the `where` clause that carries a refinement",
+      "match": "\\b(where)\\b",
+      "name": "keyword.control.refinement.koit"
+    },
+    "views": {
+      "patterns": [
+        {
+          "comment": "pkt.view<T>(off) -- carving a typed window out of the packet",
+          "match": "\\b(pkt)\\s*(\\.)\\s*(view)\\s*(<)\\s*([^>]*)\\s*(>)",
+          "captures": {
+            "1": {
+              "name": "variable.language.packet.koit"
+            },
+            "2": {
+              "name": "punctuation.accessor.koit"
+            },
+            "3": {
+              "name": "support.function.view.koit"
+            },
+            "4": {
+              "name": "punctuation.definition.typeparameters.begin.koit"
+            },
+            "5": {
+              "name": "entity.name.type.koit"
+            },
+            "6": {
+              "name": "punctuation.definition.typeparameters.end.koit"
+            }
+          }
+        },
+        {
+          "comment": "the `?` that marks a fallible operation",
+          "match": "\\?",
+          "name": "keyword.control.exception.fallible.koit"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.koit",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.koit",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.koit",
+          "match": "'(\\\\.|[^'\\\\])'"
+        },
+        {
+          "name": "constant.numeric.hex.koit",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.koit",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.koit",
+          "match": "\\b[0-9][0-9_]*\\b"
+        },
+        {
+          "name": "constant.language.boolean.koit",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "comment": "the obligations: what the checker demands and discharges",
+          "match": "\\b(check|hold|fails|fail|except|bounded|preserve|move)\\b",
+          "name": "keyword.control.obligation.koit"
+        },
+        {
+          "comment": "the verdicts a program exits with",
+          "match": "\\b(pass|drop|tx|abort|verdict)\\b",
+          "name": "constant.language.verdict.koit"
+        },
+        {
+          "match": "\\b(if|else|for|repeat|break|continue|return|in)\\b",
+          "name": "keyword.control.koit"
+        },
+        {
+          "comment": "qualifiers on a place or a reference",
+          "match": "\\b(own|ref|view)\\b",
+          "name": "storage.modifier.koit"
+        },
+        {
+          "match": "\\b(as|of)\\b",
+          "name": "keyword.operator.word.koit"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "comment": "the machine types: width and byte order are in the type",
+          "match": "\\b(u8|u16|u32|u64|i8|i16|i32|i64|be16|be32|be64|bool)\\b",
+          "name": "support.type.primitive.koit"
+        },
+        {
+          "comment": "map storage and the slots that live in a value",
+          "match": "\\b(array|percpu_array|hash|percpu_hash|lru_hash|ringbuf|spinlock)\\b",
+          "name": "support.type.storage.koit"
+        },
+        {
+          "comment": "program kinds",
+          "match": "\\b(xdp|tc|syscall)\\b",
+          "name": "support.class.kind.koit"
+        },
+        {
+          "comment": "what a program is handed and what it may read",
+          "match": "\\b(pkt|ctx|reason)\\b",
+          "name": "variable.language.koit"
+        },
+        {
+          "comment": "a name in constant case",
+          "match": "\\b([A-Z][A-Z0-9_]*)\\b",
+          "name": "variable.other.constant.koit"
+        },
+        {
+          "comment": "a name in type position",
+          "match": "\\b([A-Z][A-Za-z0-9_]*)\\b",
+          "name": "entity.name.type.koit"
+        }
+      ]
+    },
+    "calls": {
+      "patterns": [
+        {
+          "comment": "the interface's calls: each one carries its effects and how it fails",
+          "match": "\\b(atomic_add|atomic_and|atomic_cmpxchg|atomic_or|atomic_xchg|atomic_xor|copy|csum_add|csum_fold|delete|fill|hton|insert|ktime|ntoh|printk|redirect|reserve|sk_lookup_tcp|sk_lookup_udp|sk_release)\\s*(?=\\()",
+          "name": "support.function.builtin.koit"
+        },
+        {
+          "match": "\\b(pkt)\\s*(\\.)\\s*(len|adjust_head|adjust_tail)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "variable.language.packet.koit"
+            },
+            "2": {
+              "name": "punctuation.accessor.koit"
+            },
+            "3": {
+              "name": "support.function.builtin.koit"
+            }
+          }
+        },
+        {
+          "comment": "lock(p), the only way to name a spinlock slot",
+          "match": "\\b(lock)\\s*(?=\\()",
+          "name": "support.function.builtin.koit"
+        },
+        {
+          "comment": "any other call",
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "name": "entity.name.function.call.koit"
+        },
+        {
+          "comment": "T.size, a type's byte width",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(\\.)(size)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.koit"
+            },
+            "2": {
+              "name": "punctuation.accessor.koit"
+            },
+            "3": {
+              "name": "support.function.builtin.koit"
+            }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "\\.\\.",
+          "name": "keyword.operator.range.koit"
+        },
+        {
+          "match": "->",
+          "name": "keyword.operator.arrow.koit"
+        },
+        {
+          "match": "(<<|>>|\\+|-|\\*|/|%|&|\\||\\^)=",
+          "name": "keyword.operator.assignment.koit"
+        },
+        {
+          "match": "==|!=|<=|>=",
+          "name": "keyword.operator.comparison.koit"
+        },
+        {
+          "match": "<<|>>",
+          "name": "keyword.operator.bitwise.koit"
+        },
+        {
+          "match": "&&|\\|\\|",
+          "name": "keyword.operator.logical.koit"
+        },
+        {
+          "match": "=",
+          "name": "keyword.operator.assignment.koit"
+        },
+        {
+          "match": "<|>",
+          "name": "keyword.operator.comparison.koit"
+        },
+        {
+          "match": "!",
+          "name": "keyword.operator.logical.koit"
+        },
+        {
+          "match": "&|\\||\\^|~",
+          "name": "keyword.operator.bitwise.koit"
+        },
+        {
+          "match": "\\+|-|\\*|/|%",
+          "name": "keyword.operator.arithmetic.koit"
+        }
+      ]
+    },
+    "identifiers": {
+      "match": "\\b[a-z_][A-Za-z0-9_]*\\b",
+      "name": "variable.other.koit"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "koit: run the extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/editor/vscode",
+        "${workspaceFolder}/tests/ok/bmc-request-path.ko"
+      ]
+    }
+  ]
+}

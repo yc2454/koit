@@ -24,7 +24,9 @@ def usage : String := String.intercalate "\n"
    "  desugar parse FILE and print its Core",
    "  check   type-check FILE against the interface of kernel TAG",
    "          (default v6.8; also v7.0-rc1); with --smt,",
-   "          trace each accepted entailment as an SMT-LIB query on stderr",
+   "          trace each accepted entailment as an SMT-LIB query on stderr;",
+   "          with --json, report the outcome and any diagnostic on",
+   "          stdout as one object, spans and all, for an editor",
    "  run     check FILE, then interpret its programs in order:",
    "          --packet HEX     the input packet (default: empty)",
    "          --program NAME   this program only",
@@ -111,6 +113,11 @@ def kernelOpt : List String → Option (Option String × Bool × String)
   | ["--smt", file] => some (none, true, file)
   | [file] => some (none, false, file)
   | _ => none
+
+/-- Takes `--json` out of the arguments, wherever it was written, and
+returns whether it was there and what is left for `kernelOpt`. -/
+def jsonOpt (args : List String) : Bool × List String :=
+  (args.contains "--json", args.filter (· != "--json"))
 
 /-- The options of `run`. -/
 structure RunOpts where
@@ -200,6 +207,46 @@ def allocUnit (pre : Interface) (core : Core.CompUnit) (checked : Check.Checked)
     BPF.wf X |>.mapError (s!"the allocated `{a.prog.name}` is not well-formed: " ++ ·)
     return X
 
+/-- A position as JSON: the line and column a diagnostic names, and
+the byte offset, so that a reader slices the source without counting
+columns of its own. -/
+def posJson (p : Pos) : Lean.Json :=
+  Lean.Json.mkObj [("line", Lean.toJson p.line), ("col", Lean.toJson p.col),
+                   ("byte", Lean.toJson p.byte)]
+
+/-- A diagnostic as JSON: both ends of the span of the construct it
+is about, and the message. The span is what the text form drops, and
+what an editor needs to underline the construct rather than a point
+in it. -/
+def diagJson (span : Span) (msg : String) : Lean.Json :=
+  Lean.Json.mkObj [("start", posJson span.start), ("stop", posJson span.stop),
+                   ("msg", msg)]
+
+/-- The document `koitc check --json` prints: the file, the kernel it
+was checked against, whether the unit was accepted, and the
+diagnostics, which is the empty list when it was. The checker stops
+at the first error, so at most one is reported today; the list is
+there so that a reader written now does not change when it no longer
+does. -/
+def checkJson (file kernel : String) (diags : List Lean.Json) : Lean.Json :=
+  Lean.Json.mkObj [("koit", Lean.toJson (1 : Nat)), ("file", file),
+                   ("kernel", kernel), ("ok", Lean.Json.bool diags.isEmpty),
+                   ("diagnostics", Lean.Json.arr diags.toArray)]
+
+/-- `check --json`: the outcome on stdout as one object, whatever it
+is, so that a reader parses one thing and never the text form. -/
+def checkJsonFile (file : String) (pre : Interface) (smt : Bool) : IO UInt32 := do
+  let src ← readSource file
+  let diags : List Lean.Json ←
+    match parse src with
+    | .error e => pure [diagJson e.span e.msg]
+    | .ok u =>
+      match Check.checkUnit pre (Core.desugar pre u) smt with
+      | .ok _ => pure []
+      | .error d => pure [diagJson d.span d.msg]
+  IO.println (checkJson file pre.kernel diags).pretty
+  return (if diags.isEmpty then 0 else 1)
+
 /-- A checked unit, or its diagnostic. -/
 def checkFile (file : String) (pre : Interface) :
     IO (Option (Core.CompUnit × Check.Checked)) := do
@@ -260,8 +307,10 @@ def run (args : List String) : IO UInt32 := do
     IO.print (pre.doc kind)
     return 0
   | "check" :: rest => do
+    let (json, rest) := jsonOpt rest
     let some (tag, smt, file) := kernelOpt rest | do IO.eprint usage; return 2
     let some pre ← interfaceFor tag | return 2
+    if json then return ← checkJsonFile file pre smt
     match ← parseFile file with
     | some u =>
       match Check.checkUnit pre (Core.desugar pre u) smt with

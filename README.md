@@ -61,6 +61,15 @@ and `Rules` for the judgment as a proposition); the refinement layer
 (`Koit/Facts/`) and the effect layer (`Koit/Effects/`) are its next
 two inputs.
 
+The editor support is `editor/vscode/`, a Visual Studio Code
+extension: highlighting from a grammar over the language's keywords,
+the checker's diagnostics as the file is typed through `koitc check
+--json`, hovers over the constructs and over the kernel interface
+`koitc interface` prints, and the bytecode and the C beside the
+source. It reimplements nothing about the language; everything it
+shows is `koitc` output, so it cannot drift from the compiler. Its
+README says how to run it.
+
 Rule while implementing: gaps or contradictions found in the spec are
 logged in `spec/ISSUES.md` with a proposed resolution, not silently
 resolved in code.
