@@ -3,6 +3,8 @@
 #
 #   tests/ok/*.ko     must parse and desugar; at the check stage, must
 #                     also check
+#   tests/demo/*.ko   the programs the language is shown with; held to
+#                     everything tests/ok is held to, at every stage
 #   tests/err/*.ko    must parse and desugar; at the check stage,
 #                     `koitc check` must reject the file with a
 #                     diagnostic containing the text after
@@ -95,7 +97,8 @@ later() {
   return 1
 }
 
-for f in tests/ok/*.ko tests/err/*.ko tests/parse/*.ko tests/corpus/*.ko tests/run/*.ko; do
+for f in tests/ok/*.ko tests/demo/*.ko tests/err/*.ko tests/parse/*.ko \
+         tests/corpus/*.ko tests/run/*.ko; do
   [ -e "$f" ] || continue
   if ! "$KOITC" lex "$f" >/dev/null 2>"$TMP/out"; then
     failed lex "$f"
@@ -120,7 +123,7 @@ for f in tests/ok/*.ko tests/err/*.ko tests/parse/*.ko tests/corpus/*.ko tests/r
 done
 
 if at_least check; then
-  for f in tests/ok/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko; do
     if ! "$KOITC" check "$f" >"$TMP/out" 2>&1; then
       failed check "$f"
     elif ! "$KOITC" check --json "$f" 2>/dev/null | grep -qF '"ok": true'; then
@@ -152,7 +155,7 @@ if at_least check; then
 fi
 
 if at_least run; then
-  for f in tests/ok/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko; do
     if "$KOITC" run "$f" >"$TMP/out" 2>&1; then
       pass=$((pass + 1))
     else
@@ -178,7 +181,7 @@ fi
 # the lowering: `lower` and `lower --inline` succeed, and the LIR
 # runs print what the Core run prints
 if at_least lower; then
-  for f in tests/ok/*.ko tests/run/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko; do
     [ -e "$f" ] || continue
     opts=$(sed -n '1s|^// run: ||p' "$f")
     if ! "$KOITC" lower "$f" >"$TMP/out" 2>&1; then
@@ -240,7 +243,7 @@ fi
 # the shape of the compiled code: the syntactic part of Lemma L on
 # every program
 if at_least shape; then
-  for f in tests/ok/*.ko tests/run/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko; do
     [ -e "$f" ] || continue
     if "$KOITC" shape "$f" >"$TMP/out" 2>&1; then
       pass=$((pass + 1))
@@ -267,7 +270,7 @@ if at_least emit; then
   # one token per line, for comparing texts and byte streams
   norm() { sed 's/#.*$//; s/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | grep -v '^$'; }
   bytes() { grep -v '^#' | tr ', ' '\n\n' | grep -v '^$'; }
-  for f in tests/ok/*.ko tests/run/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko; do
     [ -e "$f" ] || continue
     if ! "$KOITC" emit "$f" >"$TMP/unit.c" 2>"$TMP/out"; then
       failed emit "$f"; continue

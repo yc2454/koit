@@ -1,0 +1,52 @@
+// Parsing a packet: one test per header, not one per access.
+//
+// In C each header needs its own `data + sizeof(*h) > data_end` test
+// before a field of it is touched, and the test has to be written
+// again whenever the offset changes, because the verifier loses the
+// bound across arithmetic it cannot follow. Here the `?` on a view is
+// that test, written once per header. Afterwards every field of the
+// view is an ordinary place, and the compiler emits the comparison
+// the verifier wants to see.
+
+const ETH_P_IP    = hton(0x0800)
+const IPPROTO_UDP = 17
+const DNS_PORT    = hton(53)
+
+type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
+type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
+                 ttl: u8, protocol: u8, csum: be16,
+                 saddr: be32, daddr: be32 }
+type UdpHdr  = { source: be16, dest: be16, len: be16, csum: be16 }
+
+map seen : percpu_array[1] of { dns: u64, other: u64 }
+
+program parse : xdp
+  verdict in { PASS }
+  preserve pkt
+  fail pass
+  // a packet too short to hold the headers is the input's doing, not
+  // the program's: hand it to the stack
+  on short_packet { seen[0].other += 1; pass }
+{
+  let eth = pkt.view<EthHdr>(0)?
+  // `proto` is big-endian and the constant was swapped at compile
+  // time, so both sides have one type. Comparing a `be16` against a
+  // host-order `u16`, the bug this idiom is famous for, does not
+  // type at all.
+  if eth.proto != ETH_P_IP { seen[0].other += 1; pass }
+
+  let ip = pkt.view<Ipv4Hdr>(EthHdr.size)?
+  if ip.protocol != IPPROTO_UDP { seen[0].other += 1; pass }
+
+  // Options make the header's length a runtime value. The mask says
+  // what it can be; writing that bound on the binding is a demand the
+  // checker discharges from the mask alone, with no runtime test, and
+  // the bound is a fact at the view below.
+  let hlen: u64 where hlen <= 60 = ((ip.vihl & 0xf) as u64) * 4
+  let udp = pkt.view<UdpHdr>(EthHdr.size + hlen)?
+
+  // no test here: the window was tested where it was carved
+  if udp.dest != DNS_PORT { seen[0].other += 1; pass }
+  seen[0].dns += 1
+  pass
+}

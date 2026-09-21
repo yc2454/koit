@@ -58,15 +58,16 @@ end
 def renCond (r : Ren) (c : LIR.Cond) : LIR.Cond :=
   { c with l := renExpr r c.l, r := renExpr r c.r }
 
-/-- The block's own declarations given fresh names, so that the
-inlined copy declares nothing the caller declares. -/
+/-- Every declaration of the block, and of the blocks inside it,
+given a fresh name, so that the inlined copy declares nothing the
+caller declares. -/
 partial def renameDecls (r : Ren) : List LIR.Stmt → IM Ren
   | [] => return r
   | s :: rest => do
     let r ← match s with
-      | .«let» _ x .. | .frame _ x .. => do return (x, ← fresh x) :: r
+      | .«let» _ x .. | .frame _ x .. => do pure ((x, ← fresh x) :: r)
       | .call _ (some x) .. | .builtin _ (some x) .. | .kernel _ (some x) .. => do
-        return (x, ← fresh x) :: r
+        pure ((x, ← fresh x) :: r)
       | .ite _ _ t e => do renameDecls (← renameDecls r t) e
       | .block _ b | .loop _ b => renameDecls r b
       | .call _ none _ _ u a => do

@@ -151,7 +151,7 @@
           }
         },
         {
-          "match": "\\b(license|implements)\\b",
+          "match": "\\blicense\\b",
           "name": "keyword.other.declaration.koit"
         }
       ]
@@ -244,13 +244,18 @@
     "keywords": {
       "patterns": [
         {
+          "comment": "the clauses of a program's header and of a contract",
+          "match": "\\b(verdict|preserve|except|implements)\\b",
+          "name": "keyword.other.clause.koit"
+        },
+        {
           "comment": "the obligations: what the checker demands and discharges",
-          "match": "\\b(check|hold|fails|fail|except|bounded|preserve|move)\\b",
+          "match": "\\b(check|hold|fails|fail|bounded|move)\\b",
           "name": "keyword.control.obligation.koit"
         },
         {
           "comment": "the verdicts a program exits with",
-          "match": "\\b(pass|drop|tx|abort|verdict)\\b",
+          "match": "\\b(pass|drop|tx|abort)\\b",
           "name": "constant.language.verdict.koit"
         },
         {

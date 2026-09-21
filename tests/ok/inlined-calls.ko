@@ -1,0 +1,20 @@
+// Two calls to one function, and a caller that binds what the callee
+// binds. Inlining gives every declaration of the callee's body a
+// fresh name, not just the first one, so the inlined copies declare
+// nothing twice and nothing the caller already declared.
+
+map hits : array[8] of { n: u64 }
+
+// The body binds twice: the lookup's result, and a local.
+fn bump(i: u32 where i < 8) {
+  let d = i as u64
+  hits[i].n += d
+}
+
+program count : xdp fail pass {
+  // the caller binds a lookup of its own, of the same map
+  hits[0].n += 1
+  bump(1)
+  bump(2)
+  pass
+}

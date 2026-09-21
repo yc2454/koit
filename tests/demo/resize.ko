@@ -1,0 +1,41 @@
+// Growing the packet, and what that does to every pointer into it.
+//
+// `adjust_head` may move the packet, so a pointer taken before it is
+// stale afterwards. The kernel's verifier knows this and rejects the
+// later access, but only with a message about an invalid packet
+// pointer, which says nothing about the line that invalidated it.
+// Here a view is guarded by the packet's layout: the resize drops
+// that guard, using `eth` after it is a type error naming the line
+// that dropped it, and the fix is to carve the window again over the
+// packet as it now is.
+
+const ETH_P_IP  = hton(0x0800)
+const VLAN_SIZE = 4
+
+type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
+
+map grown : percpu_array[1] of { n: u64 }
+
+program headroom : xdp
+  verdict in { PASS, TX, ABORTED }
+  fail abort
+  on short_packet { pass }
+  // The kernel refused to grow the packet; nothing was changed.
+  on helper { pass }
+{
+  let eth = pkt.view<EthHdr>(0)?
+  if eth.proto != ETH_P_IP { pass }
+
+  // Makes room at the front. Every view carved before this line dies
+  // here, `eth` among them.
+  pkt.adjust_head(-VLAN_SIZE)?
+
+  // Naming `eth.proto` here would be a type error pointing at the
+  // line above. The header the program already parsed now begins
+  // VLAN_SIZE bytes in, and reading it means carving that window.
+  let moved = pkt.view<EthHdr>(VLAN_SIZE)?
+  if moved.proto != ETH_P_IP { abort }
+
+  grown[0].n += 1
+  tx
+}

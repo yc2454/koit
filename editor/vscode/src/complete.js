@@ -35,6 +35,10 @@ const DECL_WORDS =
 
 // What may stand between a program's header and its body.
 const HEADER_WORDS = [
+  { label: "verdict", body: "verdict in { ${1:PASS} }",
+    detail: "the verdicts this program may return" },
+  { label: "preserve", body: "preserve ${1:pkt}",
+    detail: "a region the program writes nothing in" },
   { label: "on", body: "on ${1:short_packet} { $0 }",
     detail: "a handler for a kind of failure" },
   { label: "fail", body: "fail ${1:pass}",
@@ -42,6 +46,10 @@ const HEADER_WORDS = [
   { label: "implements", body: "implements ${1:Contract}",
     detail: "the contract this program satisfies" }
 ];
+
+// A contract states the same clauses, and nothing else.
+const CONTRACT_WORDS = HEADER_WORDS.filter(
+  (w) => w.label === "verdict" || w.label === "preserve");
 
 function item(label, kind, detail, doc) {
   const it = new vscode.CompletionItem(label, kind);
@@ -111,6 +119,17 @@ function inHeader(doc, line) {
     if (!text) continue;
     if (/^on\b/.test(text)) continue;
     return /^(program|contract)\s+[A-Za-z_]\w*\s*:/.test(text);
+  }
+  return false;
+}
+
+// Whether the cursor is inside a contract, whose body holds the same
+// clauses a program's header does and no statements at all.
+function inContract(doc, line) {
+  for (let i = line; i >= 0; i--) {
+    const text = bare(doc.lineAt(i).text).trim();
+    if (/^contract\s+[A-Za-z_]\w*\s*:/.test(text)) return true;
+    if (/^(program|fn)\s+[A-Za-z_]\w*/.test(text)) return false;
   }
   return false;
 }
@@ -321,6 +340,17 @@ function completions(doc, pos, model) {
       f.name, K.Field, f.type, `A field of \`${ty}\`.`));
   }
 
+  // `verdict in { ` — the names inside the braces are the kind's own
+  // verdicts, written bare. They are not expressions, so nothing else
+  // belongs here.
+  if (/\bverdict\s+in\s*\{[^}]*$/.test(prefix)) {
+    if (!k) return [];
+    return k.verdicts.map((v) => item(
+      v, K.EnumMember, `a verdict of \`${kind}\``,
+      `One of the verdicts \`${kind}\` may return. Inside this clause ` +
+      "it is a bare name, not an expression."));
+  }
+
   // `on ` — the kinds a failure can have.
   if (/^\s*on\s+[A-Za-z0-9_]*$/.test(prefix)) {
     return FAILURE_KINDS.map((f) => {
@@ -376,6 +406,13 @@ function completions(doc, pos, model) {
     }
     for (const w of DECL_WORDS) {
       items.push(item(w, K.Keyword, "a declaration", keywordDoc(w)));
+    }
+    return items;
+  }
+
+  if (inContract(doc, pos.line)) {
+    for (const w of CONTRACT_WORDS) {
+      items.push(snippet(w.label, w.body, w.detail, keywordDoc(w.label)));
     }
     return items;
   }

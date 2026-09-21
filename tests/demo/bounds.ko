@@ -1,0 +1,49 @@
+// Declaring a bound once, instead of testing it everywhere.
+//
+// The C version of this tests `i < SLOTS` again at every use, because
+// nothing in the language carries the fact from one line to the next.
+// Miss one and the verifier rejects the program; write them all and
+// the reader cannot tell which test is the real invariant and which
+// is noise. Here the bound is part of the type of what the map holds,
+// the marked load is where it is established, and every use after
+// that needs nothing.
+
+const SLOTS = 64
+
+// The predicate is an invariant of every value this unit stores. An
+// array map starts zero-filled, and zero satisfies it, so a fresh map
+// is already in range.
+map route : array[1] of { slot: u32 where slot < SLOTS }
+map hits  : array[SLOTS] of { n: u64 }
+
+// A refinement on a parameter is a precondition. Every call site is
+// held to it, so the body indexes with no test of its own.
+fn bump(i: u32 where i < SLOTS) {
+  hits[i].n += 1
+}
+
+program count : xdp
+  verdict in { PASS, ABORTED }
+  preserve pkt
+  fail pass
+  // Another program wrote this map. A value outside the range it
+  // declared is that writer's bug, and it is worth seeing rather
+  // than papering over.
+  on invariant { abort }
+{
+  // The marked load: from here on `slot` has the refined type.
+  let slot = route[0].slot?
+  // No test. `slot < SLOTS` is a fact, so the index is in range.
+  hits[slot].n += 1
+  // The same fact discharges the precondition at the call.
+  bump(slot)
+
+  // Where the arithmetic outruns what the checker tracks, `check` is
+  // the one way to turn what the programmer knows into a fact. It is
+  // a real test, and it compiles to the comparison the verifier is
+  // looking for, so nothing is elided that the kernel cannot see.
+  let q = ctx.rx_queue_index
+  check q < SLOTS
+  hits[q].n += 1
+  pass
+}

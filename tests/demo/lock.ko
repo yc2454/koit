@@ -1,0 +1,33 @@
+// A lock released on every way out.
+//
+// The block takes the lock on entry and releases it on every exit of
+// the block, including the `drop` in the middle. That is the shape
+// that in C is a missing `bpf_spin_unlock` on an error path: the
+// verifier does catch it, but only once the program is written, and
+// it reports the exit rather than the path that got there. And while
+// the lock is held, the effects the kernel forbids under it are type
+// errors here, so the program cannot be written the way the verifier
+// would reject it.
+
+map bucket : array[1] of { lk: spinlock, tokens: u64, last: u64 }
+
+program limit : xdp
+  verdict in { PASS, DROP }
+  preserve pkt
+  fail drop
+{
+  // A call, which is allowed here. The same line moved inside the
+  // block below is a type error naming the lock: a spin lock forbids
+  // the call effect, which is the kernel's own rule.
+  let now = ktime()
+
+  let b = bucket[0]
+  hold lock(b.lk) {
+    // The unlock runs before this verdict takes effect, and it would
+    // run just the same for a `fail` or a `break`.
+    if b.tokens == 0 { drop }
+    b.tokens -= 1
+    b.last = now
+  }
+  pass
+}

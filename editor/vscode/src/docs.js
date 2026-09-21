@@ -36,18 +36,17 @@ const KEYWORDS = {
     "the resources in scope require and then exits with its verdict.",
     "`else fail r` puts a reason on a fallible operation."
   ],
-  except: [
-    "`except` — the exits a contract permits",
-    "Narrows what the implementing program may do on a path."
-  ],
   bounded: [
     "`bounded` — the loop's trip count is known",
     "Every loop in a program is bounded, because the verifier must see",
     "termination. The bound is part of the loop, not a hope about it."
   ],
   preserve: [
-    "`preserve` — what the program must leave intact",
-    "Named in a contract, checked of the program that implements it."
+    "`preserve R` — the program writes nothing in `R`",
+    "A header clause or a contract clause: no statement of the program,",
+    "nor of the functions it calls, may carry a write effect meeting",
+    "`R`. A program that preserves any packet range may not resize the",
+    "packet, since a resize moves every byte."
   ],
   move: [
     "`move` — hand over an owned reference",
@@ -118,7 +117,18 @@ const KEYWORDS = {
   drop: ["`drop` — exit with the verdict that discards the packet"],
   tx: ["`tx` — exit with the verdict that sends the packet back out"],
   abort: ["`abort` — exit with the verdict that reports an error"],
-  verdict: ["`verdict` — the value a program exits with"],
+  verdict: [
+    "`verdict in { ... }` — the verdicts this program may return",
+    "A header clause, not a value. The names inside the braces are the",
+    "kind's own verdicts, written bare; every exit of the program, every",
+    "handler's exit, and the default failure verdict are checked against",
+    "the set, so a contract cannot be satisfied by failing."
+  ],
+  except: [
+    "`except` — the maps a `preserve maps` clause lets through",
+    "The list runs to the end of the clause, so a further region needs",
+    "its own `preserve`."
+  ],
   pkt: [
     "`pkt` — the packet the program was handed",
     "A dynamic region: nothing in it is readable until a test says so,",
