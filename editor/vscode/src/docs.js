@@ -113,10 +113,27 @@ const KEYWORDS = {
     "`for i in 0..n { ... }` — a loop over a bounded range",
     "`i` carries the range as a refinement inside the body."
   ],
-  pass: ["`pass` — exit with the verdict that lets the packet through"],
-  drop: ["`drop` — exit with the verdict that discards the packet"],
-  tx: ["`tx` — exit with the verdict that sends the packet back out"],
-  abort: ["`abort` — exit with the verdict that reports an error"],
+  pass: [
+    "`pass` — exit, letting the packet through",
+    "A statement, not a value: it is `return` of this kind's verdict of",
+    "that name, `PASS` in an `xdp` program and `OK` in a `tc` one. The",
+    "resources held here are released on the way out."
+  ],
+  drop: [
+    "`drop` — exit, discarding the packet",
+    "A statement: `return` of this kind's verdict of that name, `DROP`",
+    "in an `xdp` program and `SHOT` in a `tc` one."
+  ],
+  tx: [
+    "`tx` — exit, sending the packet back out the way it came",
+    "A statement: `return TX`. Only kinds whose table has the verdict",
+    "offer the word."
+  ],
+  abort: [
+    "`abort` — exit, reporting an error",
+    "A statement: `return ABORTED`. The kernel fires its exception",
+    "tracepoint on this verdict, so a failure stays observable."
+  ],
   verdict: [
     "`verdict in { ... }` — the verdicts this program may return",
     "A header clause, not a value. The names inside the braces are the",

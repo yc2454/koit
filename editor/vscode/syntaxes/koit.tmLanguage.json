@@ -254,9 +254,9 @@
           "name": "keyword.control.obligation.koit"
         },
         {
-          "comment": "the verdicts a program exits with",
+          "comment": "the verdict statements: each one is an exit, sugar for `return` of the kind's verdict of that name",
           "match": "\\b(pass|drop|tx|abort)\\b",
-          "name": "constant.language.verdict.koit"
+          "name": "keyword.control.exit.koit"
         },
         {
           "match": "\\b(if|else|for|repeat|break|continue|return|in)\\b",
