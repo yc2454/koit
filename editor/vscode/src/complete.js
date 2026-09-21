@@ -24,7 +24,24 @@ const PRIMITIVES =
 // The words that make sense inside a body, as words.
 const STATEMENT_WORDS =
   ["let", "var", "if", "else", "for", "in", "repeat", "break", "continue",
-   "return", "check", "hold", "fail", "as", "move", "true", "false"];
+   "return", "check", "hold", "fail", "where", "as", "move", "true",
+   "false"];
+
+// The words a declaration starts with, offered beside the snippets so
+// that typing one matches whether or not the snippet is wanted.
+const DECL_WORDS =
+  ["program", "fn", "type", "map", "const", "config", "contract",
+   "license"];
+
+// What may stand between a program's header and its body.
+const HEADER_WORDS = [
+  { label: "on", body: "on ${1:short_packet} { $0 }",
+    detail: "a handler for a kind of failure" },
+  { label: "fail", body: "fail ${1:pass}",
+    detail: "the verdict an unhandled failure exits with" },
+  { label: "implements", body: "implements ${1:Contract}",
+    detail: "the contract this program satisfies" }
+];
 
 function item(label, kind, detail, doc) {
   const it = new vscode.CompletionItem(label, kind);
@@ -82,6 +99,20 @@ function depthAt(doc, pos) {
     }
   }
   return depth;
+}
+
+// Whether the cursor stands between a program's header and its body,
+// where a handler goes. Walking back over blank lines, comments, and
+// the handlers already written must reach the header itself; the
+// brace that opens the body, or the one that closed it, ends the walk.
+function inHeader(doc, line) {
+  for (let i = line - 1; i >= 0; i--) {
+    const text = bare(doc.lineAt(i).text).trim();
+    if (!text) continue;
+    if (/^on\b/.test(text)) continue;
+    return /^(program|contract)\s+[A-Za-z_]\w*\s*:/.test(text);
+  }
+  return false;
 }
 
 // What this unit declares, read off the declaration lines. The
@@ -187,6 +218,10 @@ function typeOfName(doc, line, name) {
 function typeItems(doc, model) {
   const items = PRIMITIVES.map((t) =>
     item(t, K.TypeParameter, "a machine type", keywordDoc(t)));
+  for (const q of ["own", "ref", "view"]) {
+    items.push(item(q, K.Keyword, "a qualifier on what follows",
+                    keywordDoc(q)));
+  }
   for (const t of localNames(doc).types) {
     items.push(item(t.name, K.Struct, "declared in this unit", t.line));
   }
@@ -325,15 +360,23 @@ function completions(doc, pos, model) {
   // A type is wanted after a colon that is not a header's.
   if (/:\s*[A-Za-z0-9_]*$/.test(prefix)) return typeItems(doc, model);
 
-  // Otherwise: what may stand here. At the top level that is a
-  // declaration; inside a body it is a statement.
+  // Otherwise: what may stand here. Between a header and a body that
+  // is a handler; at the top level a declaration; inside a body a
+  // statement.
   const items = [];
   if (depthAt(doc, pos) <= 0) {
+    if (inHeader(doc, pos.line)) {
+      for (const h of HEADER_WORDS) {
+        items.push(snippet(h.label, h.body, h.detail, keywordDoc(h.label)));
+      }
+      return items;
+    }
     for (const d of DECL_SNIPPETS) {
       items.push(snippet(d.label, d.body, d.detail, keywordDoc(d.label)));
     }
-    items.push(item("license", K.Keyword, "the module's license",
-                    keywordDoc("license")));
+    for (const w of DECL_WORDS) {
+      items.push(item(w, K.Keyword, "a declaration", keywordDoc(w)));
+    }
     return items;
   }
 

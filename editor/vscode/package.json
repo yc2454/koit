@@ -2,19 +2,31 @@
   "name": "koit",
   "displayName": "koit",
   "description": "Syntax, live checking, and hover documentation for koit, an eBPF source language whose types are the conditions the kernel verifier checks.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "koit",
   "license": "MIT",
-  "engines": { "vscode": "^1.75.0" },
-  "categories": ["Programming Languages", "Linters"],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
   "main": "./src/extension.js",
-  "activationEvents": ["onLanguage:koit"],
+  "activationEvents": [
+    "onLanguage:koit"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "koit",
-        "aliases": ["koit", "Koit"],
-        "extensions": [".ko"],
+        "aliases": [
+          "koit",
+          "Koit"
+        ],
+        "extensions": [
+          ".ko"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -26,11 +38,31 @@
       }
     ],
     "commands": [
-      { "command": "koit.check", "title": "koit: Check this file", "category": "koit" },
-      { "command": "koit.showBytecode", "title": "koit: Show the BPF bytecode", "category": "koit" },
-      { "command": "koit.showC", "title": "koit: Show the emitted C", "category": "koit" },
-      { "command": "koit.run", "title": "koit: Run on a packet", "category": "koit" },
-      { "command": "koit.showInterface", "title": "koit: Show the kernel interface", "category": "koit" }
+      {
+        "command": "koit.check",
+        "title": "koit: Check this file",
+        "category": "koit"
+      },
+      {
+        "command": "koit.showBytecode",
+        "title": "koit: Show the BPF bytecode",
+        "category": "koit"
+      },
+      {
+        "command": "koit.showC",
+        "title": "koit: Show the emitted C",
+        "category": "koit"
+      },
+      {
+        "command": "koit.run",
+        "title": "koit: Run on a packet",
+        "category": "koit"
+      },
+      {
+        "command": "koit.showInterface",
+        "title": "koit: Show the kernel interface",
+        "category": "koit"
+      }
     ],
     "configuration": {
       "title": "koit",
@@ -43,7 +75,10 @@
         "koit.kernel": {
           "type": "string",
           "default": "v6.8",
-          "enum": ["v6.8", "v7.0-rc1"],
+          "enum": [
+            "v6.8",
+            "v7.0-rc1"
+          ],
           "description": "The kernel tag whose interface a file is checked against."
         },
         "koit.checkOnType": {
@@ -54,7 +89,10 @@
         "koit.cpu": {
           "type": "string",
           "default": "v3",
-          "enum": ["v3", "v4"],
+          "enum": [
+            "v3",
+            "v4"
+          ],
           "description": "The instruction set used when showing bytecode or running a program."
         }
       }

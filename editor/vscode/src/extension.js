@@ -370,6 +370,12 @@ function activate(context) {
   virtualEmitter = new vscode.EventEmitter();
   timers = new Map();
 
+  // Which build is running, so that a reload that did not take is
+  // visible: extension code is read once, when the window loads it.
+  const version = require("../package.json").version;
+  output.appendLine(`koit ${version}: highlighting, checking, hover, ` +
+                    `completion, lenses`);
+
   const koit = { language: "koit" };
   context.subscriptions.push(
     diagnostics, output, status, virtualEmitter,
