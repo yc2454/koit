@@ -25,6 +25,18 @@ about the language, so it cannot drift from it.
   a context field, a verdict, or a resource, its entry in the kernel
   interface: the signature, the effects, how it can fail, and which
   kinds may use it. Over a name the unit declares, its declaration.
+- **Completion.** What is offered is what a program of this kind may
+  write, which the extension knows from the same interface. After
+  `ctx.` an `xdp` program is offered `ingress_ifindex` and
+  `rx_queue_index`, a `tc` program `mark`, `priority`, and `ifindex`,
+  and a `syscall` program nothing, because it has no context. A call
+  the interface restricts to `xdp` and `tc` is not offered inside a
+  `syscall` program, `tx` is not offered in a `tc` one because `tc`
+  has no such verdict, and `pkt` is not offered where the kind has no
+  packet. After a name bound to a window or to a map slot, that
+  type's fields, with their refinements; after a name whose type only
+  the checker knows, nothing, rather than a list that does not belong
+  to it.
 - **Above each program**, three lenses: run it on a packet, show its
   bytecode, show its C.
 
@@ -61,5 +73,6 @@ and restart VS Code. Open any `.ko` file.
     language-configuration.json  comments, brackets, indentation
     syntaxes/koit.tmLanguage.json  the grammar
     src/extension.js             diagnostics, hover, lenses, commands
-    src/interface.js             `koitc interface`, indexed by name
+    src/complete.js              what may be written at a position
+    src/interface.js             `koitc interface`, indexed and modelled
     src/docs.js                  what each construct means

@@ -189,4 +189,57 @@ const FALLIBLE_DOC =
   "visible in the source. On failure, control goes to the handler for " +
   "its kind; `else fail r` gives that handler a reason.";
 
-module.exports = { keywordDoc, FALLIBLE_DOC };
+// The kinds a failure can have, which are what a handler table is
+// written over.
+const FAILURE_KINDS =
+  ["short_packet", "missing", "invariant", "bound", "helper", "program"];
+
+// The four ways a map is declared, each with what follows its name.
+const MAP_KINDS = [
+  { name: "array", snippet: "array[${1:n}] of ${2:T}",
+    doc: "a fixed number of slots, indexed; a fresh one is zero" },
+  { name: "percpu_array", snippet: "percpu_array[${1:n}] of ${2:T}",
+    doc: "one array per cpu, so no update contends with another" },
+  { name: "hash", snippet: "hash[${1:n}] of ${2:K} -> ${3:V}",
+    doc: "a lookup keyed by a value; a miss is a `missing` failure" },
+  { name: "ringbuf", snippet: "ringbuf[${1:bytes}]",
+    doc: "a queue to userspace; `reserve` takes an owned reference" }
+];
+
+// The statements and expressions worth offering whole, where writing
+// the construct means writing more than its first word.
+const SNIPPETS = [
+  { label: "check", body: "check ${1:condition}",
+    detail: "discharge a demand at runtime" },
+  { label: "hold", body: "hold lock(${1:place}) {\n\t$0\n}",
+    detail: "take a lock for a block" },
+  { label: "for", body: "for ${1:i} in 0..${2:n} {\n\t$0\n}",
+    detail: "a loop over a bounded range" },
+  { label: "repeat", body: "repeat ${1:n} {\n\t$0\n}",
+    detail: "a loop with a literal bound" },
+  { label: "if", body: "if ${1:condition} {\n\t$0\n}",
+    detail: "a branch; its test is a fact inside" },
+  { label: "if let", body: "if let ${1:x} = ${2:e} {\n\t$0\n}",
+    detail: "bind when the operation succeeds" }
+];
+
+// The declarations, offered where a declaration may stand.
+const DECL_SNIPPETS = [
+  { label: "program",
+    body: "program ${1:name} : ${2:xdp} fail ${3:pass} {\n\t$0\n}",
+    detail: "an attachable program" },
+  { label: "fn", body: "fn ${1:name}(${2:x}: ${3:u32}) -> ${4:u32} {\n\t$0\n}",
+    detail: "a function" },
+  { label: "type", body: "type ${1:Name} = { ${2:field}: ${3:u32} }",
+    detail: "a named layout" },
+  { label: "map", body: "map ${1:name} : array[${2:n}] of ${3:T}",
+    detail: "kernel-side storage" },
+  { label: "const", body: "const ${1:NAME} = ${2:0}",
+    detail: "a compile-time constant" },
+  { label: "contract", body: "contract ${1:Name} : ${2:xdp} {\n\t$0\n}",
+    detail: "what a program of a kind must satisfy" }
+];
+
+module.exports = {
+  keywordDoc, FALLIBLE_DOC, FAILURE_KINDS, MAP_KINDS, SNIPPETS, DECL_SNIPPETS
+};

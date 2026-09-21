@@ -11,7 +11,8 @@ const path = require("path");
 const crypto = require("crypto");
 
 const { keywordDoc, FALLIBLE_DOC } = require("./docs");
-const { index } = require("./interface");
+const { parse } = require("./interface");
+const { completions } = require("./complete");
 
 let diagnostics;   // the squiggles, one collection for the extension
 let output;        // the channel the commands print to
@@ -181,13 +182,14 @@ function scheduleCheck(doc) {
 // Hover
 // ---------------------------------------------------------------- //
 
-// The interface of a kernel tag, read once and kept.
+// The interface of a kernel tag, read once and kept: what the
+// hovers and the completions are drawn from.
 async function interfaceFor(tag, cwd) {
   if (interfaces.has(tag)) return interfaces.get(tag);
   const r = await runKoitc(["interface", "--kernel", tag], cwd);
-  const table = r.code === 0 ? index(r.stdout, tag) : new Map();
-  interfaces.set(tag, table);
-  return table;
+  const model = parse(r.code === 0 ? r.stdout : "", tag);
+  interfaces.set(tag, model);
+  return model;
 }
 
 // What this file itself declares, so that hovering a map, a type, or
@@ -258,12 +260,23 @@ const hoverProvider = {
     }
 
     // Then the kernel interface the compiler carries.
-    const table = await interfaceFor(kernelTag(), workspaceOf(doc));
-    const entry = table.get(word);
+    const model = await interfaceFor(kernelTag(), workspaceOf(doc));
+    const entry = model.byName.get(word);
     if (entry) {
       return new vscode.Hover(markdown(entry.label, entry.text), range);
     }
     return null;
+  }
+};
+
+// ---------------------------------------------------------------- //
+// Completion
+// ---------------------------------------------------------------- //
+
+const completionProvider = {
+  async provideCompletionItems(doc, pos) {
+    const model = await interfaceFor(kernelTag(), workspaceOf(doc));
+    return completions(doc, pos, model);
   }
 };
 
@@ -362,6 +375,8 @@ function activate(context) {
     diagnostics, output, status, virtualEmitter,
     vscode.languages.registerHoverProvider(koit, hoverProvider),
     vscode.languages.registerCodeLensProvider(koit, lensProvider),
+    vscode.languages.registerCompletionItemProvider(
+      koit, completionProvider, ".", "<", ":"),
     vscode.workspace.registerTextDocumentContentProvider(
       "koit-out", contentProvider)
   );

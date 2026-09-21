@@ -276,9 +276,9 @@
           "name": "support.type.primitive.koit"
         },
         {
-          "comment": "map storage and the slots that live in a value",
-          "match": "\\b(array|percpu_array|hash|percpu_hash|lru_hash|ringbuf|spinlock)\\b",
-          "name": "support.type.storage.koit"
+          "comment": "the slot a map value can hold",
+          "match": "\\bspinlock\\b",
+          "name": "support.type.slot.koit"
         },
         {
           "comment": "program kinds",
