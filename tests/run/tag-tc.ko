@@ -10,8 +10,9 @@ type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
 type Stats = { ip: u32, other: u32 }
 map stats : array[1] of Stats
 
-program tag : tc fail pass
+program tag : tc
   on short_packet { pass }
+  default         { pass }
 {
   let eth = pkt.view<EthHdr>(0)?
   if eth.proto == ETH_P_IP {

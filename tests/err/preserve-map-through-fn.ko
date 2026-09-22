@@ -10,7 +10,6 @@ fn advance(p: ref Policy) { p.cur = p.cur + 1 }
 
 program observe : xdp
   preserve maps except stats
-  fail pass
 {
   stats[0].seen += 1
   let p = policy[0]

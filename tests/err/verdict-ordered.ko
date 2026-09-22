@@ -1,6 +1,6 @@
 // expect: its values compare only with `==` and `!=`
 // The values of an enumeration are named, not ordered.
-program p : xdp fail drop {
+program p : xdp {
   if PASS < DROP { pass }
   drop
 }

@@ -387,6 +387,43 @@ def kindRow (env : Env) (span : Span) (kind : String) : M KindRow := do
     err span s!"unknown program kind `{kind}`; the kinds are \
       {", ".intercalate (env.interface.kinds.map (·.name))}"
 
+/-- The failure kinds a body can raise: those its `raise` statements
+carry, and those of every function it calls, through the acyclic call
+graph. A marker and an `else` desugar to a `raise`, so the walk sees
+every site. -/
+partial def raisableIn (env : Env) (seen : List String) :
+    List Stmt → List Kind
+  | [] => []
+  | s :: rest =>
+    let here : List Kind := match s with
+      | .raise _ k _ => [k]
+      | .ite _ _ t e => raisableIn env seen t ++ raisableIn env seen e
+      | .loop _ _ b | .«for» _ _ _ _ b => raisableIn env seen b
+      | .«try» _ _ _ t e _ => raisableIn env seen t ++ raisableIn env seen e
+      | .hold _ _ _ _ b e =>
+        raisableIn env seen b ++ raisableIn env seen (e.getD [])
+      | _ => []
+    -- a call to a `fails` function raises what that function raises
+    let called : List Kind :=
+      (calleesStmts [s]).flatMap fun f =>
+        if seen.contains f then []
+        else match env.fns.find? (·.name == f) with
+          | some d => raisableIn env (f :: seen) d.body
+          | none => []
+    here ++ called ++ raisableIn env seen rest
+
+/-- (Handler-live): a handler names a kind the program can raise. The
+total table the desugaring builds fills every kind from the program's
+default, so a handler nobody can reach is dead code and a false
+statement about the program; `default` is exempt, since it is also
+what 14.1 checks the program's verdict set against. -/
+def checkNamedHandlers (env : Env) (p : Program) : M Unit := do
+  let raisable := raisableIn env [] p.body
+  for (span, k) in p.named do
+    unless raisable.contains k do
+      err span s!"nothing in `{p.name}` raises `{k}`, so this handler \
+        cannot run; remove it, or mark the operation that should raise it"
+
 def checkContract (env : Env) (c : Contract) : M Unit := do
   let row ← kindRow env c.span c.kind
   checkClauses env row c.verdicts c.preserved
@@ -398,6 +435,7 @@ effects checked against the preserved regions. Yields the caps of
 the loops and the program's effects. -/
 def checkProgram (env : Env) (p : Program) : M (Caps × Effs) := do
   let row ← kindRow env p.span p.kind
+  checkNamedHandlers env p
   if let some (s, c) := p.implements then
     match env.contracts.find? (·.name == c) with
     | some k =>

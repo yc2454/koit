@@ -27,7 +27,7 @@ re-derived the mechanisms against the kernel's own state
    `may_goto` are lowering targets, never source constructs.
 8. The `sleep` effect; sleepability is a column of the kind table
    (sections 12, 13).
-9. The reason of a `helper` failure defaults to the helper's negative
+9. The reason of a `failed_call` failure defaults to the helper's negative
    return (section 10.5).
 10. Principle P9, elide only what the verifier will see; the entailment
     fragment is fixed by acceptance, not expressiveness; no solver in
@@ -51,7 +51,7 @@ Changes from draft 1 to draft 2, for the record:
 
 1. Arithmetic is total, with the kernel's semantics for division,
    modulo, and shifts (section 8.1); the divisor and shift-amount
-   demands are gone and `check` is the only source of the `bound` kind.
+   demands are gone and `check` is the only source of the `failed_check` kind.
 2. Views carry their offset as a fact (section 7); stores through them
    carry region-indexed write effects (section 12).
 3. Contracts: verdict sets, preserved regions, named contracts a program
@@ -550,7 +550,7 @@ either by letting the scope release it or by handing it to a sink with
 names, `own Sock`, `own Event`; `ref` is never written under `own`.
 
 **Optionals.** `T?` is the result type of a fallible operation whose
-failure kind is `missing`: a hash lookup, or a function declared to
+failure kind is `not_found`: a hash lookup, or a function declared to
 return `T?`, where `T` is a scalar, since places are never returned.
 An optional is consumed only by a binding with a failure marker
 (section 10); a function produces absence with a bare `return`
@@ -637,18 +637,18 @@ The following are fallible and may appear only in the positions section
 
 | expression | result | failure kind |
 |---|---|---|
-| `e as {v: T \| P}` | `{v: T \| P}` | `bound` |
-| `e as E` for an enumeration `E`, `e` of its width | `E` | `bound` |
+| `e as {v: T \| P}` | `{v: T \| P}` | `failed_check` |
+| `e as E` for an enumeration `E`, `e` of its width | `E` | `failed_check` |
 | `pkt.view<T>(off)`, and `r.view<T>(off)` for any region `r` of dynamic extent an extension defines | `view T` | `short_packet` |
 | `pkt[off]` | `u8` | `short_packet`, sugar for a one-byte view read |
-| `m[k]` for a hash map, `k` a place of type `K` | `ref V` | `missing` |
-| `f(args)` for `f` returning `T?` | `T` | `missing` |
-| `p.f` where `f` has a `where` clause | `{v: T \| P}` | `invariant` |
-| `m.insert(k, v)`, `m.delete(k)` | none | `helper` |
-| `pkt.adjust_head(d)`, `pkt.adjust_tail(d)` | none | `helper` |
-| `redirect(ifindex)` | verdict | `helper` |
-| `rb.reserve<T>()` | `own T`, a resource | `helper` |
-| `sk_lookup_tcp(tuple)`, `sk_lookup_udp(tuple)` | `own Sock`, a resource | `missing` |
+| `m[k]` for a hash map, `k` a place of type `K` | `ref V` | `not_found` |
+| `f(args)` for `f` returning `T?` | `T` | `not_found` |
+| `p.f` where `f` has a `where` clause | `{v: T \| P}` | `bad_value` |
+| `m.insert(k, v)`, `m.delete(k)` | none | `failed_call` |
+| `pkt.adjust_head(d)`, `pkt.adjust_tail(d)` | none | `failed_call` |
+| `redirect(ifindex)` | verdict | `failed_call` |
+| `rb.reserve<T>()` | `own T`, a resource | `failed_call` |
+| `sk_lookup_tcp(tuple)`, `sk_lookup_udp(tuple)` | `own Sock`, a resource | `not_found` |
 
 The coercion `e as {v: T | P}` is the one way to establish a fact at
 runtime: after `let x = e as {v: T | P}?`, `x` has the refined type and
@@ -723,7 +723,7 @@ the constant the verifier needs. `for x in it bounded N` iterates a
 kernel iterator or a map, binding each element (a key and value pair
 for a map), and ends when the iterator drains or after `N` elements,
 whichever is first, as `bpf_loop` does for its count; with `bounded
-N?` reaching the cap before the iterator drains is a `bound` failure.
+N?` reaching the cap before the iterator drains is a `failed_check` failure.
 The iterators it ranges over are rows of the resource table (section
 11.2), which this draft leaves to the extensions: the form parses and
 desugars, and the checker rejects it until a row exists.
@@ -742,14 +742,18 @@ expression is folded by the compiler; both branches are type-checked
 
 ### 10.1 Kinds
 
+Each kind names the failure, so that `on K` reads as "when K
+happens"; who is to blame is a column of the table and not part of a
+name.
+
 | kind | raised by | blames |
 |---|---|---|
 | `short_packet` | a view or byte read outside the packet | the input |
-| `missing` | a hash lookup, socket lookup, or `T?` function with no value | the environment |
-| `invariant` | a marked load of a `where` field whose predicate is false | whoever wrote the map |
-| `bound` | a coercion `e as T?`, or its sugar `check`, whose predicate is false; an iterator loop marked `bounded N?` reaching its cap | the program's assumptions |
-| `helper` | a kernel call that reported failure; the reason defaults to the call's negative return | the kernel or resources |
-| `program` | a `fail` statement outside an `else` block | the program's own logic |
+| `not_found` | a hash lookup, socket lookup, or `T?` function with no value | the environment |
+| `bad_value` | a marked load of a `where` field whose predicate is false | whoever wrote the map |
+| `failed_check` | a coercion `e as T?`, or its sugar `check`, whose predicate is false; an iterator loop marked `bounded N?` reaching its cap | the program's assumptions |
+| `failed_call` | a kernel call that reported failure; the reason defaults to the call's negative return | the kernel or resources |
+| `fail` | a `fail` statement outside an `else` block, named after it as `short_packet` is named after its condition | the program's own logic |
 
 The kind of a fallible operation is fixed by the operation (section
 8.3). A failure carries a reason, an unsigned 32-bit value chosen by the
@@ -787,7 +791,7 @@ is a type error. `else <Exit>` abbreviates the one-statement block.
 ### 10.4 `check`, sugar for the coercion
 
 `check P` abbreviates `let _ = P as {b: bool | b}?` and records `P` as a
-fact for the rest of the enclosing block, raising `bound` when it is
+fact for the rest of the enclosing block, raising `failed_check` when it is
 false; `check P else { block }` runs the block instead. `P` is a
 predicate over variables in scope. The general form `let x = e as
 {v: T | P}?` gives `e` the refined type under the name `x`. Either form
@@ -800,33 +804,46 @@ way to add a fact without a test; the language has no `assume`.
 ### 10.5 `fail` and reasons
 
 `fail` inside an `else` block raises the kind of the operation that
-failed. `fail` anywhere else raises the kind `program`. `fail R`
+failed. `fail` anywhere else raises the kind `fail`. `fail R`
 attaches the reason `R`, an expression of type `u32`. The marker `?` is
-`else fail` with reason 0, except for the `helper` kind, where the
+`else fail` with reason 0, except for the `failed_call` kind, where the
 reason defaults to the helper's negative return value, so a handler
 can log the errno without the site naming it.
 
 ### 10.6 Handlers
 
 ```
-program p : xdp fail drop
-  on short_packet { stats[0].short += 1; pass }
-  on invariant, bound { stats[0].corrupt += 1; abort }
+program p : xdp
+  on short_packet            { stats[0].short += 1; pass }
+  on bad_value, failed_check { stats[0].corrupt += 1; abort }
+  default                    { drop }
 { ... }
 ```
 
-`on k1, k2 { block }` handles the listed kinds; `on _ { block }` handles
-every kind not listed elsewhere; `fail v` in the header abbreviates
-`on _ { v }`. At most one handler per kind. In a handler block the
-variable `reason: u32` holds the reason the site gave. The block must
+`on k1, k2 { block }` handles the listed kinds and `default { block }`
+handles every kind not listed elsewhere. `default` is not a kind, and
+is spelled outside the `on` family to say so; it reads the same
+standing alone as it does under a table. A program with no fallible
+operation raises nothing and states no handlers at all, unless its
+verdict set excludes the kind's default failure verdict, which 14.1
+checks whether or not a failure can reach it. The header
+holds clauses and handlers and no exits, since `fail` raises a
+failure with a reason and does nothing else. At most one handler per
+kind, and a handler names a kind the program can raise: the kinds a
+body raises are those of its fallible operations and of the `fails`
+functions it calls, and a handler outside that set could never run,
+so it is a type error and not dead code. `default` is exempt, since
+14.1 checks the program's verdict set against the kind's default
+failure verdict whether or not a failure can reach it. In a handler
+block the variable `reason: u32` holds the reason the site gave. The block must
 exit, and it is a non-failing context: no marker and no `fail` may
 appear in it. No resource is held and no view is live when a handler
 runs.
 
 ### 10.7 Defaults
 
-A kind with no handler and no `fail v` uses the default of the program
-kind (section 13): abort for XDP, drop for TC, minus one for syscall
+A kind with neither a handler of its own nor a `default` block uses
+the default of the program kind (section 13): abort for XDP, drop for TC, minus one for syscall
 programs. XDP's default is abort because the kernel fires the
 `xdp_exception` tracepoint on it, so failures stay observable.
 
@@ -837,7 +854,7 @@ may call other `fails` functions; a failure inside it goes to the
 handler of the program that called it, with the same kind and reason. A
 function not marked `fails` may not. Programs are always failing
 contexts. A function returning `T?` is a fallible operation of kind
-`missing` at its call sites.
+`not_found` at its call sites.
 
 ### 10.9 What is not a failure
 
@@ -882,8 +899,8 @@ the columns. Rows in this draft:
 | RCU section | `rcu` | none | no | unlock | unlock | `sleep` | yes, counted | | RCU-protected pointers, in the kernel-memory extension |
 | preempt-off | `preempt_off` | none | no | enable | enable | `sleep` | yes, counted | | |
 | IRQ-off | `irq_off` | none | no | restore | restore | `sleep` | yes, LIFO | native or lock; a flag saved by one class cannot be restored by the other | |
-| ring-buffer record | `rb.reserve<T>()`, yields `own T` | the ring buffer and the record type | yes, `helper` | submit | discard | none | yes | | |
-| socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the interface type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `missing` | release | release | none | yes | | |
+| ring-buffer record | `rb.reserve<T>()`, yields `own T` | the ring buffer and the record type | yes, `failed_call` | submit | discard | none | yes | | |
+| socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the interface type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `not_found` | release | release | none | yes | | |
 
 Rows the extensions add with no change to the core: resilient locks,
 whose acquisition can fail; kernel iterators, generic over the iterated
@@ -1023,7 +1040,7 @@ packet is read-only is a type error at the store.
 
 ## 13. Programs, contexts, verdicts
 
-`program name : kind [implements C] clause* [fail exit] handler* { body }`.
+`program name : kind [implements C] clause* handler* { body }`.
 The body sees `pkt` in packet kinds and `ctx` in all kinds. The `ctx`
 field tables follow the kernel's context-access rules: names, types,
 and writability are their koit side, offsets their kernel side
@@ -1137,7 +1154,7 @@ contract Monitor : xdp {
   preserve maps except stats
 }
 
-program observe : xdp implements Monitor fail pass { ... }
+program observe : xdp implements Monitor default { pass } { ... }
 ```
 
 A program may both implement a named contract and add inline clauses;
@@ -1151,7 +1168,7 @@ kind of the proposal's contracts and needs no new syntax. When the
 kernel enforces a map's predicate on userspace writes, a marked load's
 test can never fail; the language is unchanged, the marker stays, and
 the compiler may omit the test, since a test that cannot fail is a
-no-op. The `invariant` kind is then unreachable for that map.
+no-op. The `bad_value` kind is then unreachable for that map.
 
 ### 14.4 Shipping
 
@@ -1206,7 +1223,7 @@ every item exists in every variant.
   path; a body that can fall off its end is a type error.
 - A function declared `-> T?`, with `T` a scalar, returns absence with
   a bare `return`, and a value with `return e`; at its call sites it is
-  the fallible operation of kind `missing` that `?`, `else`, and
+  the fallible operation of kind `not_found` that `?`, `else`, and
   `if let` consume. A bare `return` elsewhere is an early exit of a
   function with no result.
 - `fails` is explicit: a function that may raise says so in its
@@ -1320,7 +1337,7 @@ implementation (`ISSUES.md`, entry 11):
   nothing and may take only a call's result, which is the surface rule
   that a bare expression statement is a call.
 - `errno` is the negative return of the helper whose `try` failed, the
-  default reason of the `helper` kind; it is defined only in the `else`
+  default reason of the `failed_call` kind; it is defined only in the `else`
   of such a `try`.
 - `size T` is typed as a literal, representable in the type of the
   context; `pkt.len` is an interface call; `-e` is `0 - e`, the kernel's
@@ -1787,7 +1804,7 @@ Helpers are nondeterministic relations constrained by their
 contracts. The semantics takes them as a parameter: a kernel `K` says,
 for each row of the call table and its evaluated arguments, what the
 call does, a result and a new state, or a failure with the negative
-return the `helper` reason defaults to. How the failure reaches the
+return the `failed_call` reason defaults to. How the failure reaches the
 program is a rule of the lowering read off the row's result type: a
 negative return for a scalar result, null for a location; a row that
 needs an exception gets a column then. A kernel is within its
@@ -2025,7 +2042,7 @@ Draft 3 decisions, from `mechanisms-draft3.md`:
     targets only, and the timed `may_goto` is never chosen for an
     exact loop.
 19. `sleep` is an effect, permitted per kind, forbidden while held.
-20. The `helper` reason defaults to the errno.
+20. The `failed_call` reason defaults to the errno.
 21. `license` per unit.
 22. The stack-size limit is not a language rule; the compiler reports
     frame size per program.
@@ -2187,6 +2204,51 @@ session 8:
     case; and keeping `u32` with the kind's range as a second demand
     on `return`, which closes the range alone.
 
+60. The program header has no `fail <exit>` clause: a `default`
+    block is the one way to say what an unhandled failure does, and `fail`
+    means raising a failure with a reason, everywhere. The clause was
+    an abbreviation for that handler, so the language loses a
+    construct rather than gaining one (P7), and the header holds
+    clauses and handlers and no exits. It also removes a keyword with
+    two unrelated grammars, an exit in the header and a `u32` reason
+    in a body, and with it the shapes the old clause admitted but
+    nobody wrote, `fail return PASS` among them. Rejected: `fail
+    ABORTED`, which settles the header's spelling but leaves the
+    keyword doing two jobs; and a new word for the clause, `default
+    ABORTED`, which keeps the brevity at the price of a keyword.
+
+61. Every failure kind names the failure, not the party blamed:
+    `short_packet`, `not_found`, `bad_value`, `failed_check`,
+    `failed_call`, and `fail`, the last named after the statement
+    that raises it. `on K` then reads as "when K happens", where
+    `on helper { pass }` read as declining a helper. Blame stays a
+    column of 10.1's table, which is where it was always stated. The
+    wildcard became `on other` here and `default` under decision 62,
+    where `on _` had no noun at all.
+
+62. The wildcard handler is `default { v }`, not `on other { v }`:
+    "other" is relative and in forty-three of the fifty-four programs
+    that carried it there was nothing to be other than. `default` is
+    the word 10.7 already uses for what it does, it reads the same
+    alone as under a table, and being outside the `on` family it says
+    that it is not a kind. A program with no fallible operation states
+    no handlers at all, unless a verdict set excludes the kind's
+    default failure verdict, which 14.1 demands whether or not a
+    failure can reach it; twenty of the corpus's twenty-two went.
+
+63. A handler names a kind the program can raise, or it is a type
+    error. It is the converse of P2: P2 says every failure is marked
+    and reaches a declared handler, and this says every declared
+    handler answers a failure that exists. A handler that cannot run
+    is not untidiness but a false statement about the program, and
+    one that decays silently, since deleting the last marker of a
+    kind leaves its handler behind. `default` is exempt, because it
+    is also what 14.1 checks the verdict set against, so it is never
+    dead. Contract clauses are not touched: a `verdict` set or a
+    `preserve` region may be looser than the program, since a promise
+    to the outside is what lets the body change, while a handler is
+    code.
+
 Open questions, with the default the checker implements until decided:
 
 - Q1. Handlers on functions. Default: no; a function-level handler is
@@ -2208,6 +2270,8 @@ Open questions, with the default the checker implements until decided:
 - Q9. A second lowering of failure through `bpf_throw` and the
   exception callback. Compiler question; the portable lowering, jumps
   and error codes generated by elaboration, comes first.
+- Q11. Closed 2026-09-21: a handler for a kind the program cannot
+  raise is an error (decision 63).
 - Q10. Closed 2026-09-20: the kernel side of the interface is
   transcribed per version from the kernel tree, not probed from a
   running kernel (decision 58).
@@ -2287,12 +2351,12 @@ map policy : array[1] of { cur: u32 where cur < M }
 // 3. functions: contracts on parameters and results, `fails` if needed
 fn step(h: u32, c: u8) -> u32 { ... }
 
-// 4. entry points: contract and failure policy first, then the body
+// 4. entry points: contract and handlers first, then the body
 program name : xdp
   verdict in { PASS, DROP, TX }
-  fail drop
   on short_packet { pass }
-  on invariant    { stats[0].bad += 1; abort }
+  on bad_value    { stats[0].bad += 1; abort }
+  default         { drop }
 {
   // parse: carve views, one fallible operation per line
   let eth = pkt.view<EthHdr>(0)?
@@ -2327,8 +2391,8 @@ map backends : array[1] of Backend[M]
 program pick : xdp
   verdict in { PASS, DROP, ABORTED, REDIRECT }
   preserve pkt
-  fail abort
   on short_packet { drop }
+  default         { abort }
 {
   var off = 0
   // short_packet: drop
@@ -2391,11 +2455,12 @@ map stats : percpu_array[1] of Stats
 fn fnv_step(h: u32, c: u8) -> u32 { (h ^ (c as u32)) * 16777619 }
 
 // whatever we cannot serve goes to the stack
-program bmc_rx : xdp fail pass
+program bmc_rx : xdp
   on short_packet { stats[0].short += 1; pass }
-  on program      { stats[0].other += 1; pass }
+  on fail         { stats[0].other += 1; pass }
   // a corrupted entry is a bug; make it visible
-  on invariant    { abort }
+  on bad_value    { abort }
+  default         { pass }
 {
   var off = 0
   let eth = pkt.view<EthHdr>(off)?
@@ -2464,8 +2529,9 @@ program bmc_rx : xdp fail pass
   tx
 }
 
-program bmc_tx : tc fail pass
+program bmc_tx : tc
   on short_packet { pass }
+  default         { pass }
 {
   // parse the server's reply, hash its key as above, then:
   let e = cache[h % SLOTS]
@@ -2496,7 +2562,7 @@ map verdicts : hash[65536] of Flow -> { v: u32 where 1 <= v && v <= 2 }
 program filter : xdp
   verdict in { PASS, DROP }
   preserve pkt[0 .. 14)
-  fail drop
+  default  { drop }
 {
   let eth = pkt.view<EthHdr>(0)?
   let ip  = pkt.view<Ipv4Hdr>(EthHdr.size)?

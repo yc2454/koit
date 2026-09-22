@@ -21,7 +21,9 @@ contract Monitor : xdp {
 }
 
 // from 14.2, where the body is elided
-program observe : xdp implements Monitor fail pass {
+program observe : xdp implements Monitor
+  default { pass }
+{
   stats[0].seen += 1
   pass
 }
@@ -31,7 +33,7 @@ map verdicts : hash[65536] of Flow -> { v: u32 where 1 <= v && v <= 2 }
 program filter : xdp
   verdict in { PASS, DROP }
   preserve pkt[0 .. 14)
-  fail drop
+  default { drop }
 {
   let eth = pkt.view<EthHdr>(0)?
   let ip  = pkt.view<Ipv4Hdr>(EthHdr.size)?

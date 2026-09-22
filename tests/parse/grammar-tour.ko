@@ -57,9 +57,7 @@ contract Quiet : tc {
 program tour_tc : tc implements Quiet
   verdict in { OK, SHOT }
   preserve pkt
-  fail drop
-  on short_packet, missing { pc[0].n += 1; pass }
-  on _ { drop }
+  on short_packet, not_found { pc[0].n += 1; pass }
 {
   let h = pkt.view<Hdr>(0)?
   let n = ntoh(h.b) as u64 + pkt.len
@@ -115,9 +113,8 @@ program tour_tc : tc implements Quiet
 }
 
 program tour_xdp : xdp
-  fail abort
-  on bound, helper, program { abort }
-  on invariant { tx }
+  on failed_check, failed_call, fail { abort }
+  on bad_value                       { tx }
 {
   let h = pkt.view<Hdr>(0)?
   if h.a == 0 { tx }

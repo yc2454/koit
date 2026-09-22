@@ -32,7 +32,7 @@ private def decls : List String :=
 
 /-- An `xdp` program holding a socket reference `sk` around `body`. -/
 private def held (body : List String) : String :=
-  lines (decls ++ ["program p : xdp fail pass {", "  let t = tuples[0]",
+  lines (decls ++ ["program p : xdp default { pass } {", "  let t = tuples[0]",
                    "  let keep = ctx.ingress_ifindex == 2", "  var count = 0",
                    "  hold sk = sk_lookup_tcp(t)? {"] ++ body ++
          ["  }", "  pass", "}"])
@@ -78,6 +78,6 @@ private def held (body : List String) : String :=
 #guard ok (held ["    repeat 2 { if keep { sk_release(move sk); pass } }"])
 -- a resource bound inside the loop is moved inside it
 #guard ok (lines (decls ++
-  ["program p : xdp fail pass {", "  let t = tuples[0]",
+  ["program p : xdp default { pass } {", "  let t = tuples[0]",
    "  repeat 2 { hold sk = sk_lookup_tcp(t)? { sk_release(move sk) } }",
    "  pass", "}"]))

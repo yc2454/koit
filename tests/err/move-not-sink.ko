@@ -4,7 +4,9 @@
 type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
 map tuples : array[1] of Tuple
 
-program p : xdp fail pass {
+program p : xdp
+  default { pass }
+{
   let tuple = tuples[0]
   hold sk = sk_lookup_tcp(tuple)? {
     let s2 = move sk

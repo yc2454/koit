@@ -1,5 +1,5 @@
 // expect: not a verdict statement of a `tc` program
 // From spec/language.md 13: `tx` is sugar for `xdp` only.
-program p : tc fail drop {
+program p : tc {
   tx
 }

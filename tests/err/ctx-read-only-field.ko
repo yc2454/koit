@@ -1,7 +1,7 @@
 // expect: the writable fields are mark
 // A store to a read-only context field names the fields that can be
 // written in this kind.
-program p : tc fail pass {
+program p : tc {
   ctx.priority = 1
   pass
 }

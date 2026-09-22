@@ -4,8 +4,10 @@
 const M = 16
 map policy : array[1] of { cur: u32 where cur < M }
 
-program p : xdp fail drop
-  on invariant { let cur = policy[0].cur?; drop }
+program p : xdp
+  on bad_value { let cur = policy[0].cur?; drop }
 {
+  // the marked load here raises `bad_value`, so the handler is live
+  let cur = policy[0].cur?
   drop
 }

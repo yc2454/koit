@@ -11,7 +11,7 @@ fn bump(i: u32 where i < 8) {
   hits[i].n += d
 }
 
-program count : xdp fail pass {
+program count : xdp {
   // the caller binds a lookup of its own, of the same map
   hits[0].n += 1
   bump(1)

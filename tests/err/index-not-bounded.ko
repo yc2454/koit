@@ -3,7 +3,7 @@
 const M = 16
 map tab : array[1] of { v: u32[M] }
 
-program p : xdp fail drop {
+program p : xdp {
   let i = ctx.rx_queue_index
   let x = tab[0].v[i]
   drop

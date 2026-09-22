@@ -3,4 +3,4 @@
 // environment wrote is untrusted: store the integer and coerce.
 map m : array[1] of { v: XdpAction }
 
-program p : xdp fail drop { pass }
+program p : xdp on _ { drop } { pass }

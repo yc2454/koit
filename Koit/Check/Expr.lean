@@ -809,9 +809,9 @@ def checkPred (env : Env) (bound : List Local) (p : Expr) : M Unit := do
 def fallibleKind (env : Env) : Fallible → Kind
   | .acquire _ r .. =>
     match env.interface.resource? r with
-    | some row => row.fails.getD .helper
-    | none => .helper
-  | f => f.kind?.getD .helper
+    | some row => row.fails.getD .failed_call
+    | none => .failed_call
+  | f => f.kind?.getD .failed_call
 
 /-- The type a fallible operation binds, and the checks
 on its arguments. -/

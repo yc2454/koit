@@ -10,7 +10,7 @@ type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
 program filter : xdp
   verdict in { PASS, DROP }
   preserve pkt[0 .. 24)
-  fail drop
+  default { drop }
 {
   let ip = pkt.view<Ipv4Hdr>(EthHdr.size)?
   // error: write(pkt[22..23)) is not disjoint from [0, 24)

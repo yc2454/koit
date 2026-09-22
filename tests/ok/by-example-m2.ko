@@ -16,7 +16,9 @@ fn is_udp(eth: view EthHdr, ip: view Ipv4Hdr) -> bool {
   eth.proto == ETH_P_IP && ip.protocol == IPPROTO_UDP
 }
 
-program prog : xdp fail pass {
+program prog : xdp
+  default { pass }
+{
   let eth = pkt.view<EthHdr>(0)?
   let ip  = pkt.view<Ipv4Hdr>(EthHdr.size)?
   if !is_udp(eth, ip) { pass }

@@ -847,43 +847,39 @@ partial def parseProgram : M Program := do
     let mut clauses := []
     while (← isKw .«verdict») || (← isKw .«preserve») do
       clauses := clauses ++ [← parseClause]
-    let failExit ← do
-      if (← isKw .«fail») then
-        advance
-        pure (some (← parseExit))
-      else pure none
     let mut handlers := []
-    while (← isKw .«on») do
+    while (← isKw .«on») || (← isKw .«default») do
       handlers := handlers ++ [← parseHandler]
     let body ← parseBlock
     return { span := ← spanFrom l.span, name, kind, implements, clauses,
-             failExit, handlers, body }
+             handlers, body }
 
+/-- `on k1, k2 { block }` for the kinds named, and `default { block }`
+for every kind with no handler of its own; `default` is not a kind,
+which is why it is not spelled as one. -/
 partial def parseHandler : M Handler := do
   let l ← cur
+  let wildcard := (← cur).tok == .keyword .«default»
   advance
-  let kinds ← do
-    if (← isIdent "_") then
-      advance
-      pure none
-    else
-      let mut ks := [← parseKind]
-      while (← acceptPunct .comma) do
-        ks := ks ++ [← parseKind]
-      pure (some ks)
+  let kinds ← if wildcard then pure none else do
+    let mut ks := [← parseKind]
+    while (← acceptPunct .comma) do
+      ks := ks ++ [← parseKind]
+    pure (some ks)
   let body ← parseBlock
   return { span := l.span.merge body.span, kinds, body }
 
-/-- A failure kind; `program` is a keyword that is also a kind. -/
+/-- A failure kind; `fail` is a keyword that is also a kind, named
+after the statement that raises it. -/
 partial def parseKind : M String := do
   let l ← cur
   match l.tok with
   | .ident n =>
     advance
     return n
-  | .keyword .«program» =>
+  | .keyword .«fail» =>
     advance
-    return "program"
+    return "fail"
   | _ => unexpected "a failure kind"
 
 end

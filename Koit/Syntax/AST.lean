@@ -252,8 +252,6 @@ structure Program where
   kind       : String
   implements : Option String
   clauses    : List Clause
-  /-- The exit of `fail <exit>` in the header. -/
-  failExit   : Option Stmt
   handlers   : List Handler
   body       : Block
   deriving Repr, Inhabited

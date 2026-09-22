@@ -313,7 +313,7 @@ inductive Builtin (K : Kernel) : State → Span → String → List Arg → Res 
       EvalPlace K st1 v (.ok vr) st2 → prim (bytesOfPlace vr ms.valueSize) st2 = .ok (vb, st2) →
       prim (op (Machine.update m kb vb)) st2 = .ok (rc, st3) → rc ≠ 0 →
       Builtin K st s "insert" [.map sp m, .place k, .place v]
-        (.error (.raise .helper (toNatMod rc 32))) st3
+        (.error (.raise .failed_call (toNatMod rc 32))) st3
   /-- `delete`: the machine's delete, or the kernel's `ENOENT`. -/
   | delete {st s sp m k ms kr kb st1 st2} :
       st.maps.lookup m = some ms →
@@ -325,7 +325,7 @@ inductive Builtin (K : Kernel) : State → Span → String → List Arg → Res 
       EvalPlace K st k (.ok kr) st1 → prim (bytesOfPlace kr ms.keySize) st1 = .ok (kb, st1) →
       prim (op (Machine.delete m kb)) st1 = .ok (rc, st2) → rc ≠ 0 →
       Builtin K st s "delete" [.map sp m, .place k]
-        (.error (.raise .helper (toNatMod rc 32))) st2
+        (.error (.raise .failed_call (toNatMod rc 32))) st2
   /-- `printk`: an event on the trace, its arguments as the kernel
   sees them. -/
   | printk {st s s' fmt rest vs st1} :
@@ -438,7 +438,7 @@ inductive ExecFall (K : Kernel) :
       ExecFall K st (.call s f args) (.ok (some (v.map .val))) st1
   | callBuiltinFailed {st s f args row r st1} :
       st.env.interface.call? f = some row → row.sig = .builtin →
-      Builtin K st s f args (.error (.raise .helper r)) st1 →
+      Builtin K st s f args (.error (.raise .failed_call r)) st1 →
       ExecFall K st (.call s f args) (.ok none) { st1 with errno := wrap true 32 r }
   | callAbort {st s f args row params ret a st1} :
       st.env.interface.call? f = some row → row.sig = .fn params ret →

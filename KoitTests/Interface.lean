@@ -96,7 +96,7 @@ private def doc6 : String := v6_8.doc
 private def hasDoc (line : String) : Bool := (doc6.splitOn line).length > 1
 #guard hasDoc "kind xdp : section \"xdp\", pkt rw, verdicts { ABORTED DROP PASS TX REDIRECT },"
 #guard hasDoc "  ctx mark     : u32  writable"
-#guard hasDoc "fn sk_lookup_tcp(tuple: ref SockTuple) -> own Sock\n     effects { call, fail } fails missing acquires sockref in xdp, tc"
+#guard hasDoc "fn sk_lookup_tcp(tuple: ref SockTuple) -> own Sock\n     effects { call, fail } fails not_found acquires sockref in xdp, tc"
 #guard hasDoc "builtin printk  effects { call } gpl  // bpf_trace_printk"
 #guard (doc6.splitOn "\n").all (·.length ≤ 80)
 #guard hasDoc "// preempt: v6.8 has no bpf_preempt_disable"
@@ -125,11 +125,11 @@ private def has (pre : Interface) (s frag : String) : Bool :=
   "not a resource acquisition on kernel v6.8: the rows of the resource table are `lock(p)`, `rcu`, `rb.reserve<T>()`"
 #guard has v6_8 "program p : syscall {\n  let r = get_prandom_u32()\n  return 0\n}\n"
   "is the kernel's helper bpf_get_prandom_u32, which koit has no row for yet"
-#guard has v6_8 "program p : xdp fail pass {\n  hold rcu { let x = bpf_rcu_read_lock() }\n  pass\n}\n"
+#guard has v6_8 "program p : xdp default { pass } {\n  hold rcu { let x = bpf_rcu_read_lock() }\n  pass\n}\n"
   "is a kfunc of the kernel, which koit has no row for yet"
 #guard has v6_8 "program p : syscall {\n  let r = redirect(1)?\n  return 0\n}\n"
   "is not available in a `syscall` program on kernel v6.8; it is available in `xdp`, `tc`"
-#guard has v6_8 "program p : xdp fail pass {\n  ctx.ingress_ifindex = 1\n  pass\n}\n"
+#guard has v6_8 "program p : xdp default { pass } {\n  ctx.ingress_ifindex = 1\n  pass\n}\n"
   "is not writable in an `xdp` program; none of its fields is"
-#guard has v6_8 "program p : tc fail pass {\n  ctx.priority = 1\n  pass\n}\n"
+#guard has v6_8 "program p : tc default { pass } {\n  ctx.priority = 1\n  pass\n}\n"
   "the writable fields are mark"

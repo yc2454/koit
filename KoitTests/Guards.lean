@@ -29,7 +29,7 @@ private def lines (ls : List String) : String := "\n".intercalate ls
 /-- An `xdp` program with a view `eth` carved on line 4 before `body`. -/
 private def xdp (body : List String) : String :=
   lines (["type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }",
-          "program p : xdp fail drop {",
+          "program p : xdp default { drop } {",
           "  let keep = ctx.ingress_ifindex == 2",
           "  let eth = pkt.view<EthHdr>(0)?"] ++ body ++ ["  drop", "}"])
 

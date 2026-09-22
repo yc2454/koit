@@ -41,7 +41,7 @@ private def xdp (body : List String) : String :=
   lines (["type T = { a: u8, b: be16 }",
           "map m : array[1] of { cur: u32 where cur < 4 }",
           "map tab : hash[8] of T -> { v: u32 }",
-          "program p : xdp fail drop {"] ++ body ++ ["}"])
+          "program p : xdp default { drop } {"] ++ body ++ ["}"])
 
 private def block (ls : List String) : Option String :=
   some (lines (["{"] ++ ls ++ ["}"]))
@@ -60,7 +60,7 @@ private def block (ls : List String) : Option String :=
   block ["  try c = loadw(m[0].cur) then {",
          "    return DROP",
          "  } else {",
-         "    raise invariant 7",
+         "    raise bad_value 7",
          "  }"]
 
 -- (Else) with a block, on a hash lookup
@@ -91,7 +91,7 @@ private def block (ls : List String) : Option String :=
          "  try _ = coerce(x < 2, { b: bool | b }) then {",
          "    return DROP",
          "  } else {",
-         "    raise bound 0",
+         "    raise failed_check 0",
          "  }"]
 
 -- (Coerce), with `else` and a `fail` without reason raising `bound`
@@ -102,7 +102,7 @@ private def block (ls : List String) : Option String :=
          "  try y = coerce(x, { v: u64 | v < 2 }) then {",
          "    return DROP",
          "  } else {",
-         "    raise bound 0",
+         "    raise failed_check 0",
          "  }"]
 
 -- the byte read, through a one-byte view and a temporary
@@ -119,7 +119,7 @@ private def block (ls : List String) : Option String :=
   block ["  try _ = call pkt.adjust_tail(4) then {",
          "    return DROP",
          "  } else {",
-         "    raise helper errno",
+         "    raise failed_call errno",
          "  }"]
 
 -- map operations take the map first
@@ -128,7 +128,7 @@ private def block (ls : List String) : Option String :=
          "  try _ = call insert(tab, k, k) then {",
          "    return DROP",
          "  } else {",
-         "    raise helper errno",
+         "    raise failed_call errno",
          "  }"]
 
 -- compound assignment, unary minus, `size`, `pkt.len`
@@ -154,7 +154,7 @@ private def block (ls : List String) : Option String :=
          "  hold sockref sk = acquire sockref sk_lookup_tcp(t) then {",
          "    let _ = call sk_release(move sk)",
          "  } else {",
-         "    raise missing 0",
+         "    raise not_found 0",
          "  }",
          "  return DROP"]
 
@@ -178,24 +178,24 @@ private def block (ls : List String) : Option String :=
   block ["  return invalid \"`tx` is not a verdict statement of a `tc` \
     program\""]
 
--- handler tables: `fail`, a listed kind, `on _`, and the defaults
+-- handler tables: a listed kind, `default`, and the defaults
 #guard handlersOf
-    "program p : xdp fail pass on short_packet { drop } { tx }" ==
-  some ["short_packet: return DROP", "missing: return PASS",
-        "invariant: return PASS", "bound: return PASS", "helper: return PASS",
-        "program: return PASS"]
-#guard handlersOf "program p : tc on _ { pass } { drop }" ==
-  some ["short_packet: return OK", "missing: return OK",
-        "invariant: return OK", "bound: return OK", "helper: return OK",
-        "program: return OK"]
+    "program p : xdp on short_packet { drop } default { pass } { tx }" ==
+  some ["short_packet: return DROP", "not_found: return PASS",
+        "bad_value: return PASS", "failed_check: return PASS", "failed_call: return PASS",
+        "fail: return PASS"]
+#guard handlersOf "program p : tc default { pass } { drop }" ==
+  some ["short_packet: return OK", "not_found: return OK",
+        "bad_value: return OK", "failed_check: return OK", "failed_call: return OK",
+        "fail: return OK"]
 #guard handlersOf "program p : syscall { return 0 }" ==
-  some ["short_packet: return 0 - 1", "missing: return 0 - 1",
-        "invariant: return 0 - 1", "bound: return 0 - 1",
-        "helper: return 0 - 1", "program: return 0 - 1"]
+  some ["short_packet: return 0 - 1", "not_found: return 0 - 1",
+        "bad_value: return 0 - 1", "failed_check: return 0 - 1",
+        "failed_call: return 0 - 1", "fail: return 0 - 1"]
 #guard handlersOf "program p : xdp { drop }" ==
-  some ["short_packet: return ABORTED", "missing: return ABORTED",
-        "invariant: return ABORTED", "bound: return ABORTED",
-        "helper: return ABORTED", "program: return ABORTED"]
+  some ["short_packet: return ABORTED", "not_found: return ABORTED",
+        "bad_value: return ABORTED", "failed_check: return ABORTED",
+        "failed_call: return ABORTED", "fail: return ABORTED"]
 
 -- functions: the tail expression is the result; a trailing call in a
 -- resultless function is a statement
@@ -209,7 +209,7 @@ private def block (ls : List String) : Option String :=
                "  try _ = coerce(x < 2, { b: bool | b }) then {",
                "    return x",
                "  } else {",
-               "    raise bound 0",
+               "    raise failed_check 0",
                "  }",
                "}"])
 

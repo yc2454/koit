@@ -163,8 +163,8 @@ def exprTy (Γ : List (String × LIR.Ty)) : LIR.Expr → LIR.Ty
 /-- The status protocol of a `fails` or `T ?` function: 0 for a value,
 1 for absence, `2 + k` for a failure of kind `k`. -/
 def kindIndex : Kind → Nat
-  | .short_packet => 0 | .missing => 1 | .invariant => 2 | .bound => 3
-  | .helper => 4 | .program => 5
+  | .short_packet => 0 | .not_found => 1 | .bad_value => 2 | .failed_check => 3
+  | .failed_call => 4 | .fail => 5
 
 /-- Whether a function uses the status protocol. -/
 def statusFn (f : LIR.Fn) : Bool := f.fails || f.opt

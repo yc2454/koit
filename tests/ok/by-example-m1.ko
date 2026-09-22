@@ -9,7 +9,9 @@ type Backend = { ip: be32, ifindex: u32 }
 map policy   : array[1] of { cur: u32 where cur < M }
 map backends : array[1] of Backend[M]
 
-program pick : xdp fail drop {
+program pick : xdp
+  default { drop }
+{
   // A marked load re-tests the invariant and gives cur the type
   // {v: u32 | v < M}. It is marked because userspace may have
   // written the map.

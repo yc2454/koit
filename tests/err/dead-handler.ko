@@ -1,0 +1,14 @@
+// expect: nothing in `count` raises `short_packet`, so this handler cannot run
+// A handler for a kind the program cannot raise is dead code and a
+// false statement about the program. `default` is exempt, since a
+// verdict set is checked against the kind's default failure verdict
+// whether or not a failure can reach it.
+map counters : array[1] of { lk: spinlock, n: u64 }
+
+program count : xdp
+  on short_packet { drop }
+{
+  let c = counters[0]
+  hold lock(c.lk) { c.n += 1 }
+  pass
+}

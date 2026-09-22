@@ -1,4 +1,4 @@
-// expect: can fail (kind `missing`)
+// expect: can fail (kind `not_found`)
 // From spec/language.md 10.2: a fallible expression outside the
 // positions listed there is a type error; a hash lookup needs `?`,
 // `else`, or `if let`.
@@ -6,7 +6,7 @@ type Flow = { saddr: be32, daddr: be32 }
 map verdicts : hash[64] of Flow -> { v: u32 }
 map keys : array[1] of Flow
 
-program p : xdp fail drop {
+program p : xdp {
   let key = keys[0]
   let f = verdicts[key]
   drop

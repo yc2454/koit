@@ -11,7 +11,7 @@ type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
                  ttl: u8, protocol: u8, csum: be16,
                  saddr: be32, daddr: be32 }
 
-program nat : tc fail drop {
+program nat : tc {
   let eth = pkt.view<EthHdr>(0)?
   let ip = pkt.view<Ipv4Hdr>(EthHdr.size)?
   let old = ip.daddr

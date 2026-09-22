@@ -10,7 +10,9 @@ map flags : array[1] of { f: u32 where f & 0xF0 == 0 }
 
 fn clamp(x: u32) -> r: u32 where r < M { x % M }
 
-program p : xdp verdict in { PASS, DROP } fail drop {
+program p : xdp verdict in { PASS, DROP }
+  default { drop }
+{
   let q = ctx.rx_queue_index
   // a branch: q < 4 in the then-branch
   if q < 4 { tab[q].v[0] = 1 }

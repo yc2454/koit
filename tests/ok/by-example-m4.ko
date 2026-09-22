@@ -10,7 +10,9 @@ type Rec = { len: u32 where len <= MAXLEN, buf: u8[MAXLEN] }
 // not in M4
 map recs : array[1] of Rec
 
-program token : xdp fail pass {
+program token : xdp
+  default { pass }
+{
   // not in M4
   let r = recs[0]
   let off = 0

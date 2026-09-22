@@ -503,7 +503,7 @@ inductive StmtOk :
       BlockOk (env.bind (boundLocal x t b)) { K with facts := Fthn } thn
         Ft Et →
       BlockOk env { K with facts := Fels,
-                           errnoOk := fallibleKind env f == .helper } els
+                           errnoOk := fallibleKind env f == .failed_call } els
         Fe Ee →
       (ex = true → exits els = true) →
       joinMoved s (Ft.dropNames [x]) Fe = .ok () →
@@ -517,7 +517,7 @@ inductive StmtOk :
       fallibleFacts env K "_" f b = .ok (Fthn, Fels) →
       BlockOk env { K with facts := Fthn } thn Ft Et →
       BlockOk env { K with facts := Fels,
-                           errnoOk := fallibleKind env f == .helper } els
+                           errnoOk := fallibleKind env f == .failed_call } els
         Fe Ee →
       (ex = true → exits els = true) →
       joinMoved s Ft Fe = .ok () →
@@ -547,7 +547,7 @@ inductive StmtOk :
                           origin := .kernel })
         (holdCtx env K s row (some x) acq) body Fb Eb →
       BlockOk env { K with facts := holdEntry env K (row.arg == .call) acq,
-                           errnoOk := row.fails == some .helper } els Fe Ee →
+                           errnoOk := row.fails == some .failed_call } els Fe Ee →
       exits els →
       joinMoved s (Fb.dropNames [x]) Fe = .ok () →
       stmtEffects env K (.hold s r (some x) acq body (some els)) = .ok E →

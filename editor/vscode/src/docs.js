@@ -31,7 +31,7 @@ const KEYWORDS = {
     "sees the obligation at the call and must mark it."
   ],
   fail: [
-    "`fail r` — raise a failure with reason `r`",
+    "`fail r` — raise a failure with reason `r`, and the kind it raises",
     "Control goes to the handler for this kind, which runs the cleanup",
     "the resources in scope require and then exits with its verdict.",
     "`else fail r` puts a reason on a fallible operation."
@@ -161,18 +161,32 @@ const KEYWORDS = {
     "For a helper failure it is the helper's negative return."
   ],
   short_packet: [
-    "failure kind `short_packet`",
+    "failure kind `short_packet` — the input is to blame",
     "A read or a view that reaches past the end of the packet."
   ],
-  missing: ["failure kind `missing` — a lookup found nothing"],
-  invariant: [
-    "failure kind `invariant`",
-    "A `check` whose condition did not hold at runtime."
+  not_found: [
+    "failure kind `not_found` — the environment is to blame",
+    "A hash lookup, a socket lookup, or a `T?` function with no value."
   ],
-  bound: ["failure kind `bound` — an index outside its range"],
-  helper: [
-    "failure kind `helper`",
-    "A kernel call returned an error; `reason` is its negative return."
+  bad_value: [
+    "failure kind `bad_value` — whoever wrote the map is to blame",
+    "A marked load of a `where` field whose predicate turned out false."
+  ],
+  failed_check: [
+    "failure kind `failed_check` — the program's assumptions are to blame",
+    "A `check`, or the coercion it abbreviates, whose predicate did not",
+    "hold; also an iterator loop that reached its cap."
+  ],
+  failed_call: [
+    "failure kind `failed_call` — the kernel or resources are to blame",
+    "A kernel call reported failure; `reason` is its negative return."
+  ],
+  default: [
+    "`default { ... }` — every kind with no handler of its own",
+    "Not a kind, which is why it is not spelled as one. A kind with",
+    "neither a handler nor a `default` block takes the program",
+    "kind's default: abort for `xdp`, drop for `tc`, minus one for a",
+    "`syscall` program."
   ]
 };
 
@@ -223,7 +237,8 @@ const FALLIBLE_DOC =
 // The kinds a failure can have, which are what a handler table is
 // written over.
 const FAILURE_KINDS =
-  ["short_packet", "missing", "invariant", "bound", "helper", "program"];
+  ["short_packet", "not_found", "bad_value", "failed_check", "failed_call",
+   "fail"];
 
 // The four ways a map is declared, each with what follows its name.
 const MAP_KINDS = [

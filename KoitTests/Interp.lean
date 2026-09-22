@@ -83,42 +83,42 @@ private def xdp (header : List String) (body : List String) : String :=
           "map stats : array[8] of { n: u64 }",
           "program p : xdp"] ++ header ++ ["{"] ++ body ++ ["}"])
 
-#guard verdicts (xdp ["  fail drop"] ["  let eth = pkt.view<EthHdr>(0)?", "  pass"])
+#guard verdicts (xdp ["  default { drop }"] ["  let eth = pkt.view<EthHdr>(0)?", "  pass"])
   == ["p: DROP"]
-#guard verdicts (xdp ["  fail drop"] ["  let eth = pkt.view<EthHdr>(0)?", "  pass"])
+#guard verdicts (xdp ["  default { drop }"] ["  let eth = pkt.view<EthHdr>(0)?", "  pass"])
   ("aa" ++ "aa" ++ "aaaaaaaa" ++ "bbbbbbbbbbbb" ++ "0800") == ["p: PASS"]
-#guard verdicts (xdp ["  fail drop", "  on program { stats[reason & 7].n += 1; abort }"]
+#guard verdicts (xdp ["  default { drop }", "  on fail { stats[reason & 7].n += 1; abort }"]
                      ["  fail 3"]) == ["p: ABORTED"]
-#guard maps (xdp ["  fail drop", "  on program { stats[reason & 7].n += 1; abort }"]
+#guard maps (xdp ["  default { drop }", "  on fail { stats[reason & 7].n += 1; abort }"]
                  ["  fail 3"]) == ["map stats:\n  [3] = { n: 1 }"]
 -- the default handler of the kind
 #guard verdicts (xdp [] ["  fail 1"]) == ["p: ABORTED"]
 -- `check` raises `bound`; a marked load raises `invariant`
-#guard verdicts (xdp ["  fail drop", "  on bound { tx }"]
+#guard verdicts (xdp ["  default { drop }", "  on failed_check { tx }"]
                      ["  let n = ctx.rx_queue_index", "  check n < 4", "  pass"])
   == ["p: PASS"]
-#guard verdicts (xdp ["  fail drop", "  on bound { tx }"]
+#guard verdicts (xdp ["  default { drop }", "  on failed_check { tx }"]
                      ["  let n = ctx.rx_queue_index", "  check n < 4", "  pass"])
   "" [("rx_queue_index", 9)] == ["p: TX"]
 #guard verdicts (lines ["map policy : array[1] of { cur: u32 where cur < 4 }",
-                        "program p : xdp fail drop on invariant { abort } {",
+                        "program p : xdp on bad_value { abort } default { drop } {",
                         "  let c = policy[0].cur?", "  pass }",
                         "program q : syscall { policy[0].cur = 3 }",
-                        "program r : xdp fail drop on invariant { abort } {",
+                        "program r : xdp on bad_value { abort } default { drop } {",
                         "  let c = policy[0].cur?", "  if c == 3 { tx }", "  pass }"])
   == ["p: PASS", "q: 0", "r: TX"]
 
 -- views: reads, writes, and a resize
-#guard verdicts (xdp ["  fail drop"]
+#guard verdicts (xdp ["  default { drop }"]
   ["  let eth = pkt.view<EthHdr>(0)?", "  if eth.dst[1] == 0xbb { tx }", "  pass"])
   "aabbccddeeff" == ["p: DROP"]
-#guard verdicts (xdp ["  fail drop"]
+#guard verdicts (xdp ["  default { drop }"]
   ["  let eth = pkt.view<EthHdr>(0)?", "  if eth.dst[1] == 0xbb { tx }", "  pass"])
   ("aabbccddeeff000000000000" ++ "0800") == ["p: TX"]
-#guard verdicts (xdp ["  fail drop", "  on helper { abort }"]
+#guard verdicts (xdp ["  default { drop }", "  on failed_call { abort }"]
   ["  pkt.adjust_head(-8)?", "  let eth = pkt.view<EthHdr>(0)?", "  if eth.dst[0] == 0 { tx }", "  pass"])
   "aabbccddeeff" == ["p: TX"]
-#guard verdicts (xdp ["  fail drop", "  on helper { abort }"]
+#guard verdicts (xdp ["  default { drop }", "  on failed_call { abort }"]
   ["  pkt.adjust_head(8)?", "  pass"]) "aabb" == ["p: ABORTED"]
 
 -- hash maps, lookups, and `if let`
@@ -143,7 +143,7 @@ private def resUnit (body : List String) : String :=
           "map counters : array[1] of Ctr",
           "map events : ringbuf[64]",
           "map tuples : array[1] of SockTuple",
-          "program p : xdp fail drop {", "  let c = counters[0]", "  let t = tuples[0]"] ++
+          "program p : xdp default { drop } {", "  let c = counters[0]", "  let t = tuples[0]"] ++
           body ++ ["  pass", "}"])
 #guard maps (resUnit ["  hold lock(c.lk) { c.n += 5 }"])
   == ["map counters:\n  [0] = { lk: spinlock, n: 5 }", "map events: 0 record(s)",
@@ -172,7 +172,7 @@ private def picker : String :=
          "map backends : array[1] of Backend[M]",
          "program pick : xdp",
          "  verdict in { PASS, DROP, ABORTED, REDIRECT }",
-         "  preserve pkt", "  fail abort", "  on short_packet { drop }", "{",
+         "  preserve pkt", "  default { abort }", "  on short_packet { drop }", "{",
          "  var off = 0", "  let eth = pkt.view<EthHdr>(off)?", "  off += EthHdr.size",
          "  var proto = eth.proto",
          "  repeat 2 {", "    if proto != ETH_P_VLAN { break }",

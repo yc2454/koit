@@ -229,9 +229,9 @@ def Clause.print : Clause → String
     "preserve " ++ ", ".intercalate (regions.map Region.print)
 
 def Handler.print (h : Handler) : String :=
-  "on " ++ (match h.kinds with
-    | none => "_"
-    | some ks => ", ".intercalate ks) ++ " " ++ h.body.print 2
+  (match h.kinds with
+    | none => "default"
+    | some ks => "on " ++ ", ".intercalate ks) ++ " " ++ h.body.print 2
 
 def FnDecl.print (d : FnDecl) : String :=
   "fn " ++ d.name ++ "(" ++ ", ".intercalate (d.params.map Param.print) ++
@@ -250,7 +250,6 @@ def Program.print (p : Program) : String :=
     (match p.implements with | some c => " implements " ++ c | none => "")
   let parts :=
     p.clauses.map Clause.print ++
-    (match p.failExit with | some s => ["fail " ++ s.print 2] | none => []) ++
     p.handlers.map Handler.print
   match parts with
   | [] => head ++ " " ++ p.body.print 0

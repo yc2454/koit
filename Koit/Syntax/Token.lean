@@ -18,7 +18,8 @@ keywords are quoted; the constructor is still named by the koit
 spelling. -/
 inductive Keyword where
   | «as» | «bounded» | «break» | «check» | «config» | «const»
-  | «continue» | «contract» | «drop» | «else» | «except» | «fail»
+  | «continue» | «contract» | «default» | «drop» | «else» | «except»
+  | «fail»
   | «fails» | «false» | «fn» | «for» | «hold» | «if» | «implements»
   | «in» | «let» | «license» | «map» | «move» | «of» | «on» | «own»
   | «pass» | «preserve» | «program» | «ref» | «repeat» | «return»
@@ -33,6 +34,7 @@ def spelling : Keyword → String
   | .«break» => "break"         | .«check» => "check"
   | .«config» => "config"       | .«const» => "const"
   | .«continue» => "continue"   | .«contract» => "contract"
+  | .«default» => "default"
   | .«drop» => "drop"           | .«else» => "else"
   | .«except» => "except"       | .«fail» => "fail"
   | .«fails» => "fails"         | .«false» => "false"
@@ -53,7 +55,8 @@ def spelling : Keyword → String
 /-- Every keyword, for the lexer's table. -/
 def all : List Keyword :=
   [.«as», .«bounded», .«break», .«check», .«config», .«const»,
-   .«continue», .«contract», .«drop», .«else», .«except», .«fail»,
+   .«continue», .«contract», .«default», .«drop», .«else», .«except»,
+   .«fail»,
    .«fails», .«false», .«fn», .«for», .«hold», .«if», .«implements»,
    .«in», .«let», .«license», .«map», .«move», .«of», .«on», .«own»,
    .«pass», .«preserve», .«program», .«ref», .«repeat», .«return»,

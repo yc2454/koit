@@ -176,7 +176,7 @@ private def M1 : List String := ["map m : array[4] of { n: u64, b: u8 }"]
   ["p: 2", "map m:\n  [0] = { n: 5 }"]
 #guard agree (lines ["map m : array[1] of { n: u64 }",
                      "fn guard(x: u64) -> u64 fails { check x < 10; x + 1 }",
-                     "program p : syscall fail return 0 - 7 on bound { return 0 - 9 } {",
+                     "program p : syscall on failed_check { return 0 - 9 } default { return 0 - 7 } {",
                      "  m[0].n = guard(3)", "  m[0].n = guard(30)", "}"])
   ["p: -9", "map m:\n  [0] = { n: 4 }"]
 -- a map written before a failure keeps the write
@@ -188,33 +188,33 @@ private def xdp (header : List String) (body : List String) : String :=
           "map stats : array[8] of { n: u64 }",
           "program p : xdp"] ++ header ++ ["{"] ++ body ++ ["}"])
 
-#guard agree (xdp ["  fail drop"] ["  let eth = pkt.view<EthHdr>(0)?", "  pass"])
+#guard agree (xdp ["  default { drop }"] ["  let eth = pkt.view<EthHdr>(0)?", "  pass"])
   ["p: DROP", "map stats: all zero"]
-#guard agree (xdp ["  fail drop"] ["  let eth = pkt.view<EthHdr>(0)?", "  pass"])
+#guard agree (xdp ["  default { drop }"] ["  let eth = pkt.view<EthHdr>(0)?", "  pass"])
   ["p: PASS", "map stats: all zero"] ("aaaaaaaaaaaabbbbbbbbbbbb0800")
-#guard agree (xdp ["  fail drop", "  on program { stats[reason & 7].n += 1; abort }"]
+#guard agree (xdp ["  default { drop }", "  on fail { stats[reason & 7].n += 1; abort }"]
                   ["  fail 3"]) ["p: ABORTED", "map stats:\n  [3] = { n: 1 }"]
 -- `check`, a marked load, a coercion, and byte order
-#guard agree (xdp ["  fail drop", "  on bound { tx }"]
+#guard agree (xdp ["  default { drop }", "  on failed_check { tx }"]
                   ["  let n = ctx.rx_queue_index", "  check n < 4", "  stats[n].n = 1", "  pass"])
   ["p: PASS", "map stats:\n  [2] = { n: 1 }"] "" [("rx_queue_index", 2)]
-#guard agree (xdp ["  fail drop", "  on bound { tx }"]
+#guard agree (xdp ["  default { drop }", "  on failed_check { tx }"]
                   ["  let n = ctx.rx_queue_index", "  check n < 4", "  pass"])
   ["p: TX", "map stats: all zero"] "" [("rx_queue_index", 9)]
 #guard agree (lines ["map policy : array[1] of { cur: u32 where cur < 4 }",
                      "map stats : array[4] of { n: u64 }",
                      "program q : syscall { policy[0].cur = 3 }",
-                     "program r : xdp fail drop on invariant { abort } {",
+                     "program r : xdp on bad_value { abort } default { drop } {",
                      "  let c = policy[0].cur?", "  stats[c].n = 7", "  if c == 3 { tx }", "  pass }"])
   ["q: 0", "r: TX", "map policy:\n  [0] = { cur: 3 }", "map stats:\n  [3] = { n: 7 }"]
-#guard agree (xdp ["  fail drop"]
+#guard agree (xdp ["  default { drop }"]
   ["  let eth = pkt.view<EthHdr>(0)?", "  if eth.proto == hton(0x0800) { eth.proto = hton(0x86dd); tx }", "  pass"])
   ["p: TX", "map stats: all zero"] ("aabbccddeeff000000000000" ++ "0800")
-#guard agree (xdp ["  fail drop"]
+#guard agree (xdp ["  default { drop }"]
   ["  let eth = pkt.view<EthHdr>(0)?", "  let v = ntoh(eth.proto) as u64", "  stats[v & 7].n = v", "  pass"])
   ["p: PASS", "map stats:\n  [0] = { n: 2048 }"] ("aabbccddeeff000000000000" ++ "0800")
 -- a resize: the view is carved again after it
-#guard agree (xdp ["  fail drop", "  on helper { abort }"]
+#guard agree (xdp ["  default { drop }", "  on failed_call { abort }"]
   ["  pkt.adjust_head(-8)?", "  let eth = pkt.view<EthHdr>(0)?", "  if eth.dst[0] == 0 { tx }", "  pass"])
   ["p: TX", "map stats: all zero"] "aabbccddeeff"
 -- hash maps: insert, lookup, `if let`, delete, and a full map
@@ -229,7 +229,7 @@ private def hashUnit : String :=
          "program miss : syscall {",
          "  let k = { a: 9, b: 9 }",
          "  if let e = t[k] { return 1 } else { return 0 }", "}",
-         "program full : syscall fail return 0 - 1 on helper { return reason as i32 } {",
+         "program full : syscall on failed_call { return reason as i32 } default { return 0 - 1 } {",
          "  let k = { a: 3, b: 3 }", "  let v = { n: 1 }", "  t.insert(k, v)?",
          "  let k2 = { a: 4, b: 4 }", "  t.insert(k2, v)?", "}",
          "program del : syscall {",
@@ -243,7 +243,7 @@ private def resUnit (body : List String) : String :=
           "map counters : array[1] of Ctr",
           "map events : ringbuf[64]",
           "map tuples : array[1] of SockTuple",
-          "program p : xdp fail drop {", "  let c = counters[0]", "  let t = tuples[0]"] ++
+          "program p : xdp default { drop } {", "  let c = counters[0]", "  let t = tuples[0]"] ++
           body ++ ["  pass", "}"])
 #guard agree (resUnit ["  hold lock(c.lk) { c.n += 5 }"])
   ["p: PASS", "map counters:\n  [0] = { lk: spinlock, n: 5 }", "map events: 0 record(s)",
@@ -265,7 +265,7 @@ private def resUnit (body : List String) : String :=
 #guard agree (lines ["type Ctr = { lk: spinlock, n: u64 where n < 4 }",
                      "map counters : array[1] of Ctr",
                      "program q : syscall { counters[0].n = 3 }",
-                     "program p : xdp fail drop on invariant { tx } {",
+                     "program p : xdp on bad_value { tx } default { drop } {",
                      "  let c = counters[0]",
                      "  hold lock(c.lk) { let n = c.n?; if n == 3 { fail } }", "  pass }"])
   ["q: 0", "p: DROP", "map counters:\n  [0] = { lk: spinlock, n: 3 }"]
@@ -292,7 +292,7 @@ private def picker : String :=
          "map backends : array[1] of Backend[M]",
          "program pick : xdp",
          "  verdict in { PASS, DROP, ABORTED, REDIRECT }",
-         "  preserve pkt", "  fail abort", "  on short_packet { drop }", "{",
+         "  preserve pkt", "  default { abort }", "  on short_packet { drop }", "{",
          "  var off = 0", "  let eth = pkt.view<EthHdr>(off)?", "  off += EthHdr.size",
          "  var proto = eth.proto",
          "  repeat 2 {", "    if proto != ETH_P_VLAN { break }",

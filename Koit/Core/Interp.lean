@@ -285,14 +285,14 @@ partial def builtin (K : Kernel) (s : Span) (f : String) (args : List Arg) :
     let vb ← bytesOfPlace (← evalPlace K v) ms.valueSize
     match ← op (Machine.update m kb vb) with
     | 0 => return none
-    | rc => throw (.raise .helper (toNatMod rc 32))
+    | rc => throw (.raise .failed_call (toNatMod rc 32))
   | "delete", [.map _ m, .place k] =>
     let st ← get
     let some ms := st.maps.lookup m | fail s!"unknown map `{m}`"
     let kb ← bytesOfPlace (← evalPlace K k) ms.keySize
     match ← op (Machine.delete m kb) with
     | 0 => return none
-    | rc => throw (.raise .helper (toNatMod rc 32))
+    | rc => throw (.raise .failed_call (toNatMod rc 32))
   | "printk", .val (.str _ fmt) :: rest =>
     let vs ← evalArgs K rest
     modify fun st => st.record (.print fmt (vs.map fun v => (settle v).observe))
@@ -366,7 +366,7 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
           let v ← builtin K default f args
           return some (v.map .val)
         catch
-          | .raise .helper r => helperFailed (wrap true 32 r); return none
+          | .raise .failed_call r => helperFailed (wrap true 32 r); return none
           | e => throw e
       | .fn params ret =>
         let vs ← evalArgs K args params

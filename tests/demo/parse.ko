@@ -23,10 +23,10 @@ map seen : percpu_array[1] of { dns: u64, other: u64 }
 program parse : xdp
   verdict in { PASS }
   preserve pkt
-  fail pass
   // a packet too short to hold the headers is the input's doing, not
   // the program's: hand it to the stack
   on short_packet { seen[0].other += 1; pass }
+  default         { pass }
 {
   let eth = pkt.view<EthHdr>(0)?
   // `proto` is big-endian and the constant was swapped at compile

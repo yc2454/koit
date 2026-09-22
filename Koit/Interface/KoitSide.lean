@@ -82,35 +82,35 @@ a constant the source does not name, typically the flags word every
 helper takes last. -/
 def callSpecs : List CallSpec := [
   { name := "redirect", sig := .fn [param "ifindex" tU32] (some redirectRet),
-    effects := [.call, .fail], fails := some .helper, kinds := ["xdp", "tc"],
+    effects := [.call, .fail], fails := some .failed_call, kinds := ["xdp", "tc"],
     link := .helper "redirect" [.arg 0, .const 0] },
   -- xdp and tc adjust the packet's head through different helpers
   { name := "pkt.adjust_head", sig := .fn [param "delta" tI32] none,
-    effects := [.call, .resize, .fail], fails := some .helper, kinds := ["xdp", "tc"],
+    effects := [.call, .resize, .fail], fails := some .failed_call, kinds := ["xdp", "tc"],
     link := .helper "xdp_adjust_head" [.ctx, .arg 0],
     linkByKind := [("tc", .helper "skb_change_head" [.ctx, .arg 0, .const 0])] },
   { name := "pkt.adjust_tail", sig := .fn [param "delta" tI32] none,
-    effects := [.call, .resize, .fail], fails := some .helper, kinds := ["xdp", "tc"],
+    effects := [.call, .resize, .fail], fails := some .failed_call, kinds := ["xdp", "tc"],
     link := .helper "xdp_adjust_tail" [.ctx, .arg 0],
     linkByKind := [("tc", .helper "skb_change_tail" [.ctx, .arg 0, .const 0])] },
   { name := "pkt.len", sig := .fn [] (some tU64), effects := [], kinds := ["xdp", "tc"],
     note := "data_end - data" },
   -- `m.insert(k, v)` and `m.delete(k)`: the map, then places of its
   -- key and value types; typed by rule, laid out by the machine
-  { name := "insert", sig := .builtin, effects := [.call, .fail], fails := some .helper,
+  { name := "insert", sig := .builtin, effects := [.call, .fail], fails := some .failed_call,
     note := "bpf_map_update_elem" },
-  { name := "delete", sig := .builtin, effects := [.call, .fail], fails := some .helper,
+  { name := "delete", sig := .builtin, effects := [.call, .fail], fails := some .failed_call,
     note := "bpf_map_delete_elem" },
   -- `rb.reserve<T>()` yields `own T`, bound by `hold`
-  { name := "reserve", sig := .builtin, effects := [.call, .fail], fails := some .helper,
+  { name := "reserve", sig := .builtin, effects := [.call, .fail], fails := some .failed_call,
     acquires := some ⟨"ringbuf"⟩, note := "bpf_ringbuf_reserve" },
   -- the tuple, its size, `BPF_F_CURRENT_NETNS`, and no flags
   { name := "sk_lookup_tcp", sig := .fn [param "tuple" sockTuple] (some ownSock),
-    effects := [.call, .fail], fails := some .missing, acquires := some ⟨"sockref"⟩,
+    effects := [.call, .fail], fails := some .not_found, acquires := some ⟨"sockref"⟩,
     kinds := ["xdp", "tc"],
     link := .helper "sk_lookup_tcp" [.ctx, .arg 0, .argSize 0, .const (-1), .const 0] },
   { name := "sk_lookup_udp", sig := .fn [param "tuple" sockTuple] (some ownSock),
-    effects := [.call, .fail], fails := some .missing, acquires := some ⟨"sockref"⟩,
+    effects := [.call, .fail], fails := some .not_found, acquires := some ⟨"sockref"⟩,
     kinds := ["xdp", "tc"],
     link := .helper "sk_lookup_udp" [.ctx, .arg 0, .argSize 0, .const (-1), .const 0] },
   -- a consuming call: its parameter is a `move` sink
@@ -165,11 +165,11 @@ def resourceRows : List ResourceRow := [
     abnormalExit := "bpf_local_irq_restore", forbidden := [.sleep],
     nesting := .lifo, guards := "" },
   { res := ⟨"ringbuf"⟩, describe := "a ring-buffer record", acquirers := ["reserve"], arg := .call, yields := true,
-    fails := some .helper, normalExit := "bpf_ringbuf_submit",
+    fails := some .failed_call, normalExit := "bpf_ringbuf_submit",
     abnormalExit := "bpf_ringbuf_discard", forbidden := [.sleep],
     nesting := .yes, guards := "" },
   { res := ⟨"sockref"⟩, describe := "a socket reference", acquirers := ["sk_lookup_tcp", "sk_lookup_udp"],
-    arg := .call, yields := true, fails := some .missing,
+    arg := .call, yields := true, fails := some .not_found,
     normalExit := "bpf_sk_release", abnormalExit := "bpf_sk_release",
     forbidden := [.sleep], nesting := .yes, guards := "" }
 ]

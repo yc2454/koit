@@ -124,7 +124,7 @@ def lit0 (span : Span) : Expr := .lit span 0 "0"
 /-- The default reason of a `raise` of kind `k`: the helper's negative
 return for `helper`, 0 otherwise. -/
 def defaultReason (span : Span) : Kind → Expr
-  | .helper => .errno span
+  | .failed_call => .errno span
   | _ => lit0 span
 
 def unmarkedMsg (what : String) (k : Kind) : String :=
@@ -156,9 +156,9 @@ for an acquisition. -/
 def kindOf (c : Ctx) : Fallible → Kind
   | .acquire _ r .. =>
     match c.info.interface.resource? r with
-    | some row => row.fails.getD .helper
-    | none => .helper
-  | f => f.kind?.getD .helper
+    | some row => row.fails.getD .failed_call
+    | none => .failed_call
+  | f => f.kind?.getD .failed_call
 
 /-- The description a diagnostic uses for a fallible operation. -/
 def describe : Fallible → String
@@ -376,7 +376,7 @@ partial def dPlace (c : Ctx) (e : Syntax.Expr) : M Place := do
     match c.map? m with
     | some (.hash ..) =>
       return .invalid s (unmarkedMsg s!"the lookup in the hash map `{m}`"
-        .missing)
+        .not_found)
     | some _ => return .slot s m (← dExpr c i)
     | none => return .index s (.var vs m) (← dExpr c i)
   | .index s b i => return .index s (← dPlace c b) (← dExpr c i)
@@ -571,8 +571,8 @@ partial def dStmts (c : Ctx) : List Syntax.Stmt → M (List Stmt)
       let bs := cond.span
       let boolTrue : Ty := .refined bs "b" (.bool bs) (.var bs "b")
       let els ← match tail with
-        | some t => dTail c .bound t
-        | none => pure [.raise span .bound (lit0 span)]
+        | some t => dTail c .failed_check t
+        | none => pure [.raise span .failed_check (lit0 span)]
       let rest' ← dStmts c rest
       return [.«try» span "_" (.coerce span p boolTrue) rest' els true]
     | .expr span e tail =>
@@ -605,7 +605,7 @@ partial def dStmts (c : Ctx) : List Syntax.Stmt → M (List Stmt)
       return s' :: (← dStmts c rest)
     | .verdict span v => return dVerdict c span v :: (← dStmts c rest)
     | .fail span r =>
-      let k := c.elseKind.getD .program
+      let k := c.elseKind.getD .fail
       let r' ← match r with
         | some e => dExpr c e
         | none => pure (defaultReason span k)
@@ -638,7 +638,7 @@ partial def dForIter (c : Ctx) (span : Span) (pat : Syntax.Pattern)
   let overflow : List Stmt :=
     if marked then
       [.ite span (.cmp span .eq (.var span i) n)
-        [.«try» span "_" next [.raise span .bound (lit0 span)] [] false] []]
+        [.«try» span "_" next [.raise span .failed_check (lit0 span)] [] false] []]
     else []
   let init : Stmt := .«let» span true i none (.expr (lit0 span))
   return .hold span .iter (some h) (.acquire span .iter "iter" none
@@ -706,7 +706,7 @@ def meetVerdicts : Option (List (Span × String)) →
 /-- A program's total handler table, and the problems
 found while building it, as `invalid` statements for the body. -/
 def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
-    M (List Handler × List Stmt) := do
+    M (List Handler × List Stmt × List (Span × Kind)) := do
   let hc : Ctx := { c with locals := ["reason"], elseKind := none }
   let mut problems : List Stmt := []
   let mut seen : List String := []
@@ -714,14 +714,14 @@ def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
     for k in h.kinds.getD [] do
       if (Kind.ofString? k).isNone then
         problems := problems ++ [.invalid h.span s!"`{k}` is not a failure \
-          kind; the kinds are short_packet, missing, invariant, bound, \
-          helper, and program"]
+          kind; the kinds are short_packet, not_found, bad_value, \
+          failed_check, failed_call, and fail"]
       else if seen.contains k then
         problems := problems ++ [.invalid h.span s!"the kind `{k}` has two \
           handlers; at most one handler per kind"]
       seen := seen ++ [k]
   if (p.handlers.filter (·.kinds.isNone)).length > 1 then
-    problems := problems ++ [.invalid p.span "two `on _` handlers"]
+    problems := problems ++ [.invalid p.span "two `default` handlers"]
   let mut table : List Handler := []
   for k in Kind.all do
     let listed := p.handlers.find? fun h =>
@@ -732,11 +732,6 @@ def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
         let b ← dStmts hc h.body.stmts
         pure (h.span, b)
       | none =>
-        match p.failExit with
-        | some e => do
-          let b ← dStmts hc [e]
-          pure (e.span, b)
-        | none =>
           let s := p.span
           let d : Expr := match row.defaultExit with
             | .verdict n => .var s n
@@ -746,7 +741,13 @@ def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
               else .lit s v.natAbs (toString v.natAbs)
           pure (s, [Stmt.ret s (some d)])
     table := table ++ [{ span := body.1, kind := k, body := body.2 }]
-  return (table, problems)
+  -- the kinds an `on` handler named, for the reachability rule
+  let mut named : List (Span × Kind) := []
+  for h in p.handlers do
+    for k in h.kinds.getD [] do
+      if let some kk := Kind.ofString? k then
+        named := named ++ [(h.span, kk)]
+  return (table, problems, named)
 
 def dProgram (info : Info) (p : Syntax.Program) : M Program := do
   let c : Ctx := { info, kind := info.interface.kind? p.kind }
@@ -757,15 +758,15 @@ def dProgram (info : Info) (p : Syntax.Program) : M Program := do
       let (kv, kp) ← dClauses c k.clauses
       pure (meetVerdicts verdicts kv, preserved ++ kp)
     | none => pure (verdicts, preserved)
-  let (handlers, problems) ← match c.kind with
+  let (handlers, problems, named) ← match c.kind with
     | some row => dHandlers c p row
     | none =>
       -- an unknown kind: an empty table; the checker rejects the kind
-      pure ([], [])
+      pure ([], [], [])
   let body ← dStmts c p.body.stmts
   let implements := p.implements.map fun n => (p.span, n)
   return { span := p.span, name := p.name, kind := p.kind, implements,
-           verdicts, preserved, handlers, body := problems ++ body }
+           verdicts, preserved, handlers, named, body := problems ++ body }
 
 def dItem (info : Info) (u : CompUnit) : Syntax.Item → M CompUnit
   | .const s n ty v => do

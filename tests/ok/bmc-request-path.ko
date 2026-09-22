@@ -35,8 +35,9 @@ map stats : percpu_array[1] of Stats
 fn fnv(h: u32, c: u8) -> u32 { (h ^ (c as u32)) * 16777619 }
 
 // not served here: hand it to the stack
-program bmc_rx : xdp fail pass
+program bmc_rx : xdp
   on short_packet { stats[0].short += 1; pass }
+  default         { pass }
 {
   let ip = pkt.view<Ipv4Hdr>(EthHdr.size)?
   // SETs arrive over TCP: the invalidation program

@@ -1144,7 +1144,7 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     let (Fthn, Fels) ← fallibleFacts env' K x f b
     let (Ft, Et) ← checkStmts env' { K with facts := Fthn } thn
     let (Fe, Ee) ← checkStmts env
-      { K with facts := Fels, errnoOk := fallibleKind env f == .helper } els
+      { K with facts := Fels, errnoOk := fallibleKind env f == .failed_call } els
     if elseExits && !exits els then
       err span s!"the `else` block must end in an exit: {exitForms} \
        "
@@ -1184,7 +1184,7 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     match els with
     | some e =>
       let (Fe, Ee) ← checkStmts env
-        { K with facts := F, errnoOk := row.fails == some .helper } e
+        { K with facts := F, errnoOk := row.fails == some .failed_call } e
       unless exits e do
         err span s!"the `else` block must end in an exit: {exitForms} \
          "

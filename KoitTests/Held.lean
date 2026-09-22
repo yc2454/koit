@@ -35,7 +35,7 @@ private def decls : List String :=
    "fn now() -> u64 { ktime() }"]
 
 private def xdp (body : List String) : String :=
-  lines (decls ++ ["program p : xdp fail drop {", "  let c = counters[0]",
+  lines (decls ++ ["program p : xdp default { drop } {", "  let c = counters[0]",
                    "  let t = tuples[0]"] ++ body ++ ["  drop", "}"])
 
 -- a spin lock forbids call and resize; a store and a function

@@ -7,7 +7,9 @@
 // statement has the resize effect.
 type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
 
-program slice : xdp fail drop {
+program slice : xdp
+  default { drop }
+{
   let hdr = pkt.view<EthHdr>(0)?
   pkt.adjust_head(0)?
   // error: the view did not survive the resize

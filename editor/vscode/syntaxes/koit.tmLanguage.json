@@ -157,16 +157,24 @@
       ]
     },
     "handlers": {
-      "comment": "on short_packet { ... } -- the failure-kind handler table",
-      "match": "\\b(on)\\s+(short_packet|missing|invariant|bound|helper|program)?",
-      "captures": {
-        "1": {
-          "name": "keyword.control.handler.koit"
+      "comment": "the handler table: a kind, or `default` for the rest",
+      "patterns": [
+        {
+          "match": "\\b(on)\\s+(short_packet|not_found|bad_value|failed_check|failed_call|fail)?",
+          "captures": {
+            "1": {
+              "name": "keyword.control.handler.koit"
+            },
+            "2": {
+              "name": "support.constant.failure-kind.koit"
+            }
+          }
         },
-        "2": {
-          "name": "support.constant.failure-kind.koit"
+        {
+          "match": "\\bdefault\\b",
+          "name": "keyword.control.handler.koit"
         }
-      }
+      ]
     },
     "refinement": {
       "comment": "the `where` clause that carries a refinement",

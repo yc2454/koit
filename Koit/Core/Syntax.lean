@@ -28,19 +28,25 @@ open Koit (Span)
 environment, whoever wrote the map, the program's assumptions, the
 kernel, and the program's own logic. -/
 inductive Kind where
-  | short_packet | missing | invariant | bound | helper | program
+  | short_packet | not_found | bad_value | failed_check | failed_call
+  | fail
   deriving Repr, BEq, DecidableEq, Inhabited
 
 namespace Kind
 
+/-- Each name is the failure, so that `on K` reads as "when K
+happens"; who is to blame is a column of the table, not part of a
+name. `fail` is named after the statement that raises it, as
+`short_packet` is named after the condition that raises it. -/
 def spelling : Kind → String
-  | .short_packet => "short_packet" | .missing => "missing"
-  | .invariant => "invariant"       | .bound => "bound"
-  | .helper => "helper"             | .program => "program"
+  | .short_packet => "short_packet" | .not_found => "not_found"
+  | .bad_value => "bad_value"       | .failed_check => "failed_check"
+  | .failed_call => "failed_call"   | .fail => "fail"
 
 /-- Every kind, in the order of the failure table. -/
 def all : List Kind :=
-  [.short_packet, .missing, .invariant, .bound, .helper, .program]
+  [.short_packet, .not_found, .bad_value, .failed_check, .failed_call,
+   .fail]
 
 def ofString? (s : String) : Option Kind := all.find? (·.spelling == s)
 
@@ -265,11 +271,11 @@ def Fallible.span : Fallible → Span
 whose kind is a column of the resource table. -/
 def Fallible.kind? : Fallible → Option Kind
   | .view .. => some .short_packet
-  | .lookup .. => some .missing
-  | .loadw .. => some .invariant
-  | .call .. => some .helper
-  | .callopt .. => some .missing
-  | .coerce .. => some .bound
+  | .lookup .. => some .not_found
+  | .loadw .. => some .bad_value
+  | .call .. => some .failed_call
+  | .callopt .. => some .not_found
+  | .coerce .. => some .failed_check
   | .acquire .. => none
 
 /-- A field initializer of a struct literal. -/
@@ -428,7 +434,10 @@ structure Handler where
 /-- A program: its verdict set `S`, preserved regions `W`, handler
 table `H`, and body. `verdicts` is `S` after the
 implemented contract's clause is merged in, or `none` for no clause;
-`preserved` is `W`; `handlers` is `H`, total over the six kinds. -/
+`preserved` is `W`; `handlers` is `H`, total over the six kinds.
+`named` is the kinds an `on` handler named, which the total table no
+longer shows, so that the checker can refuse one for a kind the
+program cannot raise; a `default` block names none. -/
 structure Program where
   span       : Span
   name       : String
@@ -437,6 +446,7 @@ structure Program where
   verdicts   : Option (List (Span × String))
   preserved  : List Region
   handlers   : List Handler
+  named      : List (Span × Kind)
   body       : List Stmt
   deriving Repr, Inhabited
 

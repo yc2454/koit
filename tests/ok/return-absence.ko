@@ -8,7 +8,9 @@ fn lookup(k: ref Flow) -> u32? {
   if let f = verdicts[k] { return f.v } else { return }
 }
 
-program p : xdp fail drop {
+program p : xdp
+  default { drop }
+{
   let key = keys[0]
   let v = lookup(key) else { pass }
   if v == 1 { drop }

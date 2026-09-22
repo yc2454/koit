@@ -2,7 +2,9 @@
 // A computed verdict is a demand against the verdict set: the coercion
 // says the value is one of the kind's verdicts, which is weaker than
 // the set this program declared.
-program p : xdp verdict in { PASS, DROP } fail drop {
+program p : xdp verdict in { PASS, DROP }
+  default { drop }
+{
   let n = ctx.ingress_ifindex
   let v = n as verdict?
   return v

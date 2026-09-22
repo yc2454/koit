@@ -46,7 +46,7 @@ private def decls : List String :=
 
 /-- An `xdp` program with `clauses` in its header and `body`. -/
 private def xdp (clauses : List String) (body : List String) : String :=
-  lines (decls ++ ["program p : xdp"] ++ clauses ++ ["  fail drop", "{"] ++
+  lines (decls ++ ["program p : xdp"] ++ clauses ++ ["  default { drop }", "{"] ++
     body ++ ["  drop", "}"])
 
 private def V : String := "  let eth = pkt.view<EthHdr>(0)?"
@@ -117,7 +117,7 @@ private def V : String := "  let eth = pkt.view<EthHdr>(0)?"
   ["  let c = counters[0]", "  let old = atomic_add(c.n, 1)"])
   "writes the map `counters`"
 #guard has (lines (decls ++
-  ["program t : tc", "  preserve ctx.mark", "  fail drop",
+  ["program t : tc", "  preserve ctx.mark", "  default { drop }",
    "{", "  ctx.mark = 1", "  drop", "}"]))
   "writes the context field `mark`, which `preserve ctx.mark` forbids"
 -- a handler is part of the program

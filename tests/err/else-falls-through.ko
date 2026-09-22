@@ -6,7 +6,9 @@ map verdicts : hash[64] of Flow -> { v: u32 }
 map keys : array[1] of Flow
 map stats : array[1] of { n: u64 }
 
-program p : xdp fail drop {
+program p : xdp
+  default { drop }
+{
   let key = keys[0]
   let f = verdicts[key] else { stats[0].n += 1 }
   drop

@@ -41,8 +41,8 @@ const HEADER_WORDS = [
     detail: "a region the program writes nothing in" },
   { label: "on", body: "on ${1:short_packet} { $0 }",
     detail: "a handler for a kind of failure" },
-  { label: "fail", body: "fail ${1:pass}",
-    detail: "the verdict an unhandled failure exits with" },
+  { label: "default", body: "default { ${1:drop} }",
+    detail: "what a failure with no handler of its own does" },
   { label: "implements", body: "implements ${1:Contract}",
     detail: "the contract this program satisfies" }
 ];

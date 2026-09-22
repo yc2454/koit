@@ -4,7 +4,9 @@
 // constant on the other side is the mistake `htons` exists to prevent.
 type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }
 
-program p : xdp fail drop {
+program p : xdp
+  default { drop }
+{
   let eth = pkt.view<EthHdr>(0)?
   if eth.proto != 0x0800 { pass }
   drop

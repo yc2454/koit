@@ -18,10 +18,9 @@ map grown : percpu_array[1] of { n: u64 }
 
 program headroom : xdp
   verdict in { PASS, TX, ABORTED }
-  fail abort
   on short_packet { pass }
   // The kernel refused to grow the packet; nothing was changed.
-  on helper { pass }
+  on failed_call  { pass }
 {
   let eth = pkt.view<EthHdr>(0)?
   if eth.proto != ETH_P_IP { pass }

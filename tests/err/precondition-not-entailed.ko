@@ -3,7 +3,7 @@
 // the call.
 fn f(n: u32 where n > 0) -> u32 { n }
 
-program p : xdp fail drop {
+program p : xdp {
   let x = f(ctx.ingress_ifindex)
   drop
 }

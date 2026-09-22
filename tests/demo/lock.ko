@@ -14,7 +14,7 @@ map bucket : array[1] of { lk: spinlock, tokens: u64, last: u64 }
 program limit : xdp
   verdict in { PASS, DROP }
   preserve pkt
-  fail drop
+  default { drop }
 {
   // A call, which is allowed here. The same line moved inside the
   // block below is a type error naming the lock: a spin lock forbids

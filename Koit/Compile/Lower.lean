@@ -1155,7 +1155,7 @@ partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
       pure [← releaseStmt c sp row true (some (.var x'))]
     -- a refused reservation has no return code; the model's reason
     -- for it is `ENOMEM`, as Core's rule sets `errno`
-    let (errDecl, ce) ← if row.fails == some .helper then
+    let (errDecl, ce) ← if row.fails == some .failed_call then
         let err ← freshName "err"
         pure ([LIR.Stmt.«let» sp err .u32 (lit 32 (Machine.toNatMod (-12) 32))],
               { c with errno := some err })

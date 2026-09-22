@@ -50,11 +50,12 @@ fn swap_addresses(h: view EthHdr) {
 }
 
 // whatever we cannot serve goes to the stack
-program bmc_rx : xdp fail pass
+program bmc_rx : xdp
   on short_packet { stats[0].short += 1; pass }
-  on program      { stats[0].other += 1; pass }
+  on fail         { stats[0].other += 1; pass }
   // a corrupted entry is a bug; make it visible
-  on invariant    { abort }
+  on bad_value    { abort }
+  default         { pass }
 {
   var off = 0
   let eth = pkt.view<EthHdr>(off)?
@@ -85,13 +86,13 @@ program bmc_rx : xdp fail pass
 
   // demand h % SLOTS < SLOTS: entailed
   let e = cache[h % SLOTS]
-  // helper: pass; kills eth, ip, udp, cmd
+  // failed_call: pass; kills eth, ip, udp, cmd
   pkt.adjust_tail(DATA_SIZE as i32)?
 
   var rlen: u64 where rlen <= DATA_SIZE = 0
   // no calls inside; released on every exit below
   hold lock(e.lk) {
-    // invariant: abort, after unlocking
+    // bad_value: abort, after unlocking
     let len = e.len?
     if e.valid == 1 && e.hash == h && (len as u64) >= n {
       var same = true
@@ -132,8 +133,9 @@ program bmc_rx : xdp fail pass
 // the value length taken through the one runtime coercion, since the
 // length of the rest of the datagram is the difference of two
 // positions, which the entailment fragment does not track (10.4).
-program bmc_tx : tc fail pass
+program bmc_tx : tc
   on short_packet { pass }
+  default         { pass }
 {
   var off = 0
   let eth = pkt.view<EthHdr>(off)?
@@ -166,7 +168,7 @@ program bmc_tx : tc fail pass
   }
   if klen == 0 || klen == MAX_KEY { pass }
 
-  // bound: pass. A reply longer than an entry is not cached.
+  // failed_check: pass. A reply longer than an entry is not cached.
   let n = (pkt.len - voff) as {v: u64 | v <= DATA_SIZE}?
 
   // demand h % SLOTS < SLOTS: entailed

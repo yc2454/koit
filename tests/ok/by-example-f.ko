@@ -15,10 +15,11 @@ fn record(r: u32) {
   if r < 4 { reasons[r].n += 1 }
 }
 
-program prog : xdp fail drop
+program prog : xdp
   // Handlers are declared once. `reason` is what the site passed.
   on short_packet { record(R_SHORT); pass }
-  on invariant    { record(reason); drop }
+  on bad_value    { record(reason); drop }
+  default         { drop }
 {
   let eth = pkt.view<EthHdr>(0)?
   let cur = policy[0].cur else fail R_BAD_IDX

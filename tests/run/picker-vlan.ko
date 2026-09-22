@@ -21,7 +21,6 @@ map backends : array[1] of Backend[M]
 program pick : xdp
   verdict in { PASS, DROP, ABORTED, REDIRECT }
   preserve pkt
-  fail abort
   on short_packet { drop }
 {
   var off = 0
@@ -37,11 +36,11 @@ program pick : xdp
   }
   // an ordinary case, not a failure
   if proto != ETH_P_IP { pass }
-  // invariant: abort; afterwards cur : {v | v < M}
+  // bad_value: abort; afterwards cur : {v | v < M}
   let cur = policy[0].cur?
   // demand cur < M: entailed
   let be  = backends[0][cur]
-  // helper: abort; the result is REDIRECT, which the verdict set admits
+  // failed_call: abort; the result is REDIRECT, which the verdict set admits
   let v   = redirect(be.ifindex)?
   return v
 }

@@ -10,7 +10,9 @@ map out : array[1] of { b: u8[64] }
 
 fn copy_bytes(len: u32 where len <= 64) -> u32 { len }
 
-program p : xdp fail drop {
+program p : xdp
+  default { drop }
+{
   let n = ctx.rx_queue_index
   check n < 200
   let m = copy_bytes(n)

@@ -3,7 +3,7 @@
 // named by `hold lock(p)`.
 map counters : array[1] of { lk: spinlock, n: u64 }
 
-program p : xdp fail drop {
+program p : xdp {
   let c = counters[0]
   let l = c.lk
   pass

@@ -3,6 +3,6 @@
 // exit; only a `syscall` body may fall off its end.
 map stats : array[1] of { n: u64 }
 
-program p : xdp fail drop {
+program p : xdp {
   stats[0].n += 1
 }

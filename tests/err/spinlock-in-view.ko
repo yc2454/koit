@@ -3,7 +3,9 @@
 // without `spinlock`.
 type Entry = { lk: spinlock, n: u64 }
 
-program p : xdp fail drop {
+program p : xdp
+  default { drop }
+{
   let e = pkt.view<Entry>(0)?
   drop
 }

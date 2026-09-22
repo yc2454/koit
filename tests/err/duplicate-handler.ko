@@ -4,5 +4,8 @@ program p : xdp
   on short_packet { pass }
   on short_packet { drop }
 {
+  // the view makes the handlers reachable, so the duplicate is what
+  // the program is rejected for
+  let e = pkt.view<u8[4]>(0)?
   drop
 }

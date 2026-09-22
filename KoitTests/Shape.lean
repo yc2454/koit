@@ -51,7 +51,7 @@ private def picker : String :=
          "map backends : array[1] of Backend[M]",
          "program pick : xdp",
          "  verdict in { PASS, DROP, ABORTED, REDIRECT }",
-         "  preserve pkt", "  fail abort", "  on short_packet { drop }", "{",
+         "  preserve pkt", "  default { abort }", "  on short_packet { drop }", "{",
          "  var off = 0", "  let eth = pkt.view<EthHdr>(off)?", "  off += EthHdr.size",
          "  var proto = eth.proto",
          "  repeat 2 {", "    if proto != ETH_P_VLAN { break }",
@@ -69,7 +69,7 @@ private def picker : String :=
 private def writer : String :=
   lines ["type Hdr = { a: u8, b: u16, c: u32 }",
          "map stats : array[8] of { n: u64 }",
-         "program w : xdp", "  fail drop", "  on program { stats[reason & 7].n += 1; abort }", "{",
+         "program w : xdp", "  default { drop }", "  on short_packet { stats[reason & 7].n += 1; abort }", "{",
          "  let h = pkt.view<Hdr>(0)?",
          "  h.c = (h.b as u32) + 1",
          "  for i in 0..4 { if i < 2 { stats[i].n += h.a as u64 } }",

@@ -9,7 +9,9 @@ type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
                  ttl: u8, protocol: u8, csum: be16,
                  saddr: be32, daddr: be32 }
 
-program p : xdp fail drop {
+program p : xdp
+  default { drop }
+{
   var off = 0
   repeat 4 {
     let eth = pkt.view<EthHdr>(off)?

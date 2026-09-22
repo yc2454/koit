@@ -6,7 +6,7 @@ const LIMIT = 1000
 
 map counters : array[1] of { lk: spinlock, n: u64 }
 
-program count : xdp fail drop {
+program count : xdp {
   let c = counters[0]
   // The lock is released on every exit of the block, including drop.
   hold lock(c.lk) {

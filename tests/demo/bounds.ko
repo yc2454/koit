@@ -25,11 +25,11 @@ fn bump(i: u32 where i < SLOTS) {
 program count : xdp
   verdict in { PASS, ABORTED }
   preserve pkt
-  fail pass
   // Another program wrote this map. A value outside the range it
   // declared is that writer's bug, and it is worth seeing rather
   // than papering over.
-  on invariant { abort }
+  on bad_value { abort }
+  default      { pass }
 {
   // The marked load: from here on `slot` has the refined type.
   let slot = route[0].slot?

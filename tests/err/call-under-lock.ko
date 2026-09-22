@@ -7,7 +7,7 @@ license "GPL"
 const LIMIT = 1000
 map counters : array[1] of { lk: spinlock, n: u64 }
 
-program count : xdp fail drop {
+program count : xdp {
   let c = counters[0]
   hold lock(c.lk) {
     if c.n >= LIMIT { drop }

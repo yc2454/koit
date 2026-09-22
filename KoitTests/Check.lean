@@ -50,7 +50,7 @@ private def xdp (body : List String) : String :=
   lines (["type EthHdr = { dst: u8[6], src: u8[6], proto: be16 }",
           "const M = 16",
           "map policy : array[1] of { cur: u32 where cur < M }",
-          "program p : xdp fail drop {"] ++ body ++ ["  drop", "}"])
+          "program p : xdp default { drop } {"] ++ body ++ ["  drop", "}"])
 
 /-- The view every packet guard starts with. -/
 private def V : String := "  let eth = pkt.view<EthHdr>(0)?"
@@ -123,7 +123,7 @@ private def unit (decls : List String) (body : List String) : String :=
 #guard has (sys ["  let x = ctx"]) "read through its fields"
 #guard has (sys ["  let x = ctx.mark"]) "opaque"
 #guard has (xdp ["  let x = ctx.mark"]) "has no field `mark`"
-#guard ok (lines ["program p : tc fail drop { ctx.mark = 1", "  drop }"])
+#guard ok (lines ["program p : tc default { drop } { ctx.mark = 1", "  drop }"])
 
 -- places against values (P3), reads and bindings
 #guard ok (xdp ["  let c = policy[0]", "  let v = c.cur", "  c.cur = 3"])
@@ -178,30 +178,33 @@ private def unit (decls : List String) (body : List String) : String :=
   ["  let k: Flow = { a: 1, b: 2 }"])
 
 -- handlers, verdict sets, and exits
-#guard ok "program p : xdp verdict in { PASS, DROP } fail drop { pass }"
-#guard has "program p : xdp verdict in { PASS } fail drop { pass }"
+#guard ok "program p : xdp verdict in { PASS, DROP } default { drop } { pass }"
+#guard has "program p : xdp verdict in { PASS } default { drop } { pass }"
   "not in the verdict set"
-#guard has "program p : xdp verdict in { PASS, FOO } fail drop { pass }"
+#guard has "program p : xdp verdict in { PASS, FOO } default { drop } { pass }"
   "not a verdict"
-#guard has (lines ["program p : xdp fail drop",
+-- the view makes the handler reachable, so each is rejected for what
+-- its handler body does
+#guard has (lines ["program p : xdp default { drop }",
                    "  on short_packet { reason == 1; pass }",
-                   "{ pass }"]) "must be a call"
+                   "{ let e = pkt.view<u8[4]>(0)?; pass }"]) "must be a call"
 #guard has (lines ["map s : array[4] of { n: u64 }",
-                   "program p : xdp fail drop",
+                   "program p : xdp default { drop }",
                    "  on short_packet { s[reason].n += 1; pass }",
-                   "{ pass }"]) "the index demands `reason < 4`"
+                   "{ let e = pkt.view<u8[4]>(0)?; pass }"])
+  "the index demands `reason < 4`"
 #guard ok (lines ["map s : array[4] of { n: u64 }",
-                  "program p : xdp fail drop",
+                  "program p : xdp default { drop }",
                   "  on short_packet { if reason < 4 { s[reason].n += 1 }",
                   "    pass }",
-                  "{ pass }"])
+                  "{ let e = pkt.view<u8[4]>(0)?; pass }"])
 #guard has (sys ["  break"]) "outside a loop"
 #guard ok (sys ["  repeat 4 { break }"])
 #guard has (xdp ["  let cur = policy[0].cur?", "  repeat cur { }"])
   "constant expression"
-#guard has "program p : xdp fail drop { if true { pass } }"
+#guard has "program p : xdp default { drop } { if true { pass } }"
   "must end in an exit"
-#guard ok "program p : xdp fail drop { if true { pass } else { drop } }"
+#guard ok "program p : xdp default { drop } { if true { pass } else { drop } }"
 #guard ok "program p : syscall { let x = 1 }"
 
 -- positions are the surface construct's
