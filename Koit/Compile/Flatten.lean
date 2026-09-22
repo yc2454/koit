@@ -273,20 +273,34 @@ partial def expr (e : LIR.Expr) (t : LIR.Ty) (d : VReg) : FM Unit := do
   | .arith op s w l r =>
     expr l (.int s w) d
     let cls := clsOf w
-    let bop ← aluOf op s
-    let mut src ← operand r (.int s w) cls
-    -- a narrow shift masks its amount to the width, where the
-    -- instruction masks to 31
-    if (op == .shl || op == .shr) && w < 32 then
-      src ← match src with
-        | .imm k => pure (Src.imm (k % w))
-        | .reg rs =>
-          let ts ← temp
-          emit (.mov .w64 ts (.reg rs))
-          emit (.alu .and .w32 ts (.imm (w - 1)))
-          pure (Src.reg ts)
-    emit (.alu bop cls d src)
-    normalize s w d
+    let src ← operand r (.int s w) cls
+    let zeroDivisor := match src with
+      | .imm k => (op == ArithOp.div || op == ArithOp.mod) && k == 0
+      | .reg _ => false
+    -- the verifier refuses a division by an immediate zero, so the
+    -- total result is chosen here: the quotient is zero, and the
+    -- remainder is the dividend, already in `d`
+    if zeroDivisor then
+      if op == ArithOp.div then constInto d 0
+    else
+      let bop ← aluOf op s
+      let src ← match op, src with
+        -- a shift masks its amount to the width. A constant amount
+        -- is reduced here, since the verifier refuses an immediate
+        -- at or past the class width; a register amount is masked
+        -- by the instruction at 32 and 64 bits and by an `and`
+        -- below them, where the instruction masks to 31
+        | .shl, .imm k | .shr, .imm k => pure (Src.imm (k % w))
+        | .shl, .reg rs | .shr, .reg rs =>
+          if w < 32 then
+            let ts ← temp
+            emit (.mov .w64 ts (.reg rs))
+            emit (.alu .and .w32 ts (.imm (w - 1)))
+            pure (Src.reg ts)
+          else pure src
+        | _, _ => pure src
+      emit (.alu bop cls d src)
+      normalize s w d
   | .cast s w s' w' e =>
     expr e (.int s w) d
     cast s w s' w' d

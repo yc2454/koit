@@ -120,6 +120,14 @@ def wf (X : Env ρ τ) : W Unit := do
         let n ← arity X h |>.mapError (·.describe)
         unless args.length == n do
           wfErr s!"instruction {i}: `{h.print}` takes {n} operands, {args.length} given"
+    -- two immediates the verifier refuses on sight, which the
+    -- flattening folds away: a zero divisor, and a shift amount at
+    -- or past the class width
+    | .alu op cls _ (.imm k) =>
+      if (op == AluOp.div || op == AluOp.sdiv || op == AluOp.mod || op == AluOp.smod) && k == 0 then
+        wfErr s!"instruction {i} divides by an immediate zero"
+      if (op == AluOp.lsh || op == AluOp.rsh || op == AluOp.arsh) && (k < 0 || k ≥ cls.bits) then
+        wfErr s!"instruction {i} shifts by {k}, outside its {cls.bits}-bit width"
     | _ => pure ()
     let (ws, _) := writesOf X ins
     for r in X.conv.pinned do

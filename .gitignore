@@ -5,3 +5,4 @@ spec/*
 !spec/bir.md
 !spec/lowering.md
 PLAN.md
+tools/selftests/

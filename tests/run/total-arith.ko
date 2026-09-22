@@ -1,0 +1,22 @@
+// run:
+// total: 0
+// map out:
+//   [0] = { q: 0, r: 7, s: 7, t: 7, u: 3, v: 3 }
+
+// Total arithmetic with a constant operand the verifier would refuse
+// as an immediate: a zero divisor, and a shift amount at or past the
+// width. The value is read back from the map so that nothing folds
+// before the flattening, which must choose the total result itself.
+type Out = { q: u64, r: u64, s: u64, t: u32, u: u64, v: i32 }
+map out : array[1] of Out
+
+program total : syscall {
+  out[0].q = 7
+  let x = out[0].q
+  out[0].q = x / 0
+  out[0].r = x % 0
+  out[0].s = x << 64
+  out[0].t = (x as u32) << 32
+  out[0].u = x >> 65
+  out[0].v = (x as i32) >> 33
+}
