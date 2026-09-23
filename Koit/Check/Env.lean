@@ -134,6 +134,10 @@ structure Ctx where
   /-- The owned names moved at the head of the innermost loop, which a
   path back to the head or out of the loop must not have added to. -/
   loopMoved : List String := []
+  /-- The names in scope derived from another, each with the name it
+  derives from: a socket cast under its socket. The parent cannot be
+  moved while one is in scope. -/
+  derived : List (String × String) := []
   deriving Inhabited
 
 end Koit.Check

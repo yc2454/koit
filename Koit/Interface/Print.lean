@@ -85,7 +85,8 @@ def CallDecl.doc (c : CallDecl) : String :=
     (if c.kinds.isEmpty then [] else [s!"in {", ".intercalate c.kinds}"]) ++
     (if c.gplOnly then ["gpl"] else []) ++
     (if c.lockSafe then ["lock_safe"] else []) ++
-    (if c.requires.isEmpty then [] else [s!"requires {", ".intercalate (c.requires.map (·.name))}"])
+    (if c.requires.isEmpty then [] else [s!"requires {", ".intercalate (c.requires.map (·.name))}"]) ++
+    (match c.derivedFrom with | some p => [s!"derived_from {p}"] | none => [])
   let note := match c.sig, c.impl with
     | .builtin, _ => if c.kernel == "" then "" else s!"// {c.kernel}"
     | _, .inline => if c.kernel == "" then "" else s!"// {c.kernel}"
@@ -103,7 +104,9 @@ def ResourceDecl.doc (r : ResourceDecl) : String :=
     else s!"forbids {", ".intercalate (r.forbidden.map Effect.doc)}"
   let guards := if r.guards == "" then [] else [s!"guards {r.guards}"]
   let guards := guards ++ (if r.lockSafe then ["lock_safe"] else []) ++
-    (if r.requires.isEmpty then [] else [s!"requires {", ".intercalate (r.requires.map (·.name))}"])
+    (if r.requires.isEmpty then [] else [s!"requires {", ".intercalate (r.requires.map (·.name))}"]) ++
+    (match r.derivedFrom with | some p => [s!"derived_from {p}"] | none => []) ++
+    (if r.holdsOnFailure then ["holds_on_failure"] else [])
   let cols := [s!"acquired by {acq}"] ++ (if r.yields then ["yields an owned reference"] else []) ++
     (match r.fails with | some k => [s!"fails {k.spelling}"] | none => []) ++
     [release, forbids, r.nesting.doc] ++ guards

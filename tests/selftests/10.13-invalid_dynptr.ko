@@ -1,0 +1,12 @@
+// pending: dynptrs
+// selftest: progs/bpf_qdisc_fail__invalid_dynptr.c invalid_dynptr (T0016 to T0018, rule 10.13; T0226 T0227 use_file_dynptr_after_put_file, rule 10.14; master fe2ec83)
+// A dynptr built over an owned object, an skb in a qdisc or a file,
+// used after the object is released, and the object released while
+// the dynptr lives. In koit the dynptr is a hold-bound name guarded
+// by the object's name, so its scope nests in the object's and the
+// object cannot be moved to its release while the dynptr is live
+// (entry 51, derived names). Placeholder until the dynptr and file
+// declarations exist. In C:
+//
+//   bpf_dynptr_from_file(file, 0, &p); bpf_put_file(file);   /* refused */
+//   bpf_dynptr_read(buf, sizeof(buf), &p, 0, 0);

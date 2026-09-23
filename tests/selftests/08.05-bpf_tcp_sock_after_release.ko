@@ -1,0 +1,19 @@
+// expect: cannot be moved while
+// selftest: progs/verifier_ref_tracking.c bpf_tcp_sock_after_release (T2141 T2142 T2143 T2144 T2151, rule 08.05, master fe2ec83)
+// The socket released while a name cast from it is still used. The
+// kernel invalidates the cast at the release; here the release is a
+// `move` of `sk`, refused while `tp`, derived from it, is in scope.
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+map tuples : array[1] of Tuple
+map out : array[1] of { w: u32 }
+
+program p : tc {
+  let tuple = tuples[0]
+  hold sk = sk_lookup_tcp(tuple)? {
+    if let tp = tcp_sock(sk) {
+      sk_release(move sk)
+      out[0].w = tp.snd_cwnd
+    }
+  }
+  pass
+}

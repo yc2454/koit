@@ -77,7 +77,8 @@ def KernelOk (K : Kernel) : Prop :=
 
 /-- One behavior each helper of the stage-1 interface may have: a redirect
 succeeds with the kind's `REDIRECT`; the resizes grow with zero bytes
-and fail past the packet's end; a socket lookup finds a socket; the
+and fail past the packet's end; a socket lookup finds a socket, and
+the casts a full and a TCP socket with zeroed fields; the
 clock advances a microsecond per call. The inline declarations never reach a
 kernel. -/
 def synthetic : Kernel where
@@ -107,6 +108,16 @@ def synthetic : Kernel where
       let st := st.setRegion (.kernel id) ByteArray.empty
       .ok (some (.object id)) st
     | "sk_release", _ => .ok none st
+    -- the casts find a full socket and a TCP socket with zeroed fields,
+    -- 96 bytes for `struct bpf_tcp_sock`
+    | "sk_fullsock", _ =>
+      let (id, st) := st.fresh
+      let st := st.setRegion (.kernel id) ByteArray.empty
+      .ok (some (.object id)) st
+    | "tcp_sock", _ =>
+      let (id, st) := st.fresh
+      let st := st.setRegion (.kernel id) (ByteArray.mk (Array.replicate 96 (0 : UInt8)))
+      .ok (some (.object id)) st
     | "ktime", _ =>
       let st := { st with clock := st.clock + 1000 }
       .ok (some (.scalar st.clock)) st

@@ -619,6 +619,10 @@ partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
         unless ← env.eqv t t' do
           err s s!"`{fname}` consumes `{pname}: {pty.print}`; `{x}` is a \
             `{l.ty.print}`"
+        -- (Move): a name guarded by `x` is still in scope
+        if let some (d, _) := K.derived.find? (·.2 == x) then
+          err s s!"`{x}` cannot be moved while `{d}`, derived from it, is \
+            in scope; the release would leave `{d}` without its guard"
       | _ =>
         err s s!"only a name bound by a value-yielding `hold` can be moved; \
           `{x}` is a `{l.ty.print}`"

@@ -1,0 +1,12 @@
+// pending: dynptrs
+// selftest: progs/dynptr_fail.c ringbuf_missing_release1 (T0075 to T0077, T0223, rule 10.10, master fe2ec83)
+// A reserved ring-buffer dynptr never submitted or discarded, on the
+// success path and on the path where the reservation failed, where
+// the kernel still holds the reference. In koit the declaration's
+// `holds on failure` clause makes the acquisition infallible at the
+// source: the name is always bound, the scope always releases, and an
+// empty reservation is a fact about its size (entry 51). Placeholder
+// until the dynptr declarations exist. In C:
+//
+//   bpf_ringbuf_reserve_dynptr(&ringbuf, val, 0, &ptr);
+//   return 0;                            /* unreleased */

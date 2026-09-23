@@ -549,6 +549,10 @@ obtains one by binding it with `hold` (section 11) and disposes of it
 either by letting the scope release it or by handing it to a sink with
 `move` (section 11.5). `T` is the type of the place the reference
 names, `own Sock`, `own Event`; `ref` is never written under `own`.
+A name derived from an owned or held name (section 11.1), a socket
+cast or a dynptr clone, has the type of the place it names, `ref T`
+or `view T`, guarded by the name it derives from; it is never `own`,
+so the scope that binds it releases nothing.
 
 **Optionals.** `T?` is the result type of a fallible operation whose
 failure kind is `not_found`: a hash lookup, or a function declared to
@@ -888,20 +892,36 @@ What an acquisition takes is a clause of its declaration, one of three shapes:
 a place of a slot type (`lock(p)`), nothing (`rcu`), or the parameters
 of the acquiring kernel function (`sk_lookup_tcp(t)`).
 
+Three more shapes come from clauses of the declaration and add no
+syntax. A declaration marked `derived from` a parameter yields a
+name derived from the argument, bound inside the argument's scope and
+guarded by it: `hold sk = sk_lookup_tcp(t)? { if let tp = tcp_sock(sk)
+{ ... } }`, where `tp` is a second name for the socket, nullable on
+its own, and dies with `sk`. A declaration whose parameter is `own T`
+and whose result is `own U` is a consuming acquisition, `hold ct2 =
+insert_entry(move ct)? { ... }`: the argument is moved into it and the
+result is a new owned name, which is how an object that changes type
+at a kernel operation is typed with no construct of its own. A
+declaration marked `holds on failure`, a reserved dynptr, cannot fail
+at the source: the kernel holds the reference whether or not the
+constructor obtained anything, so the name is always bound, the scope
+always releases, and an empty result is a fact about the name's size
+that the result type states.
+
 ### 11.2 The resources
 
 Everything after `hold` is a resource declaration, supplied by the kernel
 interface for the kernel version the unit targets; the core knows only
 the clauses. Declarations in this draft:
 
-| resource | acquisition | argument | can fail | normal exit | abnormal exit | forbidden while held | nesting | class | guards | lock-safe | requires |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| spin lock | `lock(p)` | a place of the slot type `spinlock`, in a map value | no | unlock | unlock | `call`, `resize`, `sleep`, another spin lock, calls to separately verified functions | no | | the allocation `p` lies in, for graph nodes moved into it | no | none |
-| RCU section | `rcu` | none | no | unlock | unlock | `sleep` | yes, counted | | RCU-protected pointers, in the kernel-memory extension | no | none |
-| preempt-off | `preempt_off` | none | no | enable | enable | `sleep` | yes, counted | | | no | none |
-| IRQ-off | `irq_off` | none | no | restore | restore | `sleep` | yes, LIFO | native or lock; a flag saved by one class cannot be restored by the other | | no | none |
-| ring-buffer record | `rb.reserve<T>()`, yields `own T` | the ring buffer and the record type | yes, `failed_call` | submit | discard | none | yes | | | no | none |
-| socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the interface type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `not_found` | release | release | none | yes | | | no | none |
+| resource | acquisition | argument | can fail | normal exit | abnormal exit | forbidden while held | nesting | class | guards | lock-safe | requires | derived from | holds on failure |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| spin lock | `lock(p)` | a place of the slot type `spinlock`, in a map value | no | unlock | unlock | `call`, `resize`, `sleep`, another spin lock, calls to separately verified functions | no | | the allocation `p` lies in, for graph nodes moved into it | no | none | | | no |
+| RCU section | `rcu` | none | no | unlock | unlock | `sleep` | yes, counted | | RCU-protected pointers, in the kernel-memory extension | no | none | | | no |
+| preempt-off | `preempt_off` | none | no | enable | enable | `sleep` | yes, counted | | | no | none | | | no |
+| IRQ-off | `irq_off` | none | no | restore | restore | `sleep` | yes, LIFO | native or lock; a flag saved by one class cannot be restored by the other | | no | none | | | no |
+| ring-buffer record | `rb.reserve<T>()`, yields `own T` | the ring buffer and the record type | yes, `failed_call` | submit | discard | none | yes | | | no | none | | | no |
+| socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the interface type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `not_found` | release | release | none | yes | | | no | none | | | no |
 
 An acquisition is a call: it has the effects of the kernel function
 that performs it, `call` for the helper or kfunc behind every
@@ -916,7 +936,12 @@ marks `KF_RCU_PROTECTED`; what satisfies a required RCU section is
 the kernel's own test: an RCU section, a spin lock, a preempt-off or
 IRQ-off section in the held set, or a program kind whose declaration
 says it cannot sleep. Both clauses are also clauses of a call's
-declaration (section 13).
+declaration (section 13). `derived from` names the parameter the
+result is a second name for (11.1); `holds on failure` says the
+kernel keeps the reference when the constructor fails. The `guards`
+clause lists what the result's places are guarded by: the bound name
+itself, the packet's layout token, or a parameter; a slice of a
+packet dynptr is guarded by the dynptr and the token both.
 
 Declarations the extensions add with no change to the core: resilient locks,
 whose acquisition can fail; kernel iterators, generic over the iterated
@@ -997,6 +1022,21 @@ value-yielding `hold` can be moved; locks, RCU, preemption, and IRQ
 state are not values. `move` emits no code; the sink emits the
 transfer and the scope omits the release.
 
+Two more rules cover names that relate. A name cannot be moved while
+a name derived from it (11.1) is in scope: the derived name is
+guarded by it, and moving it would be releasing under a live guard,
+so `sk_release(move sk)` inside `if let tp = tcp_sock(sk) { ... }` is
+a type error naming `tp`. A derived name is never a sink's argument,
+since it owns nothing; what the kernel admits and koit refuses is a
+release through a cast or a clone, which no surveyed datapath does.
+And a declaration may yield `own T` from a borrowed argument, the
+kernel's reference-count acquisition, so that one object has two
+independent owners; two owned names of one allocation type may then
+alias, and a store through either removes the facts about every
+owned name of that type (18.4), which is sound and costs nothing in
+the programs that use them. A sink may also yield: a consuming
+acquisition (11.1) moves its argument and binds a new owned name.
+
 ## 12. Effects, regions, and guards
 
 Every builtin and function has an effect set drawn from
@@ -1035,21 +1075,24 @@ the context of its caller. Resources are not effects of functions,
 because a resource cannot be held across a function boundary; they
 are context flags used by section 11.4.
 
-**Guards.** A place may carry a guard: a resource in the held set, or a
-stability token. Reading or writing through the place demands that
-its guard be held. An operation that drops the guard kills every place
-it guards, and a later use is a type error at the use, naming the
-statement that dropped it. The guard clause of the region and resource
-declarations supplies the guards; this draft has one, and the extensions add
-the other two with no new rule:
+**Guards.** A place may carry guards: a set of resources and names in
+the held set and stability tokens. Reading or writing through the
+place demands that every guard be held. An operation that drops any
+one of them kills every place it guards, and a later use is a type
+error at the use, naming the statement that dropped it. The guard
+clause of the region and resource declarations supplies the guards;
+this draft uses one, and the extensions add the others with no new
+rule:
 
 | place | guard | dropped by |
 |---|---|---|
 | a packet view | the packet's layout token | any statement with the `resize` effect |
 | an RCU-protected pointer, kernel-memory extension | the RCU section | the outermost `hold rcu` exit |
 | a graph node after `move` into a list or tree, kernel-memory extension | the lock of that allocation | that lock's `hold` exit |
+| a name derived from another, a socket cast or a dynptr clone | the name it derives from | that name's release or `move` |
+| a slice of a packet dynptr, dynptr extension | the dynptr and the packet's layout token | the dynptr's release, or any statement with the `resize` effect, which a write through a packet dynptr has |
 
-The first declaration is what draft 2 called view invalidation. The kernel
+The first guard is what draft 2 called view invalidation. The kernel
 implements the three as separate rules: packet-pointer clearing on
 packet-changing helpers, demotion of RCU pointers to untrusted at
 unlock, and the requirement that a graph node be accessed under the
@@ -1549,7 +1592,9 @@ it names. `kill(F, p)` removes every fact mentioning a place that is
 possibly equal unless both are literals that differ; and, since the
 checker does not compute aliasing between them, a store through a
 `ref` parameter removes every fact about every `ref` parameter of the
-function, and a store through a view every fact about every view.
+function, a store through a view every fact about every view, and a
+store through an owned name every fact about every owned name of the
+same allocation type, since two may own one object (11.5).
 When a fact `kill` removes mentions another stack place, as `voff =
 off` mentions `voff` when `off` is stored to, what was known of that
 place, its bounds and known bits, is kept as facts of its own, since
@@ -1658,6 +1703,8 @@ not what it holds.
 (Hold)
     acq : resource R, yielding own T or nothing, fallible of kind k or not
     effects(acq) disjoint from forbidden(H)      requires(acq) satisfied by K
+    acq derived from y  =>  y in H, and x is guarded by y, not owned
+    acq holds on failure  =>  acq is not fallible here, and no Tail
     G,x:own T; F; K[H += R(x)] |- body ~> body' -| F1 ; E
     E disjoint from forbidden(R)
     R nests per its declaration
@@ -1665,7 +1712,14 @@ not what it holds.
     -------------------------------------------------------
     G;F;K |- hold x = acq Tail body
         ~> hold R x = acq then body' else <tail'>   -| F1
-    the release at exit is emitted on the paths where x is not moved
+    the release at exit is emitted on the paths where x is not moved,
+    and never for a derived x
+
+(Move)
+    x : own T in H, not moved on this path
+    no y in H is guarded by x
+    ------------------------------------------
+    G;F;K |- move x : own T, x marked moved
 
 (Meet)
     meet(F1, F2) is defined only when, for every owned x in scope,
@@ -2312,6 +2366,24 @@ session 8:
     when the kernel has one and `sleep` is already an effect; and
     `requires` on kinds, when the kernel checks it per kfunc. Both
     new clauses arrive empty (entry 50).
+
+65. Names relate, and `hold` keeps its shape: a declaration may mark
+    its result `derived from` a parameter, a second name for the same
+    object, bound inside the parameter's scope, guarded by it, never an
+    owner, and blocking the parameter's `move` while live; a
+    declaration may yield `own T` from a borrowed argument, a second
+    independent owner, with a store through either owned name killing
+    the facts about both; a consuming call may yield, which is how an
+    object that changes type at a kernel operation is typed; a
+    declaration may hold on failure, and is then infallible at the
+    source; and a place's guard is a set. Lexical scoping gives the
+    parent relation the kernel keeps as reference ids, which is why no
+    ids appear. Refused, and recorded as such: releasing a reference
+    through a cast or a clone, and overwriting a handle while another
+    shares its reference. Rejected: a reference table with ids in the
+    checker; derived names that own; a state on owned names for
+    typestate; a fallible acquisition with a release written in its
+    tail (entry 51).
 
 Open questions, with the default the checker implements until decided:
 

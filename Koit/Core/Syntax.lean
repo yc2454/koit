@@ -413,6 +413,9 @@ structure TypeDecl where
   span : Span
   name : String
   ty   : Ty
+  /-- An interface type whose places the program reads and never
+  writes: a kernel object the verifier admits loads from only. -/
+  readOnly : Bool := false
   deriving Repr, Inhabited
 
 /-- A named contract. -/

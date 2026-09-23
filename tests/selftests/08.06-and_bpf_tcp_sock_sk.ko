@@ -1,0 +1,21 @@
+// expect: `tcp_sock` can fail
+// selftest: progs/verifier_ref_tracking.c and_bpf_tcp_sock_sk (T2147, rule 08.06; T2341 of_bpf_skc_to_helpers; master fe2ec83)
+// Two names cast from one owned socket, each nullable on its own:
+// testing one says nothing about the other. The test checks the full
+// socket and reads through the untested TCP socket. Here each cast is
+// a fallible call yielding a name derived from `sk`, and the untested
+// one is an ordinary unconsumed optional.
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+map tuples : array[1] of Tuple
+map out : array[1] of { w: u32 }
+
+program p : tc {
+  let tuple = tuples[0]
+  hold sk = sk_lookup_tcp(tuple)? {
+    if let fs = sk_fullsock(sk) {
+      let tp = tcp_sock(sk)
+      out[0].w = tp.snd_cwnd
+    }
+  }
+  pass
+}

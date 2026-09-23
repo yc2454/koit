@@ -74,6 +74,8 @@ def redirectRet : Ty :=
 
 def sockTuple : Ty := .ref noSpan (.named noSpan "SockTuple")
 def ownSock : Ty := .own noSpan (.named noSpan "Sock")
+def refSock : Ty := .ref noSpan (.named noSpan "Sock")
+def refTcpSock : Ty := .ref noSpan (.named noSpan "TcpSock")
 
 /-- The calls. A layout lists the kernel's arguments in terms of
 koit's: `.arg i` is koit's `i`-th argument, `.ctx` the context,
@@ -116,6 +118,14 @@ def callSpecs : List CallSpec := [
   -- a consuming call: its parameter is a `move` sink
   { name := "sk_release", sig := .fn [param "sk" ownSock] none, effects := [.call],
     kinds := ["xdp", "tc"], link := .helper "sk_release" [.arg 0] },
+  -- the socket casts: a second name for the socket, derived from it,
+  -- nullable on its own, and never released through
+  { name := "sk_fullsock", sig := .fn [param "sk" refSock] (some refSock),
+    effects := [.call, .fail], fails := some .not_found, derivedFrom := some "sk",
+    kinds := ["tc"], link := .helper "sk_fullsock" [.arg 0] },
+  { name := "tcp_sock", sig := .fn [param "sk" refSock] (some refTcpSock),
+    effects := [.call, .fail], fails := some .not_found, derivedFrom := some "sk",
+    kinds := ["tc"], link := .helper "tcp_sock" [.arg 0] },
   -- a format string and at most three scalar arguments
   { name := "printk", sig := .builtin, effects := [.call], note := "bpf_trace_printk" },
   { name := "ktime", sig := .fn [] (some tU64), effects := [.call],
@@ -224,6 +234,19 @@ def typeDecls : List TypeDecl := [
   { span := noSpan, name := "XdpAction", ty := .enum noSpan "XdpAction" },
   { span := noSpan, name := "TcAction", ty := .enum noSpan "TcAction" },
   { span := noSpan, name := "Sock", ty := .struct noSpan [] },
+  -- `struct bpf_tcp_sock`, read through `tcp_sock`; the kernel admits
+  -- loads from its fields and no store
+  { span := noSpan, name := "TcpSock", readOnly := true,
+    ty := .struct noSpan [field "snd_cwnd" tU32, field "srtt_us" tU32, field "rtt_min" tU32,
+                          field "snd_ssthresh" tU32, field "rcv_nxt" tU32, field "snd_nxt" tU32,
+                          field "snd_una" tU32, field "mss_cache" tU32, field "ecn_flags" tU32,
+                          field "rate_delivered" tU32, field "rate_interval_us" tU32,
+                          field "packets_out" tU32, field "retrans_out" tU32,
+                          field "total_retrans" tU32, field "segs_in" tU32,
+                          field "data_segs_in" tU32, field "segs_out" tU32,
+                          field "data_segs_out" tU32, field "lost_out" tU32,
+                          field "sacked_out" tU32, field "bytes_received" tU64,
+                          field "bytes_acked" tU64] },
   { span := noSpan, name := "SockTuple",
     ty := .struct noSpan [field "saddr" tBe32, field "daddr" tBe32,
                           field "sport" tBe16, field "dport" tBe16] }

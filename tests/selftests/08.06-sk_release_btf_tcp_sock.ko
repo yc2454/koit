@@ -1,0 +1,18 @@
+// refused: a reference is released through the name that acquired it, never through a cast of it
+// selftest: progs/verifier_ref_tracking.c sk_release_btf_tcp_sock (T2150, rule 08.06, master fe2ec83)
+// The kernel lets a socket be released through a cast of it, since
+// the cast shares the reference id. A derived name is never an owner,
+// so `move` refuses it and the release goes through `sk` alone.
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+map tuples : array[1] of Tuple
+map out : array[1] of { w: u32 }
+
+program p : tc {
+  let tuple = tuples[0]
+  hold sk = sk_lookup_tcp(tuple)? {
+    if let tp = tcp_sock(sk) {
+      sk_release(move tp)
+    }
+  }
+  pass
+}

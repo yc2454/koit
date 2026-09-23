@@ -256,6 +256,7 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
                            acquires := cs.acquires, kinds := if restricted then avail else [],
                            gplOnly := gpl, kernel := kernelName,
                            lockSafe := cs.lockSafe, requires := cs.requires,
+                           derivedFrom := cs.derivedFrom,
                            impl := match cs.sig with
                              | .builtin => .inline
                              | .fn .. => ((implBy.head?).map (·.2)).getD .inline,

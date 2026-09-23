@@ -1,0 +1,13 @@
+// pending: dynptrs
+// selftest: progs/dynptr_fail.c clone_invalidate1 (T0153 to T0155, T0079, T0103, T0104, rule 10.11; T0094 to T0165 overwrite tests, rule 10.09; master fe2ec83)
+// A clone shares its original's reference: releasing either ends
+// both, and the last live one may not be overwritten. In koit a clone
+// is a derived name guarded by its original, released only through
+// the original, and no hold-bound name can be overwritten, so the
+// enforcing tests are unwritable and the two permitting ones (T0164,
+// T0166, overwriting a name while another holds the reference) are
+// refused (entry 51). Placeholder until the dynptr declarations
+// exist. In C:
+//
+//   bpf_dynptr_clone(&ptr, &clone); bpf_ringbuf_submit_dynptr(&ptr, 0);
+//   bpf_dynptr_read(buf, sizeof(buf), &clone, 0, 0);       /* dead */

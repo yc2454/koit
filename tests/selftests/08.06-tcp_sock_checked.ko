@@ -1,0 +1,16 @@
+// selftest: none; the accepting side of T2147 (rule 08.06, master fe2ec83): both casts tested before use
+// The same program with the TCP socket tested: `tp` is derived from
+// `sk`, lives inside its scope, and its field is read.
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+map tuples : array[1] of Tuple
+map out : array[1] of { w: u32 }
+
+program p : tc {
+  let tuple = tuples[0]
+  hold sk = sk_lookup_tcp(tuple)? {
+    if let tp = tcp_sock(sk) {
+      out[0].w = tp.snd_cwnd
+    }
+  }
+  pass
+}

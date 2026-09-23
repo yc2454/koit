@@ -1,0 +1,11 @@
+// pending: kptrs
+// selftest: progs/refcounted_kptr.c insert_and_remove_lf_tree_true_list_true (T0492 to T0503, T0520, T0521, rule 09.28, master fe2ec83)
+// One refcounted object with two independent owners, one inserted
+// into a tree and one into a list. In koit `bpf_refcount_acquire` is
+// an acquisition from a borrowed place that yields a second `own T`
+// of the same object; the two names may alias, so a store through
+// either kills the facts about both (entry 51, shared ownership).
+// Placeholder until the kptr and graph declarations exist. In C:
+//
+//   n = bpf_obj_new(typeof(*n)); m = bpf_refcount_acquire(n);
+//   bpf_rbtree_add(&root, &n->r, less); bpf_list_push_front(&head, &m->l);

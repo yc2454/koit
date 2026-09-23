@@ -637,12 +637,42 @@ def loopMovedOk (K : Ctx) (span : Span) (F : Facts) (next : String) :
 /-! ### The fact transformers of the statement rules, shared with the
 judgment of `Rules.lean` so that the two cannot drift apart. -/
 
+/-- The named interface type the place's root name refers to, when
+that type is read-only: `tp.snd_cwnd` under `tp : ref TcpSock`. -/
+def readOnlyRoot (env : Env) (p : Place) : Option String := do
+  let root ← p.root
+  let l ← env.local? root
+  let n ← match l.ty with
+    | .ref _ (.named _ n) | .own _ (.named _ n) | .view _ (.named _ n) => some n
+    | _ => none
+  let d ← env.type? n
+  if d.readOnly then some n else none
+
+/-- The owned names of the same allocation type as the place's root,
+other than the root itself: two may own one object (a reference-count
+acquisition), so a store through one kills the facts about all. -/
+def ownedAliases (env : Env) (p : Place) : List String :=
+  match p.root >>= env.local? with
+  | some l =>
+    match l.ty with
+    | .own _ t =>
+      env.locals.filterMap fun m =>
+        match m.ty with
+        | .own _ t' =>
+          if m.name != l.name && t'.print == t.print then some m.name else none
+        | _ => none
+    | _ => []
+  | none => []
+
 /-- After `p = e`: the kills of the calls in it, the store recorded,
 and a refined local's refinement in force again. -/
 def assignAfter (env : Env) (K : Ctx) (p : Place) (e : Expr) : Facts :=
   let sc := scope env K
   let F := afterCalls env sc K.facts (callsInPlace p ++ callsInExpr e)
   let F := F.record sc p e
+  -- a store through an owned name: the facts about every owned name
+  -- of the same type go too, since two may own one object
+  let F := (ownedAliases env p).foldl (fun F y => F.kill sc (.var p.span y)) F
   match p with
   | .var s x =>
     match env.local? x with
@@ -1102,6 +1132,10 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
       err span s!"a `{n}` is a slot: it is not assigned; it is named by \
         {env.slotUse n}"
     | _ => pure ()
+    -- a kernel object the verifier admits loads from only
+    if let some n := readOnlyRoot env p then
+      err span s!"`{p.print}` is a field of a `{n}`, which the kernel lets \
+        a program read and never write"
     unless tn.isScalar do
       err span s!"`{p.print}` is an aggregate of type `{info.ty.print}`; \
         assign its fields, or use `copy` (P3)"
@@ -1187,7 +1221,30 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
         err span s!"`{x}` binds nothing: the operation yields no value; \
           write `_`"
     let (Fthn, Fels) ← fallibleFacts env' K x f b
-    let (Ft, Et) ← checkStmts env' { K with facts := Fthn } thn
+    -- a result derived from an argument is bound under that argument's
+    -- name: the argument must be a name bound by `hold` or itself
+    -- derived, and the binding is recorded for (Move)
+    let derived ← match f with
+      | .call _ fn args =>
+        match env.interface.call? fn with
+        | some decl =>
+          match decl.derivedFrom, decl.sig with
+          | some pname, .fn params _ =>
+            let arg := (params.zip args).find? (·.1.name == pname)
+            let parent ← match arg with
+              | some (_, .place (.var _ y)) | some (_, .val (.var _ y)) => pure y
+              | _ => err span s!"`{fn}` derives its result from `{pname}`, \
+                  which must be a name"
+            let held := K.held.any (·.name == some parent) ||
+              K.derived.any (·.1 == parent)
+            unless held do
+              err span s!"`{fn}` derives its result from `{pname}`: `{parent}` \
+                must be a name bound by `hold`, or derived from one"
+            pure (if x == "_" then K.derived else (x, parent) :: K.derived)
+          | _, _ => pure K.derived
+        | none => pure K.derived
+      | _ => pure K.derived
+    let (Ft, Et) ← checkStmts env' { K with facts := Fthn, derived } thn
     let (Fe, Ee) ← checkStmts env
       { K with facts := Fels, errnoOk := fallibleKind env f == .failed_call } els
     if elseExits && !exits els then
@@ -1203,9 +1260,15 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
       | some decl => pure decl
       | none => err span s!"`{r}` is not a resource the interface declares"
     match decl.fails, els with
+    | some _, some _ =>
+      if decl.holdsOnFailure then
+        err span s!"`{acqName acq}` holds on failure: the kernel keeps the \
+          reference whether or not it obtained anything, so the acquisition \
+          cannot fail here and takes no `?` or `else`"
     | some k, none =>
-      err span s!"`{acqName acq}` can fail (kind `{k}`); the acquisition \
-        needs `?` or `else`"
+      unless decl.holdsOnFailure do
+        err span s!"`{acqName acq}` can fail (kind `{k}`); the acquisition \
+          needs `?` or `else`"
     | none, some _ =>
       err span s!"`{acqName acq}` cannot fail, so it takes no `?` or `else`"
     | _, _ => pure ()

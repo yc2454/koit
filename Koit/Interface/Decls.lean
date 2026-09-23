@@ -152,6 +152,10 @@ structure CallDecl where
   /-- The resources that must be held where the call runs, as the
   kernel requires an RCU section around `KF_RCU_PROTECTED` kfuncs. -/
   requires : List Resource := []
+  /-- The parameter the result is a second name for: a socket cast
+  yields a name derived from its argument, bound inside that name's
+  scope, guarded by it, and never an owner. -/
+  derivedFrom : Option String := none
   /-- The failure kind when the call is fallible. -/
   fails : Option Kind
   /-- The resource the result must be bound to with `hold`. -/
@@ -223,6 +227,11 @@ structure ResourceDecl where
   lockSafe : Bool := false
   /-- The resources that must be held where the acquisition runs. -/
   requires : List Resource := []
+  /-- The parameter the bound name is derived from, a dynptr clone. -/
+  derivedFrom : Option String := none
+  /-- The kernel keeps the reference even when the constructor fails,
+  a reserved dynptr: the acquisition then cannot fail at the source. -/
+  holdsOnFailure : Bool := false
   /-- Whether another instance of the same resource may be held. -/
   nesting : Nesting
   guards : String
@@ -445,6 +454,7 @@ structure CallSpec where
   admitted under a spin lock, and the resources it requires held. -/
   lockSafe : Bool := false
   requires : List Resource := []
+  derivedFrom : Option String := none
   deriving Repr, Inhabited
 
 /-- A constant by the kernel's name for its value, byte-swapped when

@@ -1,0 +1,11 @@
+// pending: conntrack
+// selftest: progs/test_bpf_nf_fail.c set_timeout_after_insert (T0752 to T0759, T3373 to T3379, rule 11.06, master fe2ec83)
+// A conntrack object is `nf_conn___init` from allocation to insertion
+// and `nf_conn` after; each kfunc takes one of the two. In koit the
+// states are two owned types and insertion is a consuming acquisition,
+// `hold ct2 = insert_entry(move ct)? { }`, so a call on the wrong
+// state is an ordinary type error (entry 51, typestate). Placeholder
+// until the conntrack declarations exist. In C:
+//
+//   ct = bpf_skb_ct_alloc(...); ct = bpf_ct_insert_entry(ct);
+//   bpf_ct_set_timeout(ct, 0);          /* wants nf_conn___init */

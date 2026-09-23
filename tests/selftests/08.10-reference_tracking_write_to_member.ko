@@ -1,0 +1,17 @@
+// expect: which the kernel lets a program read and never write
+// selftest: progs/verifier_ref_tracking.c reference_tracking_write_to_member (T2137, rule 08.10, master fe2ec83)
+// A store into a socket object. The kernel admits loads from a
+// `bpf_tcp_sock` and no store; the type is declared read-only.
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+map tuples : array[1] of Tuple
+map out : array[1] of { w: u32 }
+
+program p : tc {
+  let tuple = tuples[0]
+  hold sk = sk_lookup_tcp(tuple)? {
+    if let tp = tcp_sock(sk) {
+      tp.snd_cwnd = 1
+    }
+  }
+  pass
+}
