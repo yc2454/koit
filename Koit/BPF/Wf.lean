@@ -35,6 +35,11 @@ def successors (X : Env ρ τ) (i : Nat) : W (List Nat) := do
     let fall := i + 1
     unless fall < X.prog.code.size do wfErr s!"the code falls off its end after {i}"
     return [← target t, fall]
+  | .callSub t _ _ =>
+    -- the callee returns here; its own code is walked from its entry
+    let _ ← target t
+    unless i + 1 < X.prog.code.size do wfErr s!"the code falls off its end after {i}"
+    return [i + 1]
   | _ =>
     unless i + 1 < X.prog.code.size do wfErr s!"the code falls off its end after {i}"
     return [i + 1]

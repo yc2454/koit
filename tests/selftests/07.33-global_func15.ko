@@ -1,0 +1,21 @@
+// expect: the index demands
+// selftest: progs/test_global_func15.c global_func15 (T0770; T1545 return_from_void_global; rule 07.33, master fe2ec83)
+// After a global call, the memory the callee could write holds
+// unknown data: the test returns a value the callee may have changed
+// where the kind's range demands a known one. Here the fact tested
+// before the call does not survive it, so the index after it is not
+// bounded. cgroup_skb kind, written as syscall.
+const M = 4
+map tab : array[1] of { i: u32, v: u32[M] }
+
+global fn touch(p: ref { i: u32, v: u32[M] }) {
+  p.i = p.i + 1
+}
+
+program p : syscall {
+  let t = tab[0]
+  if t.i < M {
+    touch(t)
+    t.v[t.i] = 1
+  }
+}

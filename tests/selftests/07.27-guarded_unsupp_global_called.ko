@@ -1,0 +1,15 @@
+// selftest: progs/verifier_global_subprogs.c guarded_unsupp_global_called (T1517, rule 07.27, master fe2ec83)
+// The accepting side: the global function tests what it needs
+// itself, so it is safe for any argument that matches its prototype,
+// which is what the verifier requires of it.
+const M = 4
+map tab : array[1] of { v: u32[M] }
+
+global fn store(i: u32) {
+  if i < M { tab[0].v[i] = 1 }
+}
+
+program p : syscall {
+  let i = tab[0].v[0]
+  store(i)
+}

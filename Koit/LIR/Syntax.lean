@@ -165,6 +165,8 @@ structure Fn where
   opt    : Bool
   fails  : Bool
   body   : List Stmt
+  /-- A subprogram the verifier checks once; never inlined. -/
+  global : Bool := false
   deriving Repr, Inhabited
 
 /-- `on k => s`; the body sees the local `reason : u32`. -/

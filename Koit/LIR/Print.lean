@@ -122,7 +122,7 @@ partial def Stmt.printBlock (ss : List Stmt) (ind : Nat) : String :=
 end
 
 def Fn.print (f : Fn) : String :=
-  s!"fn {f.name}(" ++
+  s!"{if f.global then "global " else ""}fn {f.name}(" ++
     ", ".intercalate (f.params.map fun p => s!"{p.name} : {p.ty.print}") ++
     ")" ++ (match f.ret with
       | some t => s!" -> {t.print}" ++ (if f.opt then " ?" else "")

@@ -385,6 +385,8 @@ structure Fn where
   ret    : Option Ty
   fails  : Bool
   body   : List Stmt
+  /-- A subprogram the verifier checks once, from its prototype. -/
+  global : Bool := false
   deriving Repr, Inhabited
 
 inductive MapKind where

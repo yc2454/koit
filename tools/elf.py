@@ -323,6 +323,43 @@ def write(unit):
             rels += struct.pack("<QQ", off, (prog_symbol[pname] << 32) | R_BPF_64_64)
         elf.section(".rel.maps", SHT_REL, 0, bytes(rels), info=maps_idx, align=8, entsize=16)
 
+    # the function information: every function of a section in BTF, the
+    # program static at instruction 0 and each global function at its
+    # entry with its prototype, references non-null; `.BTF.ext` names
+    # them per section, which the verifier needs for a global function
+    funcs = {f["name"]: f for f in getattr(unit, "fns", [])}
+    ext_secs = []
+    for sec, progs in by_section.items():
+        recs = []
+        base = 0
+        for p in progs:
+            words = koitobj.words_of(p)
+            main_proto = btf.func_proto(btf.int("int", 4, signed=True), [("ctx", btf.ptr(0))])
+            recs.append((base, btf.func(p["name"], main_proto, 0)))
+            for sp in p.get("subprograms", []):
+                f = funcs.get(sp["name"])
+                if f is None:
+                    raise SystemExit(f"elf: {unit.name}: subprogram {sp['name']} has no prototype")
+                params = []
+                tags = []
+                for i, prm in enumerate(f["params"]):
+                    if prm["kind"] == "ref":
+                        t = btf.ptr(btf.of_type(unit.types, prm["type"], prm["type"].get("name")))
+                        tags.append(i)
+                    else:
+                        t = btf.of_type(unit.types, prm["type"], prm["type"].get("name"))
+                    params.append((prm["name"], t))
+                ret = btf.of_type(unit.types, f["ret"], f["ret"].get("name")) if f.get("ret") else 0
+                proto = btf.func_proto(ret, params)
+                fid = btf.func(sp["name"], proto, 1)
+                for i in tags:
+                    btf.decl_tag("arg:nonnull", fid, i)
+                recs.append((base + 8 * sp["insn"], fid))
+            base += 8 * len(words)
+        ext_secs.append((sec, recs))
+    if any(p.get("subprograms") for p in unit.programs):
+        elf.section(".BTF.ext", SHT_PROGBITS, 0, btf.ext_blob(ext_secs), align=4)
+
     lic = unit.license.encode() + b"\0"
     idx = elf.section("license", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, lic, align=1)
     elf.symbol("_license", 0, len(lic), STB_GLOBAL, STT_OBJECT, idx)

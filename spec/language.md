@@ -385,7 +385,7 @@ MapType   ::= 'array' '[' Expr ']' 'of' Type
             | 'percpu_array' '[' Expr ']' 'of' Type
             | 'hash' '[' Expr ']' 'of' Type '->' Type
             | 'ringbuf' '[' Expr ']'
-FnDecl    ::= 'fn' Ident '(' Params? ')' ('->' RetType)? 'fails'? Block
+FnDecl    ::= 'global'? 'fn' Ident '(' Params? ')' ('->' RetType)? 'fails'? Block
 Params    ::= Param (',' Param)*
 Param     ::= Ident ':' Type ('where' Pred)?
 RetType   ::= Type | Type '?' | Ident ':' Type 'where' Pred
@@ -1118,7 +1118,8 @@ Region r ::= pkt[a..b) | m | ctx.f
 - `write(ctx.f)`: a store to a context field.
 
 Function effects are the union over the body, with write ranges over
-the function's parameters and constants; `call` is lock-safe for the
+the function's parameters and constants, and a call to a global
+function adds `call` (section 16); `call` is lock-safe for the
 function only when every call in its body is. A function also carries
 the resources its calls require, unioned over the body, as a demand on
 its callers: the requirement is checked at each call site against the
@@ -1370,8 +1371,36 @@ every item exists in every variant.
   function with no result.
 - `fails` is explicit: a function that may raise says so in its
   signature, and a call to it is allowed only in a failing context.
-- The call graph must be acyclic. Whether a call is inlined or compiled
-  to a subprogram is not part of the language.
+- The call graph must be acyclic. Whether a call to a plain `fn` is
+  inlined or compiled to a subprogram the verifier walks in the
+  caller's context is not part of the language. A `global fn` is
+  compiled as a subprogram the verifier checks once, on its own, from
+  its prototype alone, which is why the word is the programmer's:
+  it changes what the verifier knows and so what loads.
+- Nothing crosses a call to a global function but types, in either
+  direction, since inside it the verifier knows nothing of a scalar
+  argument and after it the caller knows nothing of the result or of
+  the memory it passed (P9). So a global function's parameters carry
+  no refinement and its result no `where`; one there is a type error
+  saying the verifier will not know it. The body sees a scalar
+  parameter as any value of its type and tests what it needs with
+  `check` or `if`, which is what makes it safe for any argument that
+  matches its prototype, as the kernel requires. After the call the
+  caller drops every fact about a place it passed by `ref`, and the
+  result carries none.
+- A global function's prototype is what the kernel's can say: its
+  parameters are scalars and `ref` places on the stack or in a map
+  value, which the lowering marks non-null since a reference never
+  is; no `view`, since the verifier has no packet parameter, and no
+  context, since a function has none. Its result is a scalar, never an
+  enumeration type, since the verifier sees an unknown scalar, and
+  a caller that returns one as a verdict coerces it; an optional
+  result waits for a convention that carries absence, and a global
+  function never `fails`, since a failure has no handler to reach
+  across a subprogram boundary. A call to a global function has the
+  `call` effect itself,
+  whatever its body does, so a spin lock refuses it, and its body's
+  effects flow to the caller as any function's do.
 - A function may be called inside a resource block only if its effect
   set is allowed there, and anywhere only if the resources its calls
   require are held there (section 12).
@@ -2488,6 +2517,22 @@ session 8:
     contract says nothing; and `not_found` as the kind, which names an
     absent value where nothing was sought (entry 53).
 
+68. Global functions: `global fn` is compiled as a subprogram the
+    verifier checks once from its prototype, and nothing crosses the
+    call but types: no refinement on its parameters or result, a
+    scalar or optional scalar result and never an enumeration, scalars
+    and non-null `ref` places for parameters and no `view` or context,
+    the facts about a place passed by `ref` dropped after the call,
+    and the `call` effect on every call to one. The word is the
+    programmer's because it changes what the verifier knows; the
+    strictness is P9's. The subprogram lowering, the kernel's calling
+    convention, the BTF function of global linkage with its tags, and
+    the `.BTF.ext` function info are a lowering decision of their own.
+    Rejected: a test at the callee's entry carrying the caller's
+    refinements, whose failure has nowhere to go; the compiler choosing
+    which functions are global by size; `view` parameters by passing
+    bounds, deferred to dynptrs (entry 54).
+
 Open questions, with the default the checker implements until decided:
 
 - Q1. Handlers on functions. Default: no; a function-level handler is
@@ -2557,8 +2602,6 @@ choice (decision 18).
 
 **Features not tied to a program type**, deferred:
 
-- separately verified functions with declared contracts, for program
-  size, once the verifier's global-function interface is modeled;
 - the userspace boundary: a map declaration generating its userspace
   accessor with the same key and value types, and program handles with
   a load-then-attach typestate, in KernelScript's style;

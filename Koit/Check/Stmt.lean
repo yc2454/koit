@@ -893,7 +893,9 @@ call contributes its declaration, with the writes of `copy`, `fill`,
 def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
     M Effs := do
   if let some d := env.fn? f then
+    -- a call to a global function is a call, whatever its body does
     let E := (env.fnEffects.lookup f).getD {}
+    let E := if d.global then E.add .call else E
     let argOf (x : String) : Option Arg :=
       ((d.params.zip args).find? (·.1.name == x)).map (·.2)
     let mut R : Effs := {}

@@ -136,6 +136,21 @@ def paramsOf (h : BPF.Callee) : AM (List Core.Param) := do
     | _ => pure []
   | .builtin _ => pure []
 
+/-- A subprogram's argument into its register, and a subprogram call:
+the arguments loaded into `r1` to `r5`, the call, the result stored;
+the callee's frame is its own, so nothing else is saved. -/
+def expandArg (d : VReg) (i : Nat) : AM Code := spill d (argReg i)
+
+def expandCallSub (t : Target) (args : List VReg) (dst : Option VReg) : AM Code := do
+  unless args.length ≤ 5 do throw "a subprogram takes more than five arguments"
+  let mut loads : Code := []
+  for (v, j) in args.zipIdx do
+    loads := loads ++ (← fetchInto v (argReg j))
+  let store ← match dst with
+    | some d => spill d .r0
+    | none => pure []
+  return loads ++ [.callSub t [] none] ++ store
+
 /-- A call under the kernel's convention: each position of the
 layout materialized in its register, the call, the result stored. -/
 def expandCall (h : BPF.Callee) (abi : List AbiArg) (args : List VReg) (dst : Option VReg) :
@@ -228,6 +243,8 @@ def expand (ins : Instr VReg Label) : AM Code := do
     return la ++ lb ++ [.jcond cmp cls ra src (.lbl t)]
   | .lddw d k => return [.lddw r1 k] ++ (← spill d r1)
   | .lea d obj => return (← objectInto r1 obj) ++ (← spill d r1)
+  | .arg d i => expandArg d i
+  | .callSub t args dst => expandCallSub (.lbl t) args dst
   | .mapref d m => return [.mapref r1 m] ++ (← spill d r1)
   | .mapval d m k => return [.mapval r1 m k] ++ (← spill d r1)
   | .call h args dst =>
@@ -288,6 +305,10 @@ def allocate (pre : Interface) (sizeOf : Core.Ty → Option Nat) (p : BIR) :
       | .ja t => do
         let off ← target i t
         pure (Instr.ja off)
+      | .callSub t _ _ => do
+        let off ← target i t
+        pure (Instr.callSub off [] none)
+      | .arg .. => throw "`arg` survives the allocation"
       | .jcond cmp cls a b t => do
         let off ← target i t
         pure (Instr.jcond cmp cls a b off)
@@ -304,8 +325,10 @@ def allocate (pre : Interface) (sizeOf : Core.Ty → Option Nat) (p : BIR) :
       | .call h args dst => pure (.call h args dst)
       | .atomic op cls fetch d off s => pure (.atomic op cls fetch d off s)
       | .exit => pure .exit)
+  -- the subprograms' entries, from BIR's indices to bytecode's
+  let subs := p.subs.filterMap fun (n, bi) => (starts[bi]?).map fun i => (n, i)
   return { prog := { name := p.name, kind := p.kind, code := out, objects := p.objects,
-                     cpu := p.cpu },
+                     cpu := p.cpu, subs },
            slots, starts }
 
 /-- Pass D on a unit's programs. -/

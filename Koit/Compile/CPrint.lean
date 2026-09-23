@@ -471,7 +471,7 @@ partial def boundedFns (fns : List LIR.Fn) (acc : List String := []) : List Stri
   if acc'.isEmpty then acc else boundedFns fns (acc ++ acc')
 
 def cfn (pre : Interface) (types : List Core.TypeDecl) (fns : List LIR.Fn) (bounded : List String)
-    (f : LIR.Fn) : PM String := do
+    (direct : List String) (f : LIR.Fn) : PM String := do
   let params := f.params.map fun p =>
     if p.ty == .ptr then s!"void *{cname p.name}" else s!"{cty p.ty} {cname p.name}"
   let params := params ++ (if bounded.contains f.name then ["void *pkt_data", "void *pkt_end"] else [])
@@ -486,8 +486,16 @@ def cfn (pre : Interface) (types : List Core.TypeDecl) (fns : List LIR.Fn) (boun
                     Γ := f.params.map fun p => (p.name, p.ty) }
   let (body, _) ← cstmts c 4 f.body
   let ps := if (params ++ extra).isEmpty then "void" else ", ".intercalate (params ++ extra)
-  return s!"static __always_inline {ret} {cname f.name}({ps})\n\{\n" ++
-    "\n".intercalate body ++ "\n}\n"
+  -- a global function is not inlined into a program's prologue, so
+  -- it looks its direct maps up itself
+  let lookups := if !f.global then [] else
+    (directMapsIn direct f.body).eraseDups.flatMap fun m =>
+      [s!"    void *{cname m}__val = bpf_map_lookup_elem(&{cname m}, &koit_zero);",
+       s!"    if (!{cname m}__val) return{if ret == "void" then "" else " 0"};"]
+  let zero := if lookups.isEmpty then [] else ["    u32 koit_zero = 0; (void)koit_zero;"]
+  let head := if f.global then s!"__attribute__((noinline)) {ret}" else s!"static __always_inline {ret}"
+  return s!"{head} {cname f.name}({ps})\n\{\n" ++
+    "\n".intercalate (zero ++ lookups ++ body) ++ "\n}\n"
 
 def cprogram (pre : Interface) (u : LIR.CompUnit) (p : LIR.Program) : PM String := do
   let decl := pre.kind? p.kind
@@ -518,7 +526,11 @@ def cprogram (pre : Interface) (u : LIR.CompUnit) (p : LIR.Program) : PM String 
   -- the dispatch exists only where a failure reaches it, so that the
   -- label is never unused
   let reached := (body ++ handlers).any fun l => (l.splitOn "goto handler_dispatch").length > 1
-  let dispatch := if !reached then [] else
+  -- and the handlers when nothing jumps to one, dispatch or direct
+  let anyHandler := body.any fun l => (l.splitOn "goto handler_").length > 1
+  if !anyHandler && !reached then handlers := []
+  -- the fall-off return stays either way
+  let dispatch := if !reached then [s!"    return {dv};"] else
     ["handler_dispatch:", "    switch (koit_kind) {"] ++
     (Kind.all.map fun k => s!"    case {kindIndex k}: goto handler_{k.spelling};") ++
     ["    }", s!"    return {dv};"]
@@ -667,7 +679,7 @@ def emitC (pre : Interface) (u : LIR.CompUnit) : String :=
     | _ => ""
   let go : C.PM (List String × List String) := do
     let bounded := C.boundedFns u.fns
-    let fns ← u.fns.mapM (C.cfn pre u.types u.fns bounded)
+    let fns ← u.fns.mapM (C.cfn pre u.types u.fns bounded u.direct)
     let progs ← u.programs.mapM (C.cprogram pre u)
     return (fns, progs)
   let ((fns, progs), _) := go.run 0

@@ -536,6 +536,13 @@ def L3.step (X : L3) (i : Nat) (st : LState) : Step :=
       { next := (X.target t).map (·, ts) ++ [(fall, fs)] }
     | .lddw d _ => next (st.set d (.sc true (some i)))
     | .lea d _ | .mapref d _ | .mapval d _ _ => next (st.set d .other)
+    -- a subprogram's argument is a value the verifier knows nothing
+    -- of; a subprogram call's result likewise
+    | .arg d _ => next (st.set d .lost)
+    | .callSub _ _ dst =>
+      next (match dst with
+        | some d => st.set d .lost
+        | none => st)
     | .call h _ dst =>
       let resize := match h with
         | .kernel decl =>
@@ -602,8 +609,12 @@ def ShapeReport.print (r : ShapeReport) : List String :=
   let pre := if r.name.isEmpty then "" else s!"{r.name}: "
   (r.errors ++ r.lines).map (pre ++ ·)
 
-def shapeProgram (pre : Interface) (p : LIR.Program) (B : BIR) (A : Bytecode) : ShapeReport :=
-  let body := p.body ++ p.handlers.flatMap (·.body)
+def shapeProgram (pre : Interface) (fns : List LIR.Fn) (p : LIR.Program) (B : BIR) (A : Bytecode) :
+    ShapeReport :=
+  -- the subprograms' bodies count with the program's: their tests
+  -- are in its BIR
+  let subs := fns.filter fun f => B.subs.any (·.1 == f.name)
+  let body := p.body ++ p.handlers.flatMap (·.body) ++ subs.flatMap (·.body)
   let (e1, nTests, nA) := passL1 body B A
   let (e2, nCasts) := passL2 body B
   match pre.kind? B.kind with
@@ -628,7 +639,7 @@ def shapeUnit (pre : Interface) (core : Core.CompUnit) (openLir : LIR.CompUnit)
   let unit : ShapeReport := { name := "", errors := eB, lines := unitLines }
   let progs := C.lir.programs.map fun p =>
     match C.birs.find? (·.name == p.name), C.allocated.find? (·.prog.name == p.name) with
-    | some B, some A => shapeProgram pre p B A.prog
+    | some B, some A => shapeProgram pre C.lir.fns p B A.prog
     | _, _ => { name := p.name, errors := ["no flattened or allocated program"] }
   unit :: progs
 

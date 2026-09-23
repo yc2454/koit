@@ -1,0 +1,19 @@
+// expect: forbidden while a spin lock is held
+// selftest: prog_tests/spin_lock.c lock_global_subprog_call1 (T3443; T3444 lock_global_subprog_call2; rule 08.23, master fe2ec83)
+// A global function called while a spin lock is held: "global
+// function calls are not allowed while holding a lock". A call to a
+// global function is a call whatever its body does, so the lock's
+// declaration refuses it.
+map c : array[1] of { lk: spinlock, n: u64 }
+
+global fn bump(p: ref { lk: spinlock, n: u64 }) {
+  p.n = p.n + 1
+}
+
+program p : xdp {
+  let c = c[0]
+  hold lock(c.lk) {
+    bump(c)
+  }
+  pass
+}

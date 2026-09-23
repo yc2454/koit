@@ -58,6 +58,15 @@ structure FState where
   top        : Int := 0
   handlers   : List (Kind × Label) := []
   exitLabel  : Label := ⟨0⟩
+  /-- The unit's global functions, and the subprograms this program
+  calls: each name with its entry label, allocated at the first call
+  and placed after the program's own code. -/
+  fns        : List LIR.Fn := []
+  subs       : List (String × Label) := []
+  /-- The result type of the function under translation, none in a
+  program body, where a `return` carries a verdict. -/
+  retTy      : Option LIR.Ty := none
+  inFn       : Bool := false
   cpu        : Cpu := .v3
   kind       : KindDecl := default
   pre        : Interface := default
@@ -517,6 +526,16 @@ def handlerLabel (k : Kind) : FM Label := do
   | some l => pure l
   | none => ferr s!"no handler for `{k}`"
 
+/-- The entry label of a subprogram, allocated at its first call. -/
+def subEntry (f : String) : FM Label := do
+  let s ← get
+  match s.subs.lookup f with
+  | some l => pure l
+  | none =>
+    let l ← newLabel
+    modify fun s => { s with subs := s.subs ++ [(f, l)] }
+    pure l
+
 mutual
 
 partial def stmts (ss : List LIR.Stmt) : FM Unit := do
@@ -584,16 +603,31 @@ partial def stmt (s : LIR.Stmt) : FM Unit := do
     | none => ferr s!"`br {n}` outside its constructs"
   | .ret _ (some e) =>
     let s ← get
-    let t : LIR.Ty := match s.kind.verdictTy with
-      | .int _ sg w => .int sg w
-      | _ => .u32
+    -- a program's return carries a verdict, a function's its result
+    let t : LIR.Ty := match s.retTy, s.kind.verdictTy with
+      | some t, _ => t
+      | none, .int _ sg w => .int sg w
+      | none, _ => .u32
     expr e t .ret
     emit (.ja s.exitLabel)
-  | .ret _ none => ferr "a bare `return` outside a function"
+  | .ret _ none =>
+    let s ← get
+    unless s.inFn do ferr "a bare `return` outside a function"
+    emit (.ja s.exitLabel)
   | .raise _ k e =>
     expr e .u32 .reason
     emit (.ja (← handlerLabel k))
-  | .call _ _ f .. => ferr s!"a call to `{f}`: the flattening takes closed LIR"
+  | .call _ x f args _ _ =>
+    -- a global function: a subprogram call with the arguments in
+    -- registers and the result bound
+    let s ← get
+    let some d := s.fns.find? (·.name == f) | ferr s!"a call to `{f}`: the flattening takes closed LIR"
+    let regs ← (args.zip d.params).mapM fun (a, p) => exprTemp a p.ty
+    let l ← subEntry f
+    let dst ← match x, d.ret with
+      | some x, some t => some <$> bind x t
+      | _, _ => pure none
+    emit (.callSub l regs dst)
   | .builtin _ x b args => builtin x b args
   | .kernel _ x h args =>
     let some decl := (← get).pre.call? h | ferr s!"unknown kernel function `{h}`"
@@ -702,8 +736,8 @@ def fallOffVerdict (kind : KindDecl) : Nat :=
   else 0
 
 /-- One LIR program flattened. -/
-def flattenProgram (pre : Interface) (cpu : Cpu) (fmts : List (String × Nat) × List UInt8)
-    (p : LIR.Program) : Except String (BIR × (List (String × Nat) × List UInt8)) := do
+def flattenProgram (pre : Interface) (cpu : Cpu) (fns : List LIR.Fn)
+    (fmts : List (String × Nat) × List UInt8) (p : LIR.Program) : Except String (BIR × (List (String × Nat) × List UInt8)) := do
   let some kind := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
   let translate : FM Unit := do
     let exitLabel ← newLabel
@@ -725,14 +759,42 @@ def flattenProgram (pre : Interface) (cpu : Cpu) (fmts : List (String × Nat) ×
       emit (.ja exitLabel)
     place exitLabel
     emit .exit
-  let init : FState := { cpu, kind, pre, formats := fmts.1, fmtBytes := fmts.2 }
+    -- the subprograms: each global function called, placed after the
+    -- program's code, its parameters from the convention and its
+    -- returns to its own exit
+    let mut done : List String := []
+    let mut more := true
+    while more do
+      let s ← get
+      match s.subs.find? fun (n, _) => !done.contains n with
+      | none => more := false
+      | some (n, entry) =>
+        done := done ++ [n]
+        let some d := s.fns.find? (·.name == n) | ferr s!"no global function `{n}`"
+        place entry
+        let fexit ← newLabel
+        let saved := (s.exitLabel, s.retTy, s.inFn)
+        modify fun s => { s with exitLabel := fexit, retTy := d.ret, inFn := true }
+        withScope do
+          for (p, i) in d.params.zipIdx do
+            let v ← bind p.name p.ty
+            emit (.arg v i)
+          stmts d.body
+        -- a function without a result still exits with `r0` written,
+        -- since the convention returns one
+        if d.ret.isNone then constInto .ret 0
+        place fexit
+        emit .exit
+        modify fun s => { s with exitLabel := saved.1, retTy := saved.2.1, inFn := saved.2.2 }
+  let init : FState := { cpu, kind, pre, formats := fmts.1, fmtBytes := fmts.2, fns }
   let ((), s) ← translate.run init |>.mapError (s!"in `{p.name}`: " ++ ·)
   let objBytes := (-s.top).toNat
   if objBytes > BPF.Frame.size then
     throw s!"the frame of `{p.name}` holds {objBytes} bytes of objects, above {BPF.Frame.size}"
+  let subs := s.subs.filterMap fun (n, l) => (s.labels.lookup l.id).map fun i => (n, i)
   return ({ name := p.name, kind := p.kind, code := s.code, labels := s.labels,
             objects := s.objects,
-            regs := s.classes.reverse.map fun (n, c) => (VReg.v n, c), cpu },
+            regs := s.classes.reverse.map fun (n, c) => (VReg.v n, c), cpu, subs },
           (s.formats, s.fmtBytes))
 
 /-- The unit's read-only data map for its formats: `array[1]` of the
@@ -750,11 +812,11 @@ def formatMapDecl (bytes : List UInt8) : Option Core.MapDecl :=
 read-only data map holding every `printk` format of the unit. -/
 def flatten (pre : Interface) (cpu : Cpu) (u : LIR.CompUnit) :
     Except String (List BIR × Option Core.MapDecl) := do
-  unless u.fns.isEmpty do throw "the flattening takes closed LIR; inline first"
+  unless u.fns.all (·.global) do throw "the flattening takes closed LIR; inline first"
   let mut birs : List BIR := []
   let mut fmts : List (String × Nat) × List UInt8 := ([], [])
   for p in u.programs do
-    let (B, f) ← flattenProgram pre cpu fmts p
+    let (B, f) ← flattenProgram pre cpu u.fns fmts p
     birs := birs ++ [B]
     fmts := f
   return (birs, formatMapDecl fmts.2)

@@ -52,6 +52,9 @@ structure Object where
   words    : Array Nat
   relocs   : List Reloc
   notes    : List Note
+  /-- The subprograms: each global function's name and the
+  instruction its code starts at. -/
+  subs     : List (String × Nat) := []
   deriving Inhabited
 
 /-! ### The tables -/
@@ -161,6 +164,11 @@ def encodeInstr (pre : Interface) (kind : String) (cpu : Cpu) (i : Nat) (ins : I
     else throw s!"a jump of {off} instructions needs cpu v4"
   | .jcond cmp cls a b off =>
     one (word (jmpClass cls ||| cmpCode cmp ||| srcBit b) a.val (srcReg b) off (srcImm b))
+  | .callSub off _ _ =>
+    -- the kernel's own call: the pseudo source register and the
+    -- offset to the callee from the next instruction
+    one (word 0x85 0 1 0 off)
+  | .arg .. => throw "`arg` reaches the encoder"
   | .lddw d k =>
     unless k < 2 ^ 64 do throw s!"a constant of more than 64 bits"
     let lo : Nat := k % 2 ^ 32
@@ -197,7 +205,7 @@ def encode (pre : Interface) (p : Bytecode) : Except String Object := do
     relocs := relocs ++ rs
     notes := notes ++ ns
   return { name := p.name, kind := p.kind, section_ := kind.section_, cpu := p.cpu,
-           words, relocs, notes }
+           words, relocs, notes, subs := p.subs }
 
 /-! ### Decoding -/
 

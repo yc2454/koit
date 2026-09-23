@@ -347,9 +347,13 @@ if at_least emit; then
         "$KOITC" emit --asm --cpu $cpu "$f" >"$TMP/asm" 2>"$TMP/out" || { ok=""; break; }
         # our words through LLVM's disassembler read as our text; the
         # disassembler knows no symbol, so a kfunc call reads as the
-        # pseudo call it is, `call -1`
+        # pseudo call it is, `call -1`, a subprogram call as its
+        # offset, which our text carries in a comment, and a
+        # subprogram's label is ours alone
         "$LLVM_MC" --disassemble --triple=bpf -mcpu=$cpu <"$TMP/words" 2>"$TMP/out" | norm >"$TMP/dis"
-        norm <"$TMP/asm" | sed 's/^call [A-Za-z_][A-Za-z_0-9]*$/call -1/' >"$TMP/ours"
+        sed -E 's/^call ([A-Za-z_][A-Za-z_0-9]*) # (-?[0-9]+)$/call \2/' <"$TMP/asm" | norm |
+          sed -E 's/^call [A-Za-z_][A-Za-z_0-9]*$/call -1/' |
+          grep -vE '^[A-Za-z_][A-Za-z_0-9]*:$' >"$TMP/ours"
         if ! cmp -s "$TMP/dis" "$TMP/ours"; then
           diff "$TMP/ours" "$TMP/dis" | head -20 >>"$TMP/out"; ok=""; break
         fi

@@ -125,6 +125,14 @@ inductive Instr (ρ τ : Type) where
   | lddw (d : ρ) (k : Nat)
   /-- BIR only: the location of a frame object. -/
   | lea (d : ρ) (obj : String)
+  /-- BIR only: the `i`-th argument of the subprogram into `d`, which
+  the allocation reads from the convention's register. -/
+  | arg (d : ρ) (i : Nat)
+  /-- A call to a subprogram at `t`: in BIR with its operands and
+  result register, in bytecode with none, the arguments in `r1` to
+  `r5` and the result in `r0`; the callee runs on a fresh frame and
+  returns at its `exit`. -/
+  | callSub (t : τ) (args : List ρ) (dst : Option ρ)
   /-- The map's handle. -/
   | mapref (d : ρ) (m : String)
   /-- Direct value access: `k` bytes into the value of an `array[1]`
@@ -173,6 +181,10 @@ structure Program (ρ τ : Type) where
   objects : List FrameObj := []
   regs    : List (ρ × RegClass) := []
   cpu     : Cpu := .v3
+  /-- The subprograms after the program's own code: each global
+  function's name and the instruction its code starts at, for the
+  function information the object carries. -/
+  subs    : List (String × Nat) := []
   deriving Inhabited
 
 /-! ### The two instances -/
@@ -301,6 +313,7 @@ def Instr.reads : Instr ρ τ → List ρ
   | .stx _ d _ s => d :: srcRegs s
   | .jcond _ _ a b _ => a :: srcRegs b
   | .call _ args _ => args
+  | .callSub _ args _ => args
   | .atomic _ _ _ d _ s => [d, s]
   | _ => []
 where
@@ -314,6 +327,8 @@ def Instr.writes : Instr ρ τ → Option ρ
   | .alu _ _ d _ | .mov _ d _ | .movsx _ _ d _ | .«end» _ _ d | .ldx _ d _ _
   | .lddw d _ | .lea d _ | .mapref d _ | .mapval d _ _ => some d
   | .call _ _ dst => dst
+  | .arg d _ => some d
+  | .callSub _ _ dst => dst
   | .atomic _ _ true _ _ s => some s
   | _ => none
 

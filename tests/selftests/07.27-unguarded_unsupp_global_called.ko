@@ -1,0 +1,19 @@
+// expect: so the verifier will not know
+// selftest: progs/verifier_global_subprogs.c unguarded_unsupp_global_called (T1518; T1517 guarded_unsupp_global_called, the accepting side; rule 07.27, master fe2ec83)
+// A global function is verified on its own, with no caller in sight:
+// a bound the caller established does not reach it. The test's global
+// function indexes with what its caller checked; here the refinement
+// on a global function's parameter is refused outright, since the
+// verifier will not know it (decision 68). raw_tp kind, written as
+// syscall.
+const M = 4
+map tab : array[1] of { v: u32[M] }
+
+global fn store(i: u32 where i < M) {
+  tab[0].v[i] = 1
+}
+
+program p : syscall {
+  let i = tab[0].v[0]
+  if i < M { store(i) }
+}

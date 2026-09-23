@@ -130,7 +130,9 @@ partial def inlineStmts (fns : List LIR.Fn) : List LIR.Stmt → IM (List LIR.Stm
   | s :: rest => do
     let s' ← match s with
       | .call sp x f args u a =>
-        match fns.find? (·.name == f) with
+        -- a global function stays a call; the flattening makes it a
+        -- subprogram
+        match fns.find? fun d => d.name == f && !d.global with
         | some d =>
           let U ← inlineStmts fns (u.getD [])
           let A ← inlineStmts fns (a.getD [])
@@ -198,6 +200,12 @@ def inline (u : LIR.CompUnit) : LIR.CompUnit :=
         pure { h with body := ← Inl.inlineStmts done h.body }
       pure { p with body, handlers }
   let (programs, _) := go.run {}
-  { u with fns := [], programs }
+  -- the global functions remain, their calls to plain functions
+  -- inlined like everyone else's
+  let inlineGlobal (f : LIR.Fn) : Inl.IM LIR.Fn := do
+    let body ← Inl.inlineStmts (u.fns.filter (!·.global)) f.body
+    pure { f with body }
+  let (globals, _) := ((u.fns.filter (·.global)).mapM inlineGlobal).run {}
+  { u with fns := globals, programs }
 
 end Koit.Compile

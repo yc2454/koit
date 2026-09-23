@@ -574,6 +574,8 @@ scalar at the kind's verdict width. -/
 def halted? (X : Env ρ τ) (m : State ρ) : Option Nat :=
   match X.prog.code[m.pc]? with
   | some .exit =>
+    -- an `exit` inside a subprogram returns; only the program's halts
+    if !m.frames.isEmpty then none else
     match m.regs X.conv.ret with
     | some (.scalar n) =>
       if m.machine.held.isEmpty then some (toNatMod n (verdictWidth X.kind)) else none
@@ -616,12 +618,40 @@ def step (X : Env ρ τ) (K : Kernel) (m : State ρ) : StepM (State ρ) := do
       | _ => throw (.malformed s!"direct value access to `{mn}`, which is not an array")
     | none => throw (.malformed s!"unknown map `{mn}`")
   | .call h args dst => return next (← call X K m h args dst)
+  | .arg d i =>
+    match m.args[i]? with
+    | some v => return next (m.set d v)
+    | none => throw (.malformed s!"no argument {i} for the subprogram")
+  | .callSub t args dst =>
+    -- the caller's registers and frame saved, the callee on a fresh
+    -- frame with its arguments: in BIR those on the instruction, in
+    -- bytecode the convention's registers as they are
+    let vs ← args.mapM fun r => reg X m r
+    let saved : Saved ρ := { retPc := m.pc + 1, regs := m.regs, frame := m.frame, dst }
+    let m' := { m with frames := saved :: m.frames, frame := Frame.init, args := vs }
+    jumpTo X m' t
   | .atomic op cls fetch d off s => return next (← atomic X m op cls fetch d off s)
   | .exit =>
-    if (halted? X m).isSome then throw .halted
-    match m.regs X.conv.ret with
-    | some (.scalar _) => throw .exitHeld
-    | _ => throw .exitNotScalar
+    match m.frames with
+    | saved :: rest =>
+      -- a return: the caller's registers and frame back, the result
+      -- in the convention's register and the instruction's, and the
+      -- convention's argument registers dead
+      let result := m.regs X.conv.ret
+      let mut m' : State ρ := { m with regs := saved.regs, frame := saved.frame,
+                                       frames := rest, pc := saved.retPc }
+      if let some v := result then m' := m'.set X.conv.ret v
+      if let some d := saved.dst then
+        if let some v := result then m' := m'.set d v
+      if let some (regs, dead) := X.conv.fixedCall then
+        for r in regs ++ dead do
+          if r != X.conv.ret then m' := { m' with regs := fun r' => if r' = r then none else m'.regs r' }
+      return m'
+    | [] =>
+      if (halted? X m).isSome then throw .halted
+      match m.regs X.conv.ret with
+      | some (.scalar _) => throw .exitHeld
+      | _ => throw .exitNotScalar
 
 /-- The reflexive transitive closure of the successful steps. -/
 inductive Star (X : Env ρ τ) (K : Kernel) : State ρ → State ρ → Prop

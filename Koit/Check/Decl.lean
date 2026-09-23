@@ -270,6 +270,35 @@ def checkFn (env : Env) (f : Fn) : M (Caps × Effs) := do
   for p in f.params do
     if let some q := p.pred then
       checkPred env scalars q
+  -- a global function: nothing crosses the call but types, and its
+  -- prototype is what the kernel's can say
+  if f.global then
+    for p in f.params do
+      if p.pred.isSome then
+        err p.span s!"`{f.name}` is global, so the verifier will not know \
+          `{p.name}`'s refinement across the call; drop it and test what the \
+          body needs with `check` or `if`"
+      if let .view .. := p.ty then
+        err p.span s!"`{f.name}` is global, and the verifier has no packet \
+          parameter: `{p.name}` cannot be a view"
+    match f.ret with
+    | some (.refined s ..) =>
+      err s s!"`{f.name}` is global, so the verifier will not know its \
+        result's refinement across the call; drop it"
+    | some (.opt s ..) =>
+      err s s!"`{f.name}` is global, and the kernel's convention returns one \
+        scalar; an optional result waits for a convention of its own"
+    | some t =>
+      match ← env.norm t with
+      | .enum .. =>
+        err t.span s!"`{f.name}` is global, and the verifier sees its result \
+          as an unknown scalar, not a `{t.print}`; return the scalar and let \
+          the caller coerce"
+      | _ => pure ()
+    | none => pure ()
+    if f.fails then
+      err f.span s!"`{f.name}` is global, and a failure has no handler to \
+        reach across a subprogram boundary; it cannot `fails`"
   -- the result: a scalar, an optional scalar, or a refined scalar
   let resultScalar (t : Ty) : M Unit := do
     match t with

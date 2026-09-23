@@ -674,6 +674,7 @@ def dFn (info : Info) (d : Syntax.FnDecl) : M Fn := do
   let ret ← d.ret.mapM (dRet c)
   let body ← dStmts { c with tailIsResult := ret.isSome } d.body.stmts
   return { span := d.span, name := d.name, params, ret, fails := d.fails,
+           global := d.global,
            body }
 
 def dRegion (c : Ctx) : Syntax.Region → M Region

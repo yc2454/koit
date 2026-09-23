@@ -1,0 +1,12 @@
+// pending: kernel-memory
+// selftest: progs/test_global_func5.c global_func5 (T0777; T0778 global_func6; rule 07.29; T0767 global_func12, T1524 arg_tag_nonnull_ptr_null_bad, rule 07.30; T1499 to T1511, rules 07.31 and 07.32; master fe2ec83)
+// The prototype's other kinds: a ctx parameter that must be the
+// unmodified context, nullable memory used without a test, a NULL
+// passed where non-null is declared, and trusted and untrusted
+// kernel pointers. A koit global function takes scalars and `ref`
+// places, which are never null and never the context, so the first
+// three are unwritable; the kernel-pointer parameters wait for the
+// kernel-memory extension. In C:
+//
+//   foo((char *)ctx + 8);            /* modified ctx ptr */
+//   int foo(int *p) { return *p; }   /* mem_or_null read */

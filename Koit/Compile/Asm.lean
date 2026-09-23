@@ -91,6 +91,8 @@ def asmInstr (pre : Interface) (kind : String) (ins : Instr Reg Int) : Except St
     match ← calleeTarget pre kind h with
     | .inl id => return s!"call {id}"
     | .inr name => return s!"call {name}"
+  | .callSub off _ _ => return s!"call {off}"
+  | .arg .. => throw "`arg` in bytecode"
   | .atomic op cls fetch d off s =>
     let bits := cls.bits
     let name : String := match op with
@@ -115,7 +117,19 @@ def asmInstr (pre : Interface) (kind : String) (ins : Instr Reg Int) : Except St
 
 /-- A program, one instruction per line under a comment naming it. -/
 def printAsm (pre : Interface) (p : Bytecode) : Except String String := do
-  let lines ← p.code.toList.mapM (asmInstr pre p.kind)
+  -- a subprogram call names the callee's label, which the assembler
+  -- resolves to the offset the comment carries; the label is placed
+  -- at the callee's entry
+  let mut lines : List String := []
+  for (ins, i) in p.code.toList.zipIdx do
+    if let some (n, _) := p.subs.find? (·.2 == i) then lines := lines ++ [s!"{n}:"]
+    match ins with
+    | .callSub off _ _ =>
+      let t := (i : Int) + off + 1
+      match p.subs.find? fun (_, e) => (e : Int) == t with
+      | some (n, _) => lines := lines ++ [s!"call {n} # {off}"]
+      | none => throw s!"a subprogram call to instruction {t}, which no subprogram starts at"
+    | _ => lines := lines ++ [← asmInstr pre p.kind ins]
   return "\n".intercalate (s!"# program {p.name}" :: lines) ++ "\n"
 
 /-- The words of an object as `llvm-mc --disassemble` reads them:

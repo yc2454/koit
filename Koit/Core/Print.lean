@@ -191,7 +191,8 @@ def Param.print (p : Param) : String :=
     (match p.pred with | some q => " where " ++ q.print | none => "")
 
 def Fn.print (f : Fn) : String :=
-  "fn " ++ f.name ++ "(" ++ ", ".intercalate (f.params.map Param.print) ++
+  (if f.global then "global fn " else "fn ") ++ f.name ++ "(" ++
+    ", ".intercalate (f.params.map Param.print) ++
     ")" ++ (match f.ret with | some t => " -> " ++ t.print | none => "") ++
     (if f.fails then " fails" else "") ++ " " ++ Stmt.printBlock f.body 0
 

@@ -174,6 +174,8 @@ def objectJson (pre : Interface) (o : Object) : Except String Json := do
     ("verdicts", Json.mkObj (decl.verdicts.map fun (n, v) => (n, toJson v))),
     ("words", Json.arr (o.words.map fun w => Json.str (hex16 w))),
     ("relocs", Json.arr (o.relocs.map (relocJson pre)).toArray),
+    ("subprograms", Json.arr (o.subs.map fun (n, i) =>
+      Json.mkObj [("name", n), ("insn", toJson i)]).toArray),
     ("notes", Json.arr (o.notes.map fun n =>
       Json.mkObj [("index", toJson n.index), ("callee", n.callee.print)]).toArray)]
 
@@ -193,9 +195,22 @@ def unitJson (pre : Interface) (unit : String) (cpu : BPF.Cpu) (core : CompUnit)
   let core := withFormats core C.fmtMap
   let env := envOf pre core
   let maps ← core.maps.mapM (mapJson pre env (C.lir.direct ++ (C.fmtMap.map (·.name)).toList))
+  -- the global functions' prototypes, for the object's function
+  -- information: scalars and references, the references non-null
+  let fns ← (core.fns.filter (·.global)).mapM fun f => do
+    let params ← f.params.mapM fun p => do
+      let (kind, t) ← match p.ty with
+        | .ref _ t => pure ("ref", t)
+        | t => pure ("scalar", t)
+      pure (Json.mkObj [("name", p.name), ("kind", kind), ("type", ← typeJson env t)])
+    let ret ← match f.ret with
+      | some t => typeJson env t
+      | none => pure Json.null
+    pure (Json.mkObj [("name", f.name), ("params", Json.arr params.toArray), ("ret", ret)])
   let programs ← C.objects.mapM (objectJson pre)
   pure <| Json.mkObj [
     ("koit", toJson (1 : Nat)), ("kernel", pre.kernel),
+    ("fns", Json.arr fns.toArray),
     ("cpu", match cpu with | .v3 => "v3" | .v4 => "v4"),
     ("unit", unit),
     ("license", match core.license with | some (_, l) => Json.str l | none => Json.null),

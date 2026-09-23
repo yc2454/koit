@@ -29,6 +29,13 @@ def Instr.print (pr : ρ → String) (pt : τ → String) : Instr ρ τ → Stri
   | .jcond cmp cls a b t => s!"j{cmp.print}({cls.print}) {pr a}, {b.print pr}, {pt t}"
   | .lddw d k => s!"lddw {pr d}, {k}"
   | .lea d obj => s!"lea {pr d}, {obj}"
+  | .arg d i => s!"arg {pr d}, {i}"
+  | .callSub t args dst =>
+    s!"call sub {pt t}" ++
+      (if args.isEmpty then "" else " (" ++ ", ".intercalate (args.map pr) ++ ")") ++
+      (match dst with
+       | some d => s!" -> {pr d}"
+       | none => "")
   | .mapref d m => s!"mapref {pr d}, {m}"
   | .mapval d m k => s!"mapval {pr d}, {m} + {k}"
   | .call h args dst =>

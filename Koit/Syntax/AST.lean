@@ -210,6 +210,8 @@ structure FnDecl where
   ret    : Option RetType
   fails  : Bool
   body   : Block
+  /-- `global fn`: a subprogram the verifier checks once. -/
+  global : Bool := false
   deriving Repr, Inhabited
 
 inductive MapType where

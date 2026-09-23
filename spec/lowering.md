@@ -680,3 +680,16 @@ host with the kernel, and never builds Lean there.
    in session 8, and LLVM's disassembler checks the encoder until
    then (entry 35).
 10. Proofs by fragment, the picker first, passes D and C before B.
+11. A `global fn` (language.md decision 68) is a subprogram: its own
+    frame, the kernel's convention, arguments in `r1` to `r5` and the
+    result in `r0`, a BTF function of global linkage with its
+    prototype and `arg:nonnull` tags, and `.BTF.ext` function info
+    (entry 54, done 2026-09-23): the flattening places each global
+    function called after the program's code, binding its parameters
+    from the convention with `arg` and returning at its own exit; the
+    allocation loads the arguments into `r1` to `r5`, calls, and
+    stores `r0`; the machine saves the caller's registers and frame
+    on a `callSub` and restores them at the callee's `exit`; the
+    encoder emits the kernel's pseudo call with the offset from the
+    next instruction; the assembler text names the callee's label
+    with the offset in a comment.

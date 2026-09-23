@@ -32,6 +32,7 @@ class Unit:
         self.types = Types(doc["types"])
         self.maps = doc["maps"]
         self.programs = doc["programs"]
+        self.fns = doc.get("fns", [])
 
     @staticmethod
     def load(path):
@@ -121,6 +122,7 @@ BTF_KIND_STRUCT = 4
 BTF_KIND_FWD = 7
 BTF_KIND_FUNC = 12
 BTF_KIND_FUNC_PROTO = 13
+BTF_KIND_DECL_TAG = 17
 BTF_KIND_VAR = 14
 BTF_KIND_DATASEC = 15
 BTF_INT_SIGNED = 1 << 24
@@ -222,6 +224,22 @@ class Btf:
         for _ in range(stars):
             t = self.ptr(t)
         return t
+
+    def decl_tag(self, name, target, component=-1):
+        """A declaration tag on a type or, with a component index, on one
+        of its members or parameters."""
+        return self.add(name, BTF_KIND_DECL_TAG, 0, target, struct.pack("<i", component))
+
+    def ext_blob(self, secs):
+        """The `.BTF.ext` blob: function information per section, each
+        record an instruction offset in bytes and a function type."""
+        body = struct.pack("<I", 8)  # func_info_rec_size
+        for sec, recs in secs:
+            body += struct.pack("<II", self.string(sec), len(recs))
+            for off, fid in recs:
+                body += struct.pack("<II", off, fid)
+        hdr = struct.pack("<HBBIIIII", BTF_MAGIC, 1, 0, 24, 0, len(body), len(body), 0)
+        return hdr + body
 
     def var(self, name, t, linkage=1):
         return self.add(name, BTF_KIND_VAR, 0, t, struct.pack("<I", linkage))

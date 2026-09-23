@@ -1215,7 +1215,8 @@ def lowerFn (env : Env) (fns : List Fn) (direct : List String) (d : Fn) : LM LIR
     | none => pure (none, false)
   let c1 := { c with ret := .fn ret opt }
   let (body, _) ← lowerStmts c1 d.body
-  return { span := d.span, name := d.name, params, ret, opt, fails := d.fails, body }
+  return { span := d.span, name := d.name, params, ret, opt, fails := d.fails, body,
+           global := d.global }
 
 def lowerProgram (env : Env) (fns : List Fn) (direct : List String) (p : Program) :
     LM LIR.Program := do

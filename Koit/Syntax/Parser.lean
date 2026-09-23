@@ -716,6 +716,15 @@ partial def parseItem : M Item := do
       init := some es
     return .map (← spanFrom l.span) name mt access init
   | .keyword .«fn» => return .fn (← parseFn)
+  | .ident "global" =>
+    -- `global fn`: a word of the declaration, not a keyword
+    match (← lexemeAt 1).tok with
+    | .keyword .«fn» =>
+      advance
+      let d ← parseFn
+      return .fn { d with global := true, span := d.span.merge l.span }
+    | _ => unexpected "a declaration: `const`, `config`, `type`, `map`, \
+        `fn`, `global fn`, `contract`, or `program`"
   | .keyword .«contract» => return .contract (← parseContract)
   | .keyword .«program» => return .program (← parseProgram)
   | _ => unexpected "a declaration: `const`, `config`, `type`, `map`, \

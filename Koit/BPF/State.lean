@@ -225,15 +225,27 @@ end Frame
 
 /-! ### The state -/
 
+/-- What a subprogram call saves: where to return, the caller's
+registers and frame, and the register its result goes to. -/
+structure Saved (ρ : Type) where
+  retPc : Nat
+  regs  : ρ → Option Val
+  frame : Frame
+  dst   : Option ρ
+
 /-- The state of a run: the program counter, the registers, each
 holding a value or uninitialized, the frame, the context's fields by
-name, and the shared state. -/
+name, the shared state, and the subprogram calls in progress. -/
 structure State (ρ : Type) where
   pc      : Nat := 0
   regs    : ρ → Option Val
   frame   : Frame := Frame.init
   ctx     : List (String × Nat) := []
   machine : Machine.State := {}
+  /-- The subprogram calls in progress, innermost first. -/
+  frames  : List (Saved ρ) := []
+  /-- The arguments of the subprogram running, for BIR's `arg`. -/
+  args    : List Val := []
 
 instance : Inhabited (State ρ) := ⟨{ regs := fun _ => none }⟩
 

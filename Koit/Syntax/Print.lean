@@ -236,7 +236,8 @@ def Handler.print (h : Handler) : String :=
     | some ks => "on " ++ ", ".intercalate ks) ++ " " ++ h.body.print 2
 
 def FnDecl.print (d : FnDecl) : String :=
-  "fn " ++ d.name ++ "(" ++ ", ".intercalate (d.params.map Param.print) ++
+  (if d.global then "global fn " else "fn ") ++ d.name ++ "(" ++
+    ", ".intercalate (d.params.map Param.print) ++
     ")" ++ (match d.ret with | some r => " -> " ++ r.print | none => "") ++
     (if d.fails then " fails" else "") ++ " " ++ d.body.print 0
 
