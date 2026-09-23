@@ -46,12 +46,18 @@ re-derived the mechanisms against the kernel's own state
 15. The callback-loop rules recorded with the deferral of iterator
     and map loops (section 22).
 16. Lemma L's two lowering obligations (section 20).
+17. Terminology of the refinement half aligned with the standard
+    refinement-types vocabulary (2026-09-23, `terminology.md`,
+    decision 69): obligation for demand, join for the merge of facts,
+    termination metric, synthesis versus inference, branch
+    strengthening, selfification, hybrid cast.
 
 Changes from draft 1 to draft 2, for the record:
 
 1. Arithmetic is total, with the kernel's semantics for division,
    modulo, and shifts (section 8.1); the divisor and shift-amount
-   demands are gone and `check` is the only source of the `failed_check` kind.
+   obligations are gone and `check` is the only source of the
+   `failed_check` kind.
 2. Views carry their offset as a fact (section 7); stores through them
    carry region-indexed write effects (section 12).
 3. Contracts: verdict sets, preserved regions, named contracts a program
@@ -115,7 +121,7 @@ Revision folded on 2026-09-18 from `ISSUES.md`:
 
 Revisions folded on 2026-09-19 from `ISSUES.md` entries 25 to 27:
 
-1. Two fact rules the lowering's view-offset demand needed: an
+1. Two fact rules the lowering's view-offset obligation needed: an
    increment bound at a loop head and the preservation of what a
    killed equation said of its other side (section 18.4).
 2. The machine's trace and held stack in the form every level of the
@@ -230,7 +236,7 @@ validated empirically; it is outside this definition.
   written by userspace or other programs, are data. A fact about them
   exists only after this program has tested it.
 - **P9, elide only what the verifier will see.** The checker discharges
-  a demand silently only when the verifier will re-establish the same
+  an obligation silently only when the verifier will re-establish the same
   fact from the emitted code. Every fact the checker uses lowers to a
   branch in the bytecode (Lemma L, section 20), and the entailment
   fragment decides only what the verifier's domain re-derives from
@@ -241,12 +247,14 @@ validated empirically; it is outside this definition.
 
 **M1, refinement types over fixed-width integers.** An integer has a
 base type and optionally a predicate over its value and other names in
-scope, written `{v: u32 | v < 16}`. The checker carries a set of facts
-along each path, from branch conditions, from declared types, from
-marked loads, and from `check`. Positions that demand a refinement, an
-array index, a store into a predicated field, an argument with a
-precondition, a return under a verdict set, are accepted when the facts
-entail the demand and are type errors otherwise. Sections 7, 16, 17.
+scope, written `{v: u32 | v < 16}`: a refined base type, with `v` the
+value variable and the predicate its refinement. The checker carries a
+set of facts along each path, from branch conditions (branch
+strengthening), from declared types, from marked loads, and from
+`check`. Positions that carry a checking obligation, an array index, a
+store into a predicated field, an argument with a precondition, a
+return under a verdict set, are accepted when the facts entail the
+obligation and are type errors otherwise. Sections 7, 16, 17.
 
 **M2, places with typed extents.** A place is a location the program can
 read or write; its type fixes its extent; every place lies in a region:
@@ -275,7 +283,7 @@ outermost unlock, a graph node until its lock is released. Sections
 **M4, bounded structured control.** Conditionals, loops, break,
 continue, return, and calls in an acyclic call graph. A loop's cap is
 the type of its bound: a constant, a configuration constant, or a
-refined runtime value; the one declaration is the termination measure,
+refined runtime value; the one declaration is the termination metric,
 the index's refinement, and the constant the verifier needs to
 converge. Iterator loops carry a cap. The kernel's loop mechanisms,
 `bpf_loop`, open-coded iterators, and `may_goto`, are forms the
@@ -514,10 +522,14 @@ Stage 1 has two declarations, `XdpAction` for `enum xdp_action` and
 section 13. The extensions add the protocol and flag enumerations the
 calls take.
 
-**Arrays.** `T[n]` for constant `n`. Indexing demands `i < n` of an
-unsigned index.
+**Arrays.** `T[n]` for constant `n`. Indexing carries the obligation
+`i < n` on an unsigned index.
 
-**Refinements.** `x: T where P` gives `x` the type `{v: T | P[x := v]}`.
+**Refinements.** `{v: T | P}` is a refined base type: `T` is the base
+type, `v` the value variable, and `P` the refinement, a predicate of
+section 17 over `v` and the names in scope. Only scalar types,
+integers, booleans, and enumerations, are refined; a place type never
+is. `x: T where P` gives `x` the type `{v: T | P[x := v]}`.
 Refinements appear on struct fields, function parameters and results,
 local declarations, and, written as `{v: T | P}`, as the target of the
 runtime coercion `e as {v: T | P}?` (section 8.3).
@@ -653,7 +665,11 @@ field, an element, or `*x` for a reference or view `x` of scalar type.
 Reading a scalar place loads it. Binding an aggregate place with `let`
 names it (P3). A load from a field with a `where` predicate yields the
 base type; the predicate becomes a fact only through a marked load
-(section 10.2).
+(section 10.2). In the refinement-types idiom, construction asserts and
+destruction assumes; koit keeps the first half, since every store into
+the field is checked against the predicate, and withholds the second,
+since the party that reads a map value is not the party that wrote it
+(P8).
 
 A struct literal `{ f: e, ... }` names a new place on the stack. Its
 type is the declared type of the binding when the `let` gives one,
@@ -690,7 +706,11 @@ The coercion `e as {v: T | P}` is the one way to establish a fact at
 runtime: after `let x = e as {v: T | P}?`, `x` has the refined type and
 `P[v := x]` is a fact. `check P` is sugar for it (section 10.4), and
 the marked load of a `where` field is the same coercion with the
-predicate taken from the declaration. There is no `assume`.
+predicate taken from the declaration. There is no `assume`. The
+coercion is a hybrid cast, a runtime test of a refinement the static
+check does not establish, placed where trust ends rather than where
+decidability ends: the marked load tests a predicate the fragment
+could decide, because the value came from another party.
 
 `e as E?` for an enumeration type `E` is the same coercion with the
 predicate taken from the declaration: it tests that `e` is one of `E`'s
@@ -755,7 +775,7 @@ Pattern   ::= Ident | '(' Ident ',' Ident ')'
 a..b` binds `i` with the fact `a <= i < b`; its cap is the type of `b`,
 which must have a finite upper bound `n`, because `b` is a constant, a
 configuration constant, or a refined value `{v | v <= n}`. That one
-declaration is the termination measure, the index's refinement, and the
+declaration is the termination metric, the index's refinement, and the
 constant the verifier needs. `for x in it bounded N` iterates a kernel
 iterator or a map, binding each element (a key and value pair for a
 map), and ends when the iterator drains or after `N` elements, whichever
@@ -846,7 +866,7 @@ fact for the rest of the enclosing block, raising `failed_check` when it is
 false; `check P else { block }` runs the block instead. `P` is a
 predicate over variables in scope. The general form `let x = e as
 {v: T | P}?` gives `e` the refined type under the name `x`. Either form
-is the way to satisfy a demand the facts do not entail: an index
+is the way to discharge an obligation the facts do not entail: an index
 computed by arithmetic the fragment does not track, a precondition on
 a value read from the environment, a length that is the difference of
 two positions, or a divisor the programmer wants nonzero. There is no
@@ -1226,25 +1246,24 @@ one kind with an attribute. An asynchronous callback, a timer or
 workqueue body, is a kind in this sense, with its own context, verdict
 range, and an empty held set; the extensions define those declarations.
 
-Verdict statements and `return` end the program, releasing held
-resources on the way, and a taken `tail` ends it with the callee's
-verdict (section 10). A `syscall` body may also fall off its end,
-which returns 0; the body of a packet kind must end in an exit, as a
-handler must. The verdict type of a kind is an enumeration type
-(section 7) whose constants are the kind's verdicts: `XdpAction` for
-`xdp`, `TcAction` for `tc`. Inside a program the alias `verdict` names
-the enclosing kind's type, so in an `xdp` body `verdict` and
+Verdict statements and `return` end the program, releasing held resources on
+the way, and a taken `tail` ends it with the callee's verdict (section 10). A
+`syscall` body may also fall off its end, which returns 0; the body of a packet
+kind must end in an exit, as a handler must. The verdict type of a kind is an
+enumeration type (section 7) whose constants are the kind's verdicts:
+`XdpAction` for `xdp`, `TcAction` for `tc`. Inside a program the alias
+`verdict` names the enclosing kind's type, so in an `xdp` body `verdict` and
 `XdpAction` are one type; a function has no kind and names the declaration. A
 `syscall` program has no such declaration, since its result is `i32` with no
-named constants. `return e` demands that `e` have the kind's verdict
-type, further restricted by the program's verdict set if it has one
-(section 14); the kind's own range is the type, so nothing states it
-as a separate demand. A verdict statement is sugar for a return of the
-constant the kind's declaration names it with: `pass` is `return PASS` in an
-`xdp` program and `return OK` in a `tc` one, which is why `tc` has
-`pass` and `drop` and no `tx`. Arithmetic on a verdict is a type
-error, and an integer becomes one only through the coercion `e as
-verdict?`, so a verdict read from a map is tested where it is read.
+named constants. `return e` carries the obligation that `e` have the kind's
+verdict type, further restricted by the program's verdict set if it has one
+(section 14); the kind's own range is the type, so nothing states it as a
+separate obligation. A verdict statement is sugar for a return of the constant
+the kind's declaration names it with: `pass` is `return PASS` in an `xdp`
+program and `return OK` in a `tc` one, which is why `tc` has `pass` and `drop`
+and no `tx`. Arithmetic on a verdict is a type error, and an integer becomes
+one only through the coercion `e as verdict?`, so a verdict read from a map is
+tested where it is read.
 
 ## 14. Contracts
 
@@ -1258,8 +1277,9 @@ would state without reading it.
 **Verdict set.** `verdict in { PASS, DROP }` refines the program's
 return type to `{v: XdpAction | v == PASS || v == DROP}`, the kind's
 verdict type under the disjunction of the equalities the set names.
-Every exit is a demand: a verdict statement is a constant and checks
-syntactically; `return e` demands `e in S` from the facts; a verdict
+Every exit carries an obligation: a verdict statement is a constant and
+checks syntactically; `return e` has the obligation `e in S`, discharged
+from the facts; a verdict
 loaded from a map gets its fact from the marked load. Every handler's
 exit and the default failure verdict are exits, so both are checked
 against `S` in the header: a contract cannot be satisfied by failing. A
@@ -1414,7 +1434,7 @@ every item exists in every variant.
   kernel's argument constraints are stated as such: a length paired
   with a memory argument is `len: u32 where 0 < len && len <= size(buf)`
   (or `0 <= len` for the `_OR_ZERO` kinds), so a zero or negative
-  length, or one exceeding the place, is a demand at the call. A
+  length, or one exceeding the place, is an obligation at the call. A
   parameter's region kind is part of its type, so passing packet
   memory to a helper that admits only stack or map memory is a type
   error.
@@ -1436,8 +1456,9 @@ an enumeration of width `w` is a bit-vector of that width, so admitting
 its constants adds no theory.
 
 A field predicate is an invariant of every value stored by this unit. A
-store `p.f = e` demands `P[f := e]` with sibling fields read from `p`; a
-struct literal passed to `insert` demands every field's predicate. A load
+store `p.f = e` carries the obligation `P[f := e]` with sibling fields
+read from `p`; a struct literal passed to `insert` carries every field's
+predicate as an obligation. A load
 relies on the predicate only through a marked load (section 10.2), since
 other writers exist (P8). Array maps are zero-filled at creation, so a
 predicate on an array map's value must hold of the all-zero value; the
@@ -1448,7 +1469,7 @@ declaration is rejected otherwise.
 ### 18.1 Core syntax
 
 Core is the target of desugaring and the one language the typing
-rules are stated on. Every demand the source marked is an explicit
+rules are stated on. Every runtime test the source marked is an explicit
 `raise`, every optional is consumed by an explicit branch, every
 governed load goes through a temporary, and every handler table is
 total. Three surface forms stay in Core because handling them needs
@@ -1541,8 +1562,9 @@ implementation (`ISSUES.md`, entry 11):
 ### 18.3 Expression and place typing
 
 Bidirectional: `G;F |- e => T` synthesizes, `G;F |- e <= T` checks. A
-premise of the form `F |= P` is a demand: `F` must entail `P` (section
-18.5) or the rule does not apply and the program is ill-typed.
+premise of the form `F |= P` is a checking obligation reduced to
+entailment: `F` must entail `P` (section 18.5) or the rule does not
+apply and the program is ill-typed.
 
 ```
 (Var)
@@ -1650,7 +1672,7 @@ premise of the form `F |= P` is a demand: `F` must entail `P` (section
 ```
 
 Subtyping is refinement weakening: `{v:T | P} <: T`, and `{v:T | P} <:
-{v:T | Q}` when `F, P |= Q`. (Arith) has no demand: every operation is
+{v:T | Q}` when `F, P |= Q`. (Arith) has no obligation: every operation is
 total (section 8.1). (Cmp) applies to integers only: two places are
 never compared, so a `==` between references or views is ill-typed.
 
@@ -1665,7 +1687,7 @@ only the unit's declarations, and the premises are the typing rule of
 the Core form on the right. Sequencing, conditionals, and
 loops are as expected, with `kill(F, p)` removing facts about `p` after
 a store, `inv(F, s)` keeping facts about variables not assigned in `s`
-at a loop head, and `meet` intersecting the facts of two branches.
+at a loop head, and `join` merging the facts of two branches.
 Effects are unioned along the way. Three side conditions hold of every
 statement and are not repeated below: its effects are disjoint from
 what the held set `H` forbids, where the spin lock forbids `call` but
@@ -1705,21 +1727,20 @@ nested loops and each addend bounded above before the loop by values
 addends' bounds` and its lower bound when the total stays within its
 type, since it cannot wrap; the verifier re-derives the same bound by
 walking the loop to its count, so the fact is one it will see (P9).
-`meet(F1, F2)` keeps the facts present in both
+`join(F1, F2)` keeps the facts present in both
 and, for each variable, the hull of what each side knew about it as
 new facts, so that `x < 5` on one path and `x < 7` on the other leave
 `x <= 6`; a path that has exited contributes nothing. Facts about a
 block's locals end with the block.
 
-A branch condition and a `check` establish facts about stack places
-only: a conjunct that reads a place in a map, the context, the packet,
-a `ref` parameter, or a kernel object yields nothing, since the place
-may change between the test and the use and the fragment of section
-17 excludes such reads from predicates. A value read from a shared
-place is given a fact by reading it into a name and testing the name,
-or by a marked load. The one fact source that mentions a shared place
-is the view offset `off(h) = e`, which is about where the view is,
-not what it holds.
+Branch strengthening, the facts a branch condition and a `check` establish,
+reaches stack places only: a conjunct that reads a place in a map, the context,
+the packet, a `ref` parameter, or a kernel object yields nothing, since the
+place may change between the test and the use and the fragment of section 17
+excludes such reads from predicates. A value read from a shared place is given
+a fact by reading it into a name and testing the name, or by a marked load. The
+one fact source that mentions a shared place is the view offset `off(h) = e`,
+which is about where the view is, not what it holds.
 
 ```
 (Mark)
@@ -1745,7 +1766,7 @@ not what it holds.
     G;F;K |- s2 ~> s2' -| F2
     -------------------------------------------------------
     G;F;K |- if let x = e s1 else s2
-        ~> try x = e then s1' else s2'              -| F1 meet F2
+        ~> try x = e then s1' else s2'              -| F1 join F2
 
 (LoadW)
     p.f : T place    f : T where P
@@ -1758,12 +1779,12 @@ not what it holds.
     F |= e + size(T) <= max offset of the region
     facts(view(e, T), h) = {off(h) = e}
     h joins K.V in the then-branch
-    The demand is the verifier's: it bounds a packet pointer's
+    The obligation is the verifier's: it bounds a packet pointer's
     variable offset before it reads the comparison that follows, so an
     offset the facts do not bound is a program that does not load. A
     constant offset is entailed trivially; a loop-carried one needs a
-    `check` at the head of the body. The byte read `pkt[off]` demands
-    the same with size 1.
+    `check` at the head of the body. The byte read `pkt[off]` carries
+    the same obligation with size 1.
 
 (Lookup)
     facts(lookup(m, k), r) = {}
@@ -1812,8 +1833,8 @@ not what it holds.
     ------------------------------------------
     G;F;K |- move x : own T, x marked moved
 
-(Meet)
-    meet(F1, F2) is defined only when, for every owned x in scope,
+(Join)
+    join(F1, F2) is defined only when, for every owned x in scope,
     moved(x) is the same in both; otherwise the join is a type error
     naming x and the two branches
 
@@ -1905,16 +1926,15 @@ not what it holds.
     G;F;K |- if c s1 else s2 ~> s1' -| F1
 ```
 
-Note on (For): the exit fact `i = b` holds only on the fall-through
-path; the two paths are met. `writes(p)` is `write(m)` when `p` lies in
-a map value of `m`, `write(ctx.f)` for a context field, and nothing for
-the stack. The fact `p = e` after a store is recorded when `p` lies on
-the stack, and is killed by a store through an alias and at loop
-heads. A store to a shared place leaves no fact: the place may be
-written by another party before it is read again (P8), and the
-lowering reloads it, so a fact about it would discharge a test the
-verifier cannot re-derive. A value stored to shared memory that is
-needed again is held in a name.
+Note on (For): the exit fact `i = b` holds only on the fall-through path; the
+two paths are joined. `writes(p)` is `write(m)` when `p` lies in a map value of
+`m`, `write(ctx.f)` for a context field, and nothing for the stack. The fact `p
+= e` after a store, the selfification of a stack place, is recorded when `p`
+lies on the stack, and is killed by a store through an alias and at loop heads.
+A store to a shared place leaves no fact: the place may be written by another
+party before it is read again (P8), and the lowering reloads it, so a fact
+about it would discharge a test the verifier cannot re-derive. A value stored
+to shared memory that is needed again is held in a name.
 
 ### 18.5 Entailment
 
@@ -1930,9 +1950,10 @@ between widths is exact, as the verifier tracks it. It is computed from
 the facts in the order they entered, each narrowing with what was known
 when it arrived and no iteration to a fixpoint, which is what a verifier
 re-derives at the branches in that order; the join of two paths is the
-hull, written back as facts by `meet`. `F` itself is the list of facts,
-not the state: the state is built when a demand is checked and discarded
-after, so that membership, `kill`, `meet`, and the soundness statement
+hull, written back as facts by `join`. `F` itself is the list of facts,
+not the state: the state is built when an obligation is checked and
+discarded after, so that membership, `kill`, `join`, and the soundness
+statement
 all speak of predicates. The restriction is not provisional: it is
 principle P9. The procedure decides exactly the facts the verifier's own
 domain re-derives from the branches the lowering emits, so a fact it
@@ -1953,16 +1974,18 @@ which every entailment the procedure accepts is confirmed by a solver,
 used in testing; and the mechanization of the procedure's soundness
 (T2) alongside the core's.
 
-### 18.6 Type inference
+### 18.6 Synthesis and inference
 
-Inferred: types of `let` and `var` from initializers; literal and
-untyped-constant types from context; effect sets of functions; the
+Synthesized, in the bidirectional sense: types of `let` and `var` from
+initializers; literal and untyped-constant types from context; the
 facts `F`, by forward abstract interpretation with path facts from
 branches, marked loads, and checks, with loops handled at the head by
 `inv`, which drops what the body may change and so stabilizes in one
-step. Never inferred: map types,
-field types, signatures, contracts, loop bounds, program kinds, failure
-policy, `fails`. Refinements are checked, not searched for.
+step. Inferred, by a fixpoint over the body: effect sets of functions.
+Neither: map types, field types, signatures, contracts, loop bounds,
+program kinds, failure policy, `fails`. Refinements are checked, never
+inferred: there are no refinement holes, no templates, and no search
+for a refinement that would make a program well-typed.
 
 ## 19. Dynamic semantics of Core
 
@@ -2154,7 +2177,7 @@ held declaration forbids. Proof by induction on the derivation with the typing
 judgment as the invariant, a lemma per declaration of 20.1.
 
 **T2, soundness of entailment.** If `F |= P` and `sigma` satisfies `F`
-then `sigma` satisfies `P`. So no demand accepted statically can fail at
+then `sigma` satisfies `P`. So no obligation accepted statically can fail at
 runtime, and a marked load's refinement holds of the value it bound.
 
 **T3, totality of desugaring.** Desugaring is a total function from
@@ -2188,7 +2211,7 @@ only: an error there makes a program fail to load or rejects one that
 would have loaded, and never makes a safe program unsafe.
 
 **Lemma L, path facts.** Every fact in `F` that the checker uses to
-discharge a demand is implied by the branch conditions on the
+discharge an obligation is implied by the branch conditions on the
 corresponding path of the lowered code. The four fact sources, a
 branch, a declared loop bound, a marked load of a `where` field, and
 the coercion, all lower to a comparison; configuration constants fold
@@ -2295,18 +2318,18 @@ Revisions of 2026-09-14, second pass, from `ISSUES.md` entries 13 to 17:
 Revisions of 2026-09-15, settled before the entailment code was
 written:
 39. `F` is the list of facts as they entered, with view offsets and
-    name equalities; the abstract state is built from it at a demand,
+    name equalities; the abstract state is built from it at an obligation,
     in entry order without a fixpoint, and written back only at a
     join as the hull (18.5).
 40. Facts are about places, read through the references `let` binds;
     `kill`, the alias groups of `ref` parameters and of views, the
-    kill of every shared fact at a call, and `inv` and `meet` as 18.4
+    kill of every shared fact at a call, and `inv` and `join` as 18.4
     now states them.
 41. A branch or a `check` yields facts about stack places only; the
     view offset is the one fact about a shared place (18.4).
 42. One interval per variable, in its type's signedness, with known
     bits; not the verifier's paired ranges. P9 is one-directional, so
-    the smaller domain is safe, and the corpus demands are unsigned
+    the smaller domain is safe, and the corpus obligations are unsigned
     (18.5).
 43. The cap of a `for` loop is an output of the checker to the
     lowering, by loop, not a Core annotation; the postcondition of a
@@ -2323,7 +2346,7 @@ Revisions of 2026-09-18, from `ISSUES.md` entries 20 to 24:
     account are the enclosing rules; T1 quantifies over every such
     kernel and states existence of a halting derivation and absence
     of `err` (sections 19, 20).
-47. A view carve and a byte read demand that the window lies under
+47. A view carve and a byte read carry the obligation that the window lies under
     the region's max offset, a clause of the region declaration, 65535 for
     the packet; the lowering adds no bound test (entry 21).
 48. P2 admits a branch the verifier requires on a path the kernel's
@@ -2405,7 +2428,7 @@ session 8:
     is the type's, `XdpAction`, and `verdict` is an alias for the
     enclosing program's kind. Rejected: a `verdict` constructor in the
     core, which contradicts section 1 and makes `syscall` a special
-    case; and keeping `u32` with the kind's range as a second demand
+    case; and keeping `u32` with the kind's range as a second obligation
     on `return`, which closes the range alone.
 
 60. The program header has no `fail <exit>` clause: a `default`
@@ -2532,6 +2555,23 @@ session 8:
     refinements, whose failure has nowhere to go; the compiler choosing
     which functions are global by size; `view` parameters by passing
     bounds, deferred to dynptrs (entry 54).
+69. Terminology (2026-09-23). The refinement half of this document
+    uses the vocabulary of the refinement-types literature, as
+    `terminology.md` records: a refined base type has a base type, a
+    value variable, and a refinement; a premise `F |= P` is a checking
+    obligation reduced to entailment, formerly a demand; facts enter by
+    branch strengthening and, for a stack store, by selfification; the
+    merge of two paths' facts is `join`, formerly `meet`, since the
+    literature's meet conjoins; a loop's cap is its termination metric,
+    not its measure, since a measure is a ghost function on data; binder
+    types and facts are synthesized and effect sets are inferred, with
+    inference otherwise reserved for the search over refinement holes
+    that koit does not do; the coercion is a hybrid cast placed at the
+    trust boundary, and the marked load is where koit departs from the
+    idiom that construction asserts and destruction assumes. Memory,
+    protocol, control, and the verifier relationship keep koit's own
+    words. Code identifiers are unchanged (`meet`, `meetK`, `demand`),
+    as are diagnostics, since neither cites this document.
 
 Open questions, with the default the checker implements until decided:
 
@@ -2688,7 +2728,7 @@ program pick : xdp
   if proto != ETH_P_IP { pass }
   // invariant: abort; afterwards cur : {v | v < M}
   let cur = policy[0].cur?
-  // demand cur < M: entailed
+  // obligation cur < M: entailed
   let be  = backends[0][cur]
   // helper: abort; the result is REDIRECT, which the verdict set admits
   let v   = redirect(be.ifindex)?
@@ -2696,7 +2736,7 @@ program pick : xdp
 }
 
 program rotate : syscall {
-  // demand (x + 1) % M < M: entailed
+  // obligation (x + 1) % M < M: entailed
   policy[0].cur = (policy[0].cur + 1) % M
 }
 ```
@@ -2768,7 +2808,7 @@ program bmc_rx : xdp
   }
   if n == 0 || n == MAX_KEY { fail REASON_LONG_KEY }
 
-  // demand h % SLOTS < SLOTS: entailed
+  // obligation h % SLOTS < SLOTS: entailed
   let e = cache[h % SLOTS]
   // helper: pass; kills eth, ip, udp, cmd
   pkt.adjust_tail(DATA_SIZE as i32)?
@@ -2784,14 +2824,14 @@ program bmc_rx : xdp
       for i in 0..n {
         // short_packet: unlock, count, pass
         let c = pkt[koff + i]?
-        // demand i < DATA_SIZE: i < n <= MAX_KEY
+        // obligation i < DATA_SIZE: i < n <= MAX_KEY
         if e.data[i] != c { same = false }
       }
       if same {
         rlen = len as u64
         for i in 0..rlen {
           let d = pkt.view<u8>(koff + i)?
-          // demand i < DATA_SIZE: i < rlen <= DATA_SIZE
+          // obligation i < DATA_SIZE: i < rlen <= DATA_SIZE
           *d = e.data[i]
         }
       }
@@ -2816,7 +2856,7 @@ program bmc_tx : tc
   let e = cache[h % SLOTS]
   hold lock(e.lk) {
     e.hash = h
-    // demand n <= DATA_SIZE: entailed from n's refinement
+    // obligation n <= DATA_SIZE: entailed from n's refinement
     e.len  = n as u32
     for i in 0..n { let c = pkt[voff + i]?; e.data[i] = c }
     e.valid = 1
@@ -2852,7 +2892,7 @@ program filter : xdp
   // v : {v | 1 <= v && v <= 2}, from the marked load
   let v = f.v?
   // another party wrote it, so it is a verdict only once tested;
-  // the refinement above entails the coercion's own demand
+  // the refinement above entails the coercion's own obligation
   let a = v as {v: verdict | v == PASS || v == DROP}?
   return a
 }

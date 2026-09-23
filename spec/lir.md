@@ -17,7 +17,7 @@ of the lowering are visible in its syntax and nowhere else:
 
 - Every runtime test is an `if` on a comparison, and there is one
   exactly where the source had a marker: a view carve, a hash lookup,
-  a marked load, a coercion, a fallible call. A demand the checker
+  a marked load, a coercion, a fallible call. An obligation the checker
   discharged has no test, because Core never had one; elision is a
   fact about the source, established by T1 and T2, not a decision of
   the compiler. The one exception is a branch the verifier requires on
@@ -447,8 +447,8 @@ where pass B leans on typing.
 
 An `array[n]` map with more than one slot is reached through
 `lookup`, which the kernel answers with null for an index at or past
-the capacity. Core's `m[e]` has no such path: the index demand makes
-it total. LIR emits the test anyway, because the verifier requires
+the capacity. Core's `m[e]` has no such path: the index obligation
+makes it total. LIR emits the test anyway, because the verifier requires
 it, and its branch is dead:
 
 ```
@@ -480,7 +480,7 @@ element's address. LIR binds that address once and tests it:
 el = h + i * size; if el + size > pkt_end { return ABORTED_OF_KIND }; ...
 ```
 
-The branch is dead by the view's window and the index demand, its
+The branch is dead by the view's window and the index obligation, its
 value is as above, and the accesses go through `el`, so that the
 comparison is on the pointer they use. A constant index needs no
 test, since the verifier keeps the id across a constant offset

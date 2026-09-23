@@ -264,7 +264,7 @@ Induction on the Core derivation with one lemma per rule of
 
 What B does not use: T2, or any fact. Every test Core has, B emits,
 and B adds only the dead branch of decision 48, which the Core
-derivation's in-range index makes untaken. A demand the checker
+derivation's in-range index makes untaken. An obligation the checker
 discharged corresponds to a premise of a Core rule, `idx < len` in
 `EvalPlace.index`, and the Core derivation supplies it; the LIR load
 at the same address is admitted for the same reason. Elision is
@@ -465,8 +465,9 @@ output:
   plan targets. If E6 shows a kernel where it does not, the first
   allocation keeps a tested value in `r7` to `r9` until its last use
   in the same block, which is a local change to pass D.
-- **The offset bound.** By decision 47 the checker demands that a
-  view's window lies under the region's maximum offset, so the
+- **The offset bound.** By decision 47 the checker carries the
+  obligation that a view's window lies under the region's maximum
+  offset, so the
   scalar pass C adds to `data` has a bound the verifier re-derives
   from the branch that established it; no bound test is emitted.
   An element of a view reached by a non-constant index is a pointer

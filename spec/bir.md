@@ -599,7 +599,7 @@ meet. Stated on the templates of sections 3 and 4:
   of E6 decides whether the first allocation must keep the tested
   value in a register until its last use.
 - A packet location's variable offset stays below the kernel's
-  maximum packet offset because the view rule demands it
+  maximum packet offset because the view rule's obligation bounds it
   (`ISSUES.md`, entry 21), so the pointer arithmetic that carves a
   view is accepted and the comparison that follows sets the range.
 - Frame objects are 8-aligned and every access through them has the
