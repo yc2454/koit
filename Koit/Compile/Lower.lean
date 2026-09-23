@@ -693,7 +693,7 @@ def boundTy (c : LCtx) (f : Fallible) : LM (Option Ty × Origin) := do
   | .view s _ t => return (some (.view s t), .pkt)
   | .lookup s m _ =>
     match c.env.map? m with
-    | some ⟨_, _, .hash _ _ v⟩ => return (some (.ref s v), .map m)
+    | some { kind := .hash _ _ v, .. } => return (some (.ref s v), .map m)
     | _ => lerr s!"`{m}` is not a hash map"
   | .loadw s (.field _ q fname) =>
     let info ← liftC (Check.placeTy c.env c.K q)

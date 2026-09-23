@@ -315,6 +315,10 @@ partial def synth (env : Env) (K : Ctx) (e : Expr) : M Ty := do
     | _ => err s s!"`ntoh` takes a byte-order value, found `{t.print}`"
   | .read s p =>
     let info ← placeTyUse env K p
+    if let .map m := info.origin then
+      if env.mapAccess m == .wo then
+        err s s!"`{p.print}` is in the write-only map `{m}`, which the \
+          program never reads"
     let tn ← env.norm info.ty
     match tn with
     | .int .. | .be .. | .bool .. => return tn
@@ -427,7 +431,12 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
     match env.local? x with
     | some l =>
       match l.ty with
-      | .ref _ t => return { ty := t, mutable := true, origin := l.origin }
+      | .ref _ t =>
+        -- a reference into a read-only map is not written through
+        let mutable := match l.origin with
+          | .map m => env.mapAccess m != .ro
+          | _ => true
+        return { ty := t, mutable, origin := l.origin }
       | .view _ t => return { ty := t, mutable := true, origin := .pkt }
       -- an owned reference names a place of its type
       | .own _ t => return { ty := t, mutable := true, origin := .kernel }
@@ -478,7 +487,7 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
       match d.kind with
       | .array _ v | .percpu _ v =>
         checkIndex env K i
-        return { ty := v, mutable := true, origin := .map m }
+        return { ty := v, mutable := d.access != .ro, origin := .map m }
       | .hash .. =>
         err s s!"the lookup in the hash map `{m}` can fail (kind `missing`): \
           bind it with `?`, `else`, or `if let`"
@@ -712,6 +721,8 @@ partial def builtinCall (env : Env) (K : Ctx) (span : Span) (f : String)
     err span "`fill(dst, byte)` takes a place and a byte"
   | "insert", [.map ms m, .place k, .place v] =>
     let (kt, vt) ← hashTypes env ms m
+    if env.mapAccess m == .ro then
+      err ms s!"`{m}` is read-only, and `insert` writes it"
     let ki ← placeTyUse env K k
     unless ← env.eqv ki.ty kt do
       err k.span s!"the key of `{m}` is a `{kt.print}`; `{k.print}` is a \
@@ -726,6 +737,8 @@ partial def builtinCall (env : Env) (K : Ctx) (span : Span) (f : String)
      "
   | "delete", [.map ms m, .place k] =>
     let (kt, _) ← hashTypes env ms m
+    if env.mapAccess m == .ro then
+      err ms s!"`{m}` is read-only, and `delete` writes it"
     let ki ← placeTyUse env K k
     unless ← env.eqv ki.ty kt do
       err k.span s!"the key of `{m}` is a `{kt.print}`; `{k.print}` is a \
@@ -832,6 +845,8 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
     return { ty := some (.view s t), origin := .pkt }
   | .lookup s m k =>
     let (kt, vt) ← hashTypes env s m
+    if env.mapAccess m == .wo then
+      err s s!"`{m}` is write-only, and a lookup reads it"
     let ki ← placeTyUse env K k
     unless ← env.eqv ki.ty kt do
       err k.span s!"the key of `{m}` is a `{kt.print}`; `{k.print}` is a \

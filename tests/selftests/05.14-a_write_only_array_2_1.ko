@@ -1,0 +1,9 @@
+// selftest: progs/verifier_array_access.c a_write_only_array_2_1 (T0897; T0896 a_write_only_array_1_1; rule 05.14, master fe2ec83)
+// The accepting side: a store into a write-only map.
+map tab : array[4] of { v: u32 } writeonly
+
+program p : tc {
+  let i = ctx.mark
+  if i < 4 { tab[i].v = 1 }
+  pass
+}

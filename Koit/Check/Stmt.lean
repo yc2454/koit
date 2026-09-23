@@ -1123,6 +1123,9 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
           {article decl.name} `{decl.name}` program; \
           {if writable.isEmpty then "none of its fields is" else
             "the writable fields are " ++ ", ".intercalate writable}"
+      | _, .map m =>
+        err span s!"`{p.print}` is in the read-only map `{m}`, which the \
+          program never writes"
       | _, _ =>
         err span s!"`{p.print}` is immutable; declare it with `var` to \
           assign to it"

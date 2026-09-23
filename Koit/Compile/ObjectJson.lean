@@ -62,6 +62,11 @@ where
     | .ok r => pure r
     | .error d => throw d.msg
 
+/-- Two hex digits of a byte. -/
+def hex2 (n : Nat) : String :=
+  let d := "0123456789abcdef".toList
+  String.ofList [d[n / 16 % 16]!, d[n % 16]!]
+
 /-- The byte offset of the spin lock in a map value, when it holds
 one at the top level, where the kernel looks for it. -/
 def spinLockOffset (env : Check.Env) (t : Ty) : Option Nat :=
@@ -111,7 +116,26 @@ def mapJson (pre : Interface) (env : Check.Env) (direct : List String) (d : MapD
     ("key", keyJson), ("key_size", toJson (← match key with | some k => sizeOf k | none => pure 0)),
     ("value", valueJson),
     ("value_size", toJson (← match value with | some v => sizeOf v | none => pure 0)),
-    ("entries", toJson (← entries n)), ("flags", toJson (0 : Nat)),
+    ("entries", toJson (← entries n)), ("flags", toJson d.access.flags),
+    ("access", match d.access with | .rw => "rw" | .ro => "ro" | .wo => "wo"),
+    -- the contents the object holds: the compiler's bytes, or the
+    -- initializer's constants entry by entry; absent for a zero-filled
+    -- map
+    ("data", ← do
+      if !d.bytes.isEmpty then
+        pure (Json.str (String.join (d.bytes.map fun b => hex2 b.toNat)))
+      else if d.init.isEmpty then pure Json.null
+      else
+        let size ← match value with
+          | some v => sizeOf v
+          | none => throw s!"`{d.name}` has no value type to initialize"
+        let mut out := ""
+        for e in d.init do
+          match env.evalConst e with
+          | some x =>
+            out := out ++ String.join ((Machine.leBytes (Machine.toNatMod x (8 * size)) size).map fun b => hex2 b.toNat)
+          | none => throw s!"the initializer of `{d.name}` is not constant"
+        pure (Json.str out)),
     ("direct", Json.bool (direct.contains d.name)),
     ("spin_lock", match value.bind (spinLockOffset env) with
       | some o => toJson o
@@ -160,7 +184,9 @@ def unitJson (pre : Interface) (unit : String) (cpu : BPF.Cpu) (core : CompUnit)
     | _ => true
   let types ← named.mapM fun d => do
     pure <| Json.mkObj [("name", d.name), ("type", ← typeJson env d.ty)]
-  let maps ← core.maps.mapM (mapJson pre env C.lir.direct)
+  let core := withFormats core C.fmtMap
+  let env := envOf pre core
+  let maps ← core.maps.mapM (mapJson pre env (C.lir.direct ++ (C.fmtMap.map (·.name)).toList))
   let programs ← C.objects.mapM (objectJson pre)
   pure <| Json.mkObj [
     ("koit", toJson (1 : Nat)), ("kernel", pre.kernel),

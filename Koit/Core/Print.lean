@@ -247,7 +247,9 @@ def ConfigDecl.print (d : ConfigDecl) : String :=
     (match d.init with | some e => " = " ++ e.print | none => "")
 
 def MapDecl.print (d : MapDecl) : String :=
-  "map " ++ d.name ++ " : " ++ d.kind.print
+  "map " ++ d.name ++ " : " ++ d.kind.print ++ d.access.print ++
+    (if d.init.isEmpty then "" else
+      " = [" ++ ", ".intercalate (d.init.map Expr.print) ++ "]")
 
 /-- Declarations in the order of a unit's template (constants and
 types, maps, functions, entry points), separated by blank

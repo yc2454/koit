@@ -137,7 +137,7 @@ consult the kernel parameter:
 | `lock`, `unlock` | the lock field's location in a map value | push, pop |
 | `enter R`, `leave R` | none | push, pop, for the scope declarations |
 | `copy n`, `fill n` | locations, a byte | byte moves, expanded by the flattening |
-| `printk fmt n` | `n` scalars; the format is on the instruction, and in bytecode the location and size of a frame object holding its bytes, filled at the call site by the flattening (entry 37) | an event on the trace with the format and the scalars |
+| `printk fmt n` | `n` scalars; the format is on the instruction, and in bytecode the location in the read-only data and the size holding its bytes, filled at the call site by the flattening (entry 37) | an event on the trace with the format and the scalars |
 | `atomic op(w)` | a location, one or two scalars | the read-modify-write of section 8.5, at 32 or 64 bits |
 
 A key or value argument may lie in any readable region, and its
@@ -523,18 +523,17 @@ verified checker, the way CompCert validates its own.
 **Kernel calls.** A call's registers are laid out as the declaration's
 implementation clause says: koit's arguments at their positions,
 the context from `r6`, constants and sizes as immediates, `printk`'s
-format as the location and size of its frame object. An inline declaration
+format as its location in the read-only data and its size. An inline declaration
 becomes the kernel's own sequence: `data_end - data` for `pkt.len`,
 the add with a carry test and increment for `csum_add`, the two
 folds and the complement for `csum_fold` (entry 38).
 
 **Formats.** Each `printk` format, its holes converted to the
-kernel's conversions by the arguments' types, lives in a frame
-object the flattening reserves and fills at the call site with
-stores; the call passes `lea` of the object and its size. A
-read-only data map replaces the object when the ELF writer arrives,
-and the machine's trace event, the format and the scalars, is the
-same under both (entry 37).
+kernel's conversions by the arguments' types, lives in the unit's
+read-only data, one map per unit holding every format's bytes; the
+call passes `mapval` at the format's offset and its size. The
+machine's trace event, the format and the scalars, does not see
+where the bytes live (entries 37 and 52).
 
 **Labels.** Jump targets become signed instruction offsets; the long
 jump of v4 is used when an offset exceeds 16 bits, and under v3 such
@@ -679,9 +678,8 @@ and is not needed for the paper.
     type, one `Step` parameterized by the calling convention; BIR and
     bytecode are its instances (entry 34).
 13. `printk`'s format is metadata on the instruction at every level;
-    the direct backend stores its bytes in a frame object at the
-    call site until the ELF writer's read-only data exists (entry
-    37).
+    the direct backend places its bytes in the unit's read-only data
+    and passes their location (entries 37 and 52).
 14. A call declaration's implementation clause carries the kernel's
     calling convention, a helper number or kfunc name with the
     layout of its arguments relative to koit's; the bytecode

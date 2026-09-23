@@ -1,0 +1,10 @@
+// selftest: progs/verifier_array_access.c a_read_only_array_2_1 (T0893; T0892 a_read_only_array_1_1; rule 05.14, master fe2ec83)
+// The accepting side: a read from a read-only map.
+map tab : array[4] of { v: u32 } readonly
+map out : array[1] of { v: u32 }
+
+program p : tc {
+  let i = ctx.mark
+  if i < 4 { out[0].v = tab[i].v }
+  pass
+}

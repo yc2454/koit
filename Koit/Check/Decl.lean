@@ -169,6 +169,32 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
         map keys and values are packet-representable, and a value may hold \
         slot types per their declarations"
     let _ ← env.layout v
+  -- the access word applies to maps the program reads or writes as
+  -- values; a ring buffer is neither
+  if d.access != .rw then
+    if let .ringbuf _ := d.kind then
+      err d.span s!"`{d.name}` is a ring buffer, which has no access word"
+  -- the initializer: one constant of the value type per entry of an
+  -- array map, scalars in this draft
+  unless d.init.isEmpty do
+    match d.kind with
+    | .array n v =>
+      let vn ← env.norm v
+      unless vn.isScalar do
+        err d.span s!"the initializer of `{d.name}` needs a scalar value \
+          type in this draft; `{v.print}` is an aggregate"
+      match env.evalConst n with
+      | some cnt =>
+        unless d.init.length == cnt do
+          err d.span s!"`{d.name}` has {cnt} entries and {d.init.length} \
+            initializers"
+      | none => pure ()
+      for e in d.init do
+        unless env.isConstExpr e do
+          err e.span s!"the initializer of `{d.name}` takes constant \
+            expressions; `{e.print}` is not one"
+        check env.top K0 e vn
+    | _ => err d.span s!"only an `array[n]` map takes an initializer"
   match d.kind with
   | .array n v | .percpu n v =>
     capacity n

@@ -80,11 +80,11 @@ inductive Builtin where
   | unlock
   | enter (r : Resource)
   | leave (r : Resource)
-  /-- `printk` with its format and the number of arguments the source
+  /-- `printk` with its format, the number of scalars the source
   passed, so that the trace records them at every level, and the
   frame object holding the kernel's format with its size, which the
   allocation passes to the helper. -/
-  | printk (fmt : String) (n : Nat) (obj : String) (size : Nat)
+  | printk (fmt : String) (n : Nat) (size : Nat)
   deriving Repr, BEq, Inhabited
 
 /-- What a `call` calls: a builtin, or a kernel function by the name
@@ -235,7 +235,7 @@ def Builtin.arity : Builtin → Nat
   | .update => 3
   | .reserve _ | .submit | .discard | .lock | .unlock => 1
   | .enter _ | .leave _ => 0
-  | .printk _ n _ _ => n
+  | .printk _ n _ => n + 1
 
 /-- The kernel's argument layout of a builtin, for the fixed
 convention and the encoder: the map operations take the map first
@@ -249,7 +249,7 @@ def Builtin.abi : Builtin → List Interface.AbiArg
   | .submit | .discard => [.arg 0, .const 0]
   | .lock | .unlock => [.arg 0]
   | .enter _ | .leave _ => []
-  | .printk _ n _ size => [.fmt, .const size] ++ (List.range n).map .arg
+  | .printk _ n size => [.fmt, .const size] ++ (List.range n).map fun i => .arg (i + 1)
 
 /-- The kernel helper a builtin calls, by its name without `bpf_`;
 the number is the kernel side of the interface's. The scope declarations are
@@ -277,7 +277,7 @@ def Builtin.print : Builtin → String
   | .unlock => "unlock"
   | .enter r => s!"enter {r}"
   | .leave r => s!"leave {r}"
-  | .printk fmt n obj size => s!"printk {Core.strLit fmt} {n} {obj} {size}"
+  | .printk fmt n size => s!"printk {Core.strLit fmt} {n} {size}"
 
 def Callee.print : Callee → String
   | .builtin b => b.print

@@ -1,0 +1,7 @@
+// pending: declarations
+// selftest: progs/verifier_xdp.c xdp_store_bytes_from_ro_map (T2780, rule 05.14, master fe2ec83)
+// The accepting side through a helper: bytes copied from a read-only
+// map into the packet with bpf_xdp_store_bytes, which reads its
+// source. Needs that helper's declaration. In C:
+//
+//   bpf_xdp_store_bytes(ctx, 0, ro_map_value, 4);

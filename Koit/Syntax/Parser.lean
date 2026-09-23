@@ -689,7 +689,19 @@ partial def parseItem : M Item := do
     let (name, _) ← expectIdent "a map name"
     let _ ← expectPunct .colon
     let mt ← parseMapType
-    return .map (← spanFrom l.span) name mt
+    -- the access word and the initializer, both optional
+    let mut access : MapAccess := .rw
+    if ← isIdent "readonly" then advance; access := .ro
+    else if ← isIdent "writeonly" then advance; access := .wo
+    let mut init := none
+    if (← acceptPunct .assign) then
+      let _ ← expectPunct .lbrack
+      let mut es := [← withNl false parseExpr]
+      while ← acceptPunct .comma do
+        es := es ++ [← withNl false parseExpr]
+      let _ ← expectPunct .rbrack
+      init := some es
+    return .map (← spanFrom l.span) name mt access init
   | .keyword .«fn» => return .fn (← parseFn)
   | .keyword .«contract» => return .contract (← parseContract)
   | .keyword .«program» => return .program (← parseProgram)

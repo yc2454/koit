@@ -1,0 +1,9 @@
+// selftest: progs/verifier_const.c tcx2 (T1198; T1199 tcx3, T1201 tcx5, T1202 tcx6; rule 02.29, master fe2ec83)
+// The accepting side: the same store into an ordinary global, `.bss`
+// or `.data`, which is a read-write map. tc/ingress, written as tc.
+map cfg : array[1] of { mark: u32 }
+
+program p : tc {
+  cfg[0].mark = ctx.mark
+  pass
+}

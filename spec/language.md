@@ -377,7 +377,9 @@ LicenseDecl ::= 'license' String
 ConstDecl ::= 'const' Ident (':' Type)? '=' Expr
 ConfigDecl ::= 'config' Ident ':' Type ('=' Expr)?
 TypeDecl  ::= 'type' Ident '=' Type
-MapDecl   ::= 'map' Ident ':' MapType
+MapDecl   ::= 'map' Ident ':' MapType Access? Init?
+Access    ::= 'readonly' | 'writeonly'
+Init      ::= '=' '[' Expr (',' Expr)* ']'
 MapType   ::= 'array' '[' Expr ']' 'of' Type
             | 'percpu_array' '[' Expr ']' 'of' Type
             | 'hash' '[' Expr ']' 'of' Type '->' Type
@@ -566,6 +568,25 @@ K -> V`, and `ringbuf[n]` for a ring buffer of `n` bytes. `K` and `V`
 are packet-representable, `V` may contain slot types per their declarations.
 For a per-CPU
 array, `m[i]` is the current CPU's slot.
+
+A map declaration may end in an access word. `readonly` says the
+program never writes the map: its places are immutable, so a store,
+an atomic update, `insert`, `delete`, `fill` or `copy` into one, and
+passing one to a call that writes it are type errors naming the map.
+`writeonly` says the program never reads it: a load, `copy` from one,
+and passing one to a call that reads it are type errors. Absent, the
+map is read and written. The word reaches the object as the flags
+the kernel enforces, `BPF_F_RDONLY_PROG` and `BPF_F_WRONLY_PROG`,
+which is how a `const volatile` global of C reaches a program. What
+is read from a read-only map is untrusted data like any map's (P8);
+a value the checker may use is a `config` constant (8.4), which
+folds at compile time. An `array[n]` map may carry an initializer,
+`= [e1, ..., en]`, one constant expression of the value type per
+entry, which the object holds as the map's contents: a read-only map
+with one is the object's read-only data, a read-write map with one
+its initialized data, and a map without one is zero-filled. The
+loader may replace the contents before load; the language says what
+the object holds.
 
 ## 8. Expressions and places
 
@@ -1112,7 +1133,8 @@ the core knows only the clauses:
 | max offset | for a region of dynamic extent, the largest offset a view may lie under, since the verifier bounds a pointer's variable offset before it sees the test; the packet's is the kernel's maximum packet offset, 65535 |
 
 Stage-1 declarations: the stack, static, read-write, initialized, no guard; map
-values, static, read-write, zero-filled, no guard; the context, static,
+values, static, readable and writable per the map's access word
+(section 7), zero-filled or initialized, no guard; the context, static,
 writable per field from the interface's kinds, no guard; the packet, by view,
 readable, writable in the kinds whose declaration says `rw`, guarded by its
 layout token, max offset 65535. A store through a view in a kind whose
@@ -1577,13 +1599,15 @@ the Core form on the right. Sequencing, conditionals, and
 loops are as expected, with `kill(F, p)` removing facts about `p` after
 a store, `inv(F, s)` keeping facts about variables not assigned in `s`
 at a loop head, and `meet` intersecting the facts of two branches.
-Effects are unioned along the way. Two side conditions hold of every
+Effects are unioned along the way. Three side conditions hold of every
 statement and are not repeated below: its effects are disjoint from
 what the held set `H` forbids, where the spin lock forbids `call` but
-not `call(lock-safe)`; and the resources every call in it requires are
+not `call(lock-safe)`; the resources every call in it requires are
 satisfied by `K`, which for an RCU section means an RCU section, a spin
 lock, a preempt-off or IRQ-off section in `H`, or a kind that cannot
-sleep.
+sleep; and no place of a read-only map is written and no place of a
+write-only map is read, by a store, a load, a builtin, or a call's
+argument (section 7).
 
 The three operations, precisely. A fact is about the places it
 mentions, with a reference bound by `let r = p` read as the place `p`
@@ -2384,6 +2408,20 @@ session 8:
     checker; derived names that own; a state on owned names for
     typestate; a fallible acquisition with a release written in its
     tail (entry 51).
+
+66. A map declaration ends in an access word, `readonly` or
+    `writeonly`, the kernel's `BPF_F_RDONLY_PROG` and
+    `BPF_F_WRONLY_PROG`, and the checker refuses the writes and reads
+    the verifier would; an `array[n]` map may carry an initializer of
+    constant expressions, which the object holds as read-only or
+    initialized data; and `printk`'s formats live in one read-only
+    data map per unit, as clang and libbpf place them, rather than in
+    frame objects (entry 37 (b)). A read from a read-only map stays
+    untrusted data; `config` is the form for a value the checker uses.
+    Rejected: a map kind for read-only data, since access is
+    orthogonal to kind; `const map`, since `const` means compile-time;
+    the checker using a frozen map's contents as facts; and keeping
+    the formats in the frame (entry 52).
 
 Open questions, with the default the checker implements until decided:
 

@@ -782,7 +782,7 @@ def dItem (info : Info) (u : CompUnit) : Syntax.Item → M CompUnit
   | .type s n ty => do
     let d : TypeDecl := { span := s, name := n, ty := ← dTy { info } ty }
     return { u with types := u.types ++ [d] }
-  | .map s n mt => do
+  | .map s n mt access init => do
     let c : Ctx := { info }
     let kind ← match mt with
       | .array _ e v => pure (MapKind.array (← dExpr c e) (← dTy c v))
@@ -791,7 +791,10 @@ def dItem (info : Info) (u : CompUnit) : Syntax.Item → M CompUnit
       | .hash _ e k v =>
         pure (MapKind.hash (← dExpr c e) (← dTy c k) (← dTy c v))
       | .ringbuf _ e => pure (MapKind.ringbuf (← dExpr c e))
-    let d : MapDecl := { span := s, name := n, kind }
+    let init ← match init with
+      | some es => es.mapM (dExpr c)
+      | none => pure []
+    let d : MapDecl := { span := s, name := n, kind, access, init }
     return { u with maps := u.maps ++ [d] }
   | .fn d => do return { u with fns := u.fns ++ [← dFn info d] }
   | .contract k => do
@@ -810,7 +813,7 @@ def desugar (pre : Interface) (u : Syntax.CompUnit) : CompUnit :=
         | .type _ n _ => some n
         | _ => none,
       maps := u.items.filterMap fun
-        | .map _ n mt => some (n, mt)
+        | .map _ n mt _ _ => some (n, mt)
         | _ => none,
       fns := u.items.filterMap fun
         | .fn d => some d

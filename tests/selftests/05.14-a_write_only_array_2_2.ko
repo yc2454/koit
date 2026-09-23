@@ -1,0 +1,13 @@
+// expect: is in the write-only map
+// selftest: progs/verifier_array_access.c a_write_only_array_2_2 (T0899; T0898 a_write_only_array_1_2; rule 05.14, master fe2ec83)
+// A read from the value of a map created with BPF_F_WRONLY_PROG. The
+// map is declared write-only; its values may be stored to and never
+// read.
+map tab : array[4] of { v: u32 } writeonly
+map out : array[1] of { v: u32 }
+
+program p : tc {
+  let i = ctx.mark
+  if i < 4 { out[0].v = tab[i].v }
+  pass
+}

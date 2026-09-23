@@ -49,6 +49,11 @@ structure FState where
   to each jumps to. -/
   constructs : List Label := []
   objects    : List FrameObj := []
+  /-- The unit's `printk` formats so far, each kernel format at its
+  offset in the read-only data, and the bytes; shared across the
+  programs of a unit. -/
+  formats    : List (String × Nat) := []
+  fmtBytes   : List UInt8 := []
   /-- The next free offset from the frame's top, negative. -/
   top        : Int := 0
   handlers   : List (Kind × Label) := []
@@ -486,26 +491,25 @@ def kernelFormat (fmt : String) (tys : List LIR.Ty) : String :=
     | s :: rest, [] => s ++ "{}" ++ go rest []
   go parts tys
 
-/-- The bytes of the kernel's format stored into a fresh frame object
-at the call site, four at a time, so that the allocation can pass
-its location; the object's name and the format's size. -/
-def formatObject (fmt : String) (tys : List LIR.Ty) : FM (String × Nat) := do
-  let bytes := (kernelFormat fmt tys).toUTF8.toList ++ [0]
-  let size := bytes.length
+/-- The name of the unit's read-only data map holding the formats. -/
+def formatMap : String := "__fmt"
+
+/-- The kernel's format in the unit's read-only data: its bytes are
+appended once, and the call receives a `mapval` at its offset in a
+temporary; the temporary and the format's size. -/
+def formatRef (fmt : String) (tys : List LIR.Ty) : FM (VReg × Nat) := do
+  let kfmt := kernelFormat fmt tys
+  let bytes := kfmt.toUTF8.toList ++ [0]
   let s ← get
-  let name := s!"fmt_{s.objects.length}"
-  let osize := roundUp8 size
-  let base := s.top - osize
-  let obj : FrameObj := { name, size, base }
-  set { s with objects := s.objects ++ [obj], top := base }
+  let off ← match s.formats.lookup kfmt with
+    | some off => pure off
+    | none =>
+      let off := s.fmtBytes.length
+      set { s with formats := s.formats ++ [(kfmt, off)], fmtBytes := s.fmtBytes ++ bytes }
+      pure off
   let t ← temp .location
-  emit (.lea t name)
-  for i in [0:osize / 4] do
-    let chunk := ((bytes.drop (4 * i)).take 4) ++ List.replicate 4 0
-    let pat := Machine.ofLe (chunk.take 4)
-    let imm : Int := if pat ≥ 2 ^ 31 then (pat : Int) - 2 ^ 32 else pat
-    emit (.stx 32 t (4 * i) (.imm imm))
-  return (name, size)
+  emit (.mapval t formatMap off)
+  return (t, bytes.length)
 
 /-- The label of the handler of a kind. -/
 def handlerLabel (k : Kind) : FM Label := do
@@ -643,8 +647,8 @@ partial def builtin (x : Option String) (b : LIR.Builtin) (args : List LIR.Expr)
   | .printk fmt, vs =>
     let regs ← argRegs
     let tys ← vs.mapM typeOf
-    let (obj, size) ← formatObject fmt tys
-    emit (.call (.builtin (.printk fmt vs.length obj size)) regs none)
+    let (t, size) ← formatRef fmt tys
+    emit (.call (.builtin (.printk fmt vs.length size)) (t :: regs) none)
   | .atomic op s w fetch, a :: vs =>
     let (ba, oa) ← addrOf a
     let cls := clsOf w
@@ -693,7 +697,8 @@ def fallOffVerdict (kind : KindDecl) : Nat :=
   else 0
 
 /-- One LIR program flattened. -/
-def flattenProgram (pre : Interface) (cpu : Cpu) (p : LIR.Program) : Except String BIR := do
+def flattenProgram (pre : Interface) (cpu : Cpu) (fmts : List (String × Nat) × List UInt8)
+    (p : LIR.Program) : Except String (BIR × (List (String × Nat) × List UInt8)) := do
   let some kind := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
   let translate : FM Unit := do
     let exitLabel ← newLabel
@@ -715,19 +720,39 @@ def flattenProgram (pre : Interface) (cpu : Cpu) (p : LIR.Program) : Except Stri
       emit (.ja exitLabel)
     place exitLabel
     emit .exit
-  let init : FState := { cpu, kind, pre }
+  let init : FState := { cpu, kind, pre, formats := fmts.1, fmtBytes := fmts.2 }
   let ((), s) ← translate.run init |>.mapError (s!"in `{p.name}`: " ++ ·)
   let objBytes := (-s.top).toNat
   if objBytes > BPF.Frame.size then
     throw s!"the frame of `{p.name}` holds {objBytes} bytes of objects, above {BPF.Frame.size}"
-  return { name := p.name, kind := p.kind, code := s.code, labels := s.labels,
-           objects := s.objects,
-           regs := s.classes.reverse.map fun (n, c) => (VReg.v n, c), cpu }
+  return ({ name := p.name, kind := p.kind, code := s.code, labels := s.labels,
+            objects := s.objects,
+            regs := s.classes.reverse.map fun (n, c) => (VReg.v n, c), cpu },
+          (s.formats, s.fmtBytes))
 
-/-- Pass C on a closed LIR unit: one BIR program per program. -/
-def flatten (pre : Interface) (cpu : Cpu) (u : LIR.CompUnit) : Except String (List BIR) := do
+/-- The unit's read-only data map for its formats: `array[1]` of the
+bytes, read-only, reached by direct value access; none when no
+program prints. -/
+def formatMapDecl (bytes : List UInt8) : Option Core.MapDecl :=
+  if bytes.isEmpty then none else
+  let sp := Interface.noSpan
+  let n := bytes.length
+  some { span := sp, name := formatMap,
+         kind := .array (.lit sp 1 "1") (.array sp (.int sp false 8) (.lit sp n (toString n))),
+         access := .ro, bytes }
+
+/-- Pass C on a closed LIR unit: one BIR program per program, and the
+read-only data map holding every `printk` format of the unit. -/
+def flatten (pre : Interface) (cpu : Cpu) (u : LIR.CompUnit) :
+    Except String (List BIR × Option Core.MapDecl) := do
   unless u.fns.isEmpty do throw "the flattening takes closed LIR; inline first"
-  u.programs.mapM (flattenProgram pre cpu)
+  let mut birs : List BIR := []
+  let mut fmts : List (String × Nat) × List UInt8 := ([], [])
+  for p in u.programs do
+    let (B, f) ← flattenProgram pre cpu fmts p
+    birs := birs ++ [B]
+    fmts := f
+  return (birs, formatMapDecl fmts.2)
 
 /-- The machine's environment for a BIR program: the interface, the
 kind's declaration, BIR's convention, and the checker's layout for the sizes

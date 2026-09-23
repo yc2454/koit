@@ -179,7 +179,11 @@ def ctxType (pre : Interface) (kind : String) : String :=
 /-- A C type of the kernel's prototypes as the shim spells it: every
 pointer is `void *`, since the emitted C never dereferences one. -/
 def kernelCTy (t : String) : String :=
-  if (t.splitOn "*").length > 1 then "void *" else t
+  if (t.splitOn "*").length > 1 then
+    -- a pointer to constant bytes stays constant, so that a string
+    -- literal passes without a cast
+    if (t.splitOn "const").length > 1 then "const void *" else "void *"
+  else t
 
 /-- The C call of a kernel function declaration, from its correspondence in
 the kind: the kernel's arguments laid out from koit's, the context,
@@ -510,7 +514,11 @@ def cprogram (pre : Interface) (u : LIR.CompUnit) (p : LIR.Program) : PM String 
   for h in p.handlers do
     let (hb, _) ← cstmts c 8 h.body
     handlers := handlers ++ [s!"handler_{h.kind.spelling}: \{"] ++ hb ++ ["    }"]
-  let dispatch := ["handler_dispatch:", "    switch (koit_kind) {"] ++
+  -- the dispatch exists only where a failure reaches it, so that the
+  -- label is never unused
+  let reached := (body ++ handlers).any fun l => (l.splitOn "goto handler_dispatch").length > 1
+  let dispatch := if !reached then [] else
+    ["handler_dispatch:", "    switch (koit_kind) {"] ++
     (Kind.all.map fun k => s!"    case {kindIndex k}: goto handler_{k.spelling};") ++
     ["    }", s!"    return {dv};"]
   let _ := hasPkt

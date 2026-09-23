@@ -617,7 +617,17 @@ def initMaps (env : Env) (u : CompUnit) :
       | none => .error s!"the capacity of `{d.name}` is not constant"
     let m ← match d.kind with
       | .array n v | .percpu n v =>
-        pure { decl := d, valueTy := v, valueSize := ← lay v, capacity := ← cap n }
+        let size ← lay v
+        -- the initializer's constants as the entries' bytes
+        let mut slots : List (Nat × ByteArray) := []
+        for h : i in [0:d.init.length] do
+          match env.evalConst d.init[i] with
+          | some x =>
+            slots := slots ++ [(i, ByteArray.mk (Machine.leBytes (Machine.toNatMod x (8 * size)) size).toArray)]
+          | none => throw s!"the initializer of `{d.name}` is not constant"
+        -- the compiler's bytes fill the one entry of a data map
+        if !d.bytes.isEmpty then slots := [(0, ByteArray.mk d.bytes.toArray)]
+        pure { decl := d, valueTy := v, valueSize := size, capacity := ← cap n, slots }
       | .hash n k v =>
         pure { decl := d, valueTy := v, valueSize := ← lay v, keyTy := some k,
                keySize := ← lay k, capacity := ← cap n }
@@ -674,7 +684,8 @@ partial def printBytes (env : Env) (t : Ty) (bs : List UInt8) (fuel : Nat := 32)
 /-- The map state, one line per map: the slots or entries that are
 not all zero, or a note that none is. -/
 def printMaps (env : Env) (maps : List (String × Machine.MapState)) : List String :=
-  maps.map fun (name, ms) =>
+  -- the compiler's own data map, the formats, is not the program's
+  (maps.filter (·.2.decl.bytes.isEmpty)).map fun (name, ms) =>
     match ms.decl.kind with
     | .ringbuf _ =>
       s!"map {name}: {ms.ring.length} record(s)" ++

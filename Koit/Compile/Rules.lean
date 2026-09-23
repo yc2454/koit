@@ -178,8 +178,8 @@ state agreeing. `R_C`, the relation the induction carries, holds the
 locals in scope in their registers in normal form and LIR's stack
 regions in the frame at the objects' bases. -/
 theorem flatten_correct (pre : Interface) (cpu : BPF.Cpu) (P : LIR.Program) (B : BPF.BIR)
-    (K : Kernel) :
-    flattenProgram pre cpu P = .ok B →
+    (K : Kernel) (fmts fmts' : List (String × Nat) × List UInt8) :
+    flattenProgram pre cpu fmts P = .ok (B, fmts') →
     ∀ st v st', LIR.Sem.ExecProgram K [] st P (.halt v) st' →
       ∀ X, birEnv pre st.env B = .ok X →
         ∃ m, BPF.Star X K (BPF.load X st.machine (ctxValues st)) m ∧

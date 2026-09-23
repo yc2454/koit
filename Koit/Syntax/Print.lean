@@ -265,7 +265,11 @@ def Item.print : Item → String
   | .config _ n t (some v) =>
     "config " ++ n ++ " : " ++ t.print ++ " = " ++ v.print
   | .type _ n t => "type " ++ n ++ " = " ++ t.print
-  | .map _ n mt => "map " ++ n ++ " : " ++ mt.print
+  | .map _ n mt access init =>
+    "map " ++ n ++ " : " ++ mt.print ++ access.print ++
+      (match init with
+       | some es => " = [" ++ ", ".intercalate (es.map (Expr.print ·)) ++ "]"
+       | none => "")
   | .fn d => d.print
   | .contract c => c.print
   | .program p => p.print

@@ -170,6 +170,8 @@ def map_definition(btf, types, m):
         add("key", btf.of_type(types, m["key"], m["key"].get("name")))
         add("value", btf.of_type(types, m["value"], m["value"].get("name")))
     add("max_entries", btf.array(u32, m["entries"]))
+    if m.get("flags"):
+        add("map_flags", btf.array(u32, m["flags"]))
     return btf.struct("", off, members), off
 
 
@@ -199,39 +201,64 @@ def write(unit):
     if ksyms:
         btf.datasec(".ksyms", 0, [(f, 0, 0) for f in ksyms])
 
-    # .maps: the declared maps, and .bss: the direct ones
+    # .maps: the declared maps; the direct ones are global data, in
+    # `.rodata` when read-only, `.data` when initialized, `.bss` otherwise,
+    # which libbpf turns into one map each with the flags of the section
     declared = [m for m in unit.maps if not m["direct"]]
     direct = [m for m in unit.maps if m["direct"]]
     maps_data = bytearray()
     maps_vars = []
     for m in declared:
+        if m.get("data"):
+            raise SystemExit(f"elf: {unit.name}: map {m['name']} has an initializer but is not "
+                             "global data; libbpf cannot fill it from the object, the koit loader can")
         tid, size = map_definition(btf, unit.types, m)
         var = btf.var(m["name"], tid)
         maps_vars.append((var, len(maps_data), size, m["name"]))
         maps_data += bytes(size)
-    bss_vars = []
-    bss_size = 0
-    for m in direct:
-        align = max(unit.types.align(m["value"]), 8)
-        bss_size = (bss_size + align - 1) // align * align
-        tid = btf.of_type(unit.types, m["value"], m["value"].get("name"))
-        var = btf.var(m["name"], tid)
-        bss_vars.append((var, bss_size, m["value_size"], m["name"]))
-        bss_size += m["value_size"] * m["entries"]
     if maps_vars:
         btf.datasec(".maps", len(maps_data), [(v, off, sz) for v, off, sz, _ in maps_vars])
-    if bss_vars:
-        btf.datasec(".bss", bss_size, [(v, off, sz) for v, off, sz, _ in bss_vars])
 
     map_symbol = {}
     if maps_vars:
         idx = elf.section(".maps", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, bytes(maps_data), align=8)
         for _, off, size, name in maps_vars:
             map_symbol[name] = elf.symbol(name, off, size, STB_GLOBAL, STT_OBJECT, idx)
-    if bss_vars:
-        idx = elf.section(".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE, bytes(bss_size), align=8)
-        for _, off, size, name in bss_vars:
-            map_symbol[name] = elf.symbol(name, off, size, STB_GLOBAL, STT_OBJECT, idx)
+
+    def data_section(name, members, flags, nobits):
+        """One global-data section: its variables laid out in order, the
+        BTF data section naming them, and a symbol each."""
+        if not members:
+            return
+        blob = bytearray()
+        vars_ = []
+        for m in members:
+            align = max(unit.types.align(m["value"]), 8)
+            while len(blob) % align:
+                blob += b"\0"
+            tid = btf.of_type(unit.types, m["value"], m["value"].get("name"))
+            var = btf.var(m["name"], tid)
+            size = m["value_size"] * m["entries"]
+            contents = bytes.fromhex(m["data"]) if m.get("data") else b""
+            if len(contents) > size:
+                raise SystemExit(f"elf: {unit.name}: map {m['name']} has {len(contents)} bytes of "
+                                 f"contents for {size}")
+            vars_.append((var, len(blob), size, m["name"]))
+            blob += contents + bytes(size - len(contents))
+        btf.datasec(name, len(blob), [(v, off, sz) for v, off, sz, _ in vars_])
+        idx = elf.section(name, SHT_NOBITS if nobits else SHT_PROGBITS, flags, bytes(blob), align=8)
+        for _, off, size, mname in vars_:
+            map_symbol[mname] = elf.symbol(mname, off, size, STB_GLOBAL, STT_OBJECT, idx)
+
+    for m in direct:
+        if m.get("access") == "wo":
+            raise SystemExit(f"elf: {unit.name}: map {m['name']} is write-only global data, which "
+                             "no section expresses; give it more than one entry")
+    data_section(".rodata", [m for m in direct if m.get("access") == "ro"], SHF_ALLOC, False)
+    data_section(".data", [m for m in direct if m.get("access") != "ro" and m.get("data")],
+                 SHF_ALLOC | SHF_WRITE, False)
+    data_section(".bss", [m for m in direct if m.get("access") != "ro" and not m.get("data")],
+                 SHF_ALLOC | SHF_WRITE, True)
 
     # the programs, by section
     by_section = {}

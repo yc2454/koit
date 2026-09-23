@@ -18,10 +18,17 @@ open Koit.BPF (Cpu Reg BIR Bytecode)
 /-- Every level of a compiled unit. -/
 structure Compiled where
   lir       : LIR.CompUnit
+  /-- The read-only data map of the unit's formats, when it prints. -/
+  fmtMap    : Option Core.MapDecl
   birs      : List BIR
   allocated : List Allocated
   objects   : List Object
   deriving Inhabited
+
+/-- The unit with the formats' map among its maps, for the machine
+and the object. -/
+def withFormats (core : Core.CompUnit) (fmtMap : Option Core.MapDecl) : Core.CompUnit :=
+  { core with maps := core.maps ++ fmtMap.toList }
 
 /-- The checker's environment of a unit, for the layouts the machine
 and the allocation ask. -/
@@ -41,11 +48,11 @@ def compile (pre : Interface) (cpu : Cpu) (core : Core.CompUnit) (checked : Chec
   let lir ← lower pre (fold pre core checked)
   let lir := inline lir
   LIR.wf pre lir |>.mapError (s!"the lowered unit is not well-formed: " ++ ·)
-  let birs ← flatten pre cpu lir
-  let env := envOf pre core
+  let (birs, fmtMap) ← flatten pre cpu lir
+  let env := envOf pre (withFormats core fmtMap)
   let allocated ← allocateAll pre (sizeOfIn env) birs
   let objects ← allocated.mapM fun a => encode pre a.prog
-  return { lir, birs, allocated, objects }
+  return { lir, fmtMap, birs, allocated, objects }
 
 /-- The machine's environment for a compiled program's bytecode. -/
 def Compiled.envFor (C : Compiled) (pre : Interface) (env : Check.Env) (name : String) :

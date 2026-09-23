@@ -159,9 +159,10 @@ def expandCall (h : BPF.Callee) (abi : List AbiArg) (args : List VReg) (dst : Op
       let some n := (← read).sizeOf pointee | throw s!"no layout for `{pointee.print}`"
       loads := loads ++ constant target n
     | .fmt =>
-      match h with
-      | .builtin (.printk _ _ obj _) => loads := loads ++ (← objectInto target obj)
-      | _ => throw s!"`{h.print}`: the layout names a format"
+      -- the format's location, the call's first operand, a `mapval`
+      -- into the unit's read-only data
+      let some v := args[0]? | throw s!"`{h.print}`: the layout names a format"
+      loads := loads ++ (← fetchInto v target)
   let store ← match dst with
     | some d => spill d r0
     | none => pure []

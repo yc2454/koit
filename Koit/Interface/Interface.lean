@@ -26,7 +26,7 @@ def builtinLayouts : List (String × List AbiArg) := [
   ("ringbuf_discard", Builtin.discard.abi),
   ("spin_lock", Builtin.lock.abi),
   ("spin_unlock", Builtin.unlock.abi),
-  ("trace_printk", (Builtin.printk "" 0 "" 0).abi)
+  ("trace_printk", (Builtin.printk "" 0 0).abi)
 ]
 
 /-- The join of one tag, or the disagreements as an error. -/

@@ -58,6 +58,11 @@ structure Env where
 
 namespace Env
 
+/-- What the program may do with a map: its access word, read-write
+for an unknown name. -/
+def mapAccess (env : Env) (m : String) : MapAccess :=
+  ((env.maps.find? (·.name == m)).map (·.access)).getD .rw
+
 def type? (env : Env) (n : String) : Option TypeDecl :=
   -- `verdict` is the alias for the enclosing program's kind's verdict
   -- type; a function has no kind and names the declaration instead.

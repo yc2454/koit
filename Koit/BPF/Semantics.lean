@@ -385,10 +385,12 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     innermost m r none
     let ((), st') ← machineOp st (Machine.leave r)
     return (none, st')
-  | .printk fmt n _ _, vs =>
-    unless vs.length == n do throw (.badArgument name s!"{n} arguments expected")
+  | .printk fmt n _, vs =>
+    -- the first operand locates the format's bytes; the trace records
+    -- the format itself
+    unless vs.length == n + 1 do throw (.badArgument name s!"{n + 1} arguments expected")
     let mut ws : List Machine.Val := []
-    for v in vs do
+    for v in vs.drop 1 do
       match v with
       | .scalar x => ws := ws ++ [.scalar x]
       | v => throw (.badArgument name s!"`printk` takes scalars, not {v.print}")
@@ -479,11 +481,13 @@ def argsByLayout (X : Env ρ τ) (m : State ρ) (h : Callee) (abi : List Interfa
     let v ← reg X m r
     match a with
     | .arg i => found := found ++ [(i, v)]
+    -- the format's location is the call's first operand
+    | .fmt => found := found ++ [(0, v)]
     | .ctx =>
       match v with
       | .loc .ctx _ _ => pure ()
       | v => throw (.badArgument h.print s!"the context expected, not {v.print}")
-    | .const _ | .argSize _ | .fmt => pure ()
+    | .const _ | .argSize _ => pure ()
   let n := found.length
   (List.range n).mapM fun i =>
     match found.lookup i with

@@ -391,6 +391,14 @@ structure MapDecl where
   span : Span
   name : String
   kind : MapKind
+  /-- Read and write, read-only, or write-only for the program. -/
+  access : MapAccess := .rw
+  /-- The contents the object holds, one constant per entry of an
+  `array[n]` map; empty for a zero-filled map. -/
+  init : List Expr := []
+  /-- Contents the compiler supplies, the unit's `printk` formats;
+  the source never writes these. -/
+  bytes : List UInt8 := []
   deriving Repr, Inhabited
 
 /-- `const x = e` takes its type from each use when `ty` is absent,

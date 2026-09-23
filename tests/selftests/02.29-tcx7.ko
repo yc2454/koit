@@ -1,0 +1,13 @@
+// expect: is in the read-only map
+// selftest: progs/verifier_const.c tcx7 (T1203, rule 02.29; T1197 tcx1, T1200 tcx4 write through a helper's output argument; master fe2ec83)
+// A store into a read-only global, libbpf's `.rodata` for a `const
+// volatile`: "write into map forbidden". The map is declared read-only
+// and its places are immutable, so the store is a type error naming
+// the map; a helper writing through an output argument into it is
+// the same error at the argument. tc/ingress, written as tc.
+map cfg : array[1] of { mark: u32 } readonly
+
+program p : tc {
+  cfg[0].mark = ctx.mark
+  pass
+}

@@ -79,7 +79,7 @@ def Koit.Syntax.Item.summary : Item → String
   | .const _ n .. => s!"const {n}"
   | .config _ n .. => s!"config {n}"
   | .type _ n _ => s!"type {n}"
-  | .map _ n _ => s!"map {n}"
+  | .map _ n _ _ _ => s!"map {n}"
   | .fn d => s!"fn {d.name}"
   | .contract c => s!"contract {c.name} : {c.kind}"
   | .program p => s!"program {p.name} : {p.kind}"
@@ -182,30 +182,31 @@ def lowerUnit (pre : Interface) (core : Core.CompUnit) (checked : Check.Checked)
 /-- A checked unit flattened: passes A, B, I, and C, with the
 machine's environment for each program. -/
 def flattenUnit (pre : Interface) (core : Core.CompUnit) (checked : Check.Checked)
-    (cpu : BPF.Cpu) : Except String (List (BPF.Env BPF.VReg BPF.Label)) := do
+    (cpu : BPF.Cpu) : Except String (List (BPF.Env BPF.VReg BPF.Label) × Core.CompUnit) := do
   let lir ← lowerUnit pre core checked true
-  let birs ← Compile.flatten pre cpu lir
-  let env : Check.Env := { interface := pre, license := core.license.map (·.2),
-                           types := core.types, consts := core.consts,
-                           configs := core.configs, maps := core.maps, fns := core.fns,
-                           contracts := core.contracts }
-  birs.mapM fun B => do
+  let (birs, fmtMap) ← Compile.flatten pre cpu lir
+  let core := Compile.withFormats core fmtMap
+  let env := Compile.envOf pre core
+  let Xs ← birs.mapM fun B => do
     let X ← Compile.birEnv pre env B
     BPF.wf X |>.mapError (s!"the flattened `{B.name}` is not well-formed: " ++ ·)
     return X
+  return (Xs, core)
 
 /-- A checked unit allocated: pass D on the flattened unit, with the
 machine's environment for each program. -/
 def allocUnit (pre : Interface) (core : Core.CompUnit) (checked : Check.Checked)
-    (cpu : BPF.Cpu) : Except String (List (BPF.Env BPF.Reg Int)) := do
+    (cpu : BPF.Cpu) : Except String (List (BPF.Env BPF.Reg Int) × Core.CompUnit) := do
   let lir ← lowerUnit pre core checked true
-  let birs ← Compile.flatten pre cpu lir
+  let (birs, fmtMap) ← Compile.flatten pre cpu lir
+  let core := Compile.withFormats core fmtMap
   let env := Compile.envOf pre core
   let allocated ← Compile.allocateAll pre (Compile.sizeOfIn env) birs
-  allocated.mapM fun a => do
+  let Xs ← allocated.mapM fun a => do
     let X ← Compile.bytecodeEnv pre env a.prog
     BPF.wf X |>.mapError (s!"the allocated `{a.prog.name}` is not well-formed: " ++ ·)
     return X
+  return (Xs, core)
 
 /-- A position as JSON: the line and column a diagnostic names, and
 the byte offset, so that a reader slices the source without counting
@@ -328,11 +329,11 @@ def run (args : List String) : IO UInt32 := do
     let some (core, checked) ← checkFile file pre | return 1
     let result ← if opts.bytecode then
         match allocUnit pre core checked opts.cpu with
-        | .ok progs => pure (BPF.runUnit pre core progs opts.packet opts.ctx opts.program opts.fuel)
+        | .ok (progs, core) => pure (BPF.runUnit pre core progs opts.packet opts.ctx opts.program opts.fuel)
         | .error m => pure (.error m)
       else if opts.bir then
         match flattenUnit pre core checked opts.cpu with
-        | .ok progs => pure (BPF.runUnit pre core progs opts.packet opts.ctx opts.program opts.fuel)
+        | .ok (progs, core) => pure (BPF.runUnit pre core progs opts.packet opts.ctx opts.program opts.fuel)
         | .error m => pure (.error m)
       else if opts.lir then
         match lowerUnit pre core checked opts.inline with
@@ -364,7 +365,7 @@ def run (args : List String) : IO UInt32 := do
     let some (core, checked) ← checkFile file pre | return 1
     if bytecode then
       match allocUnit pre core checked .v3 with
-      | .ok progs =>
+      | .ok (progs, _) =>
         for X in progs do IO.print (BPF.Bytecode.print X.prog)
         return 0
       | .error m =>
@@ -372,7 +373,7 @@ def run (args : List String) : IO UInt32 := do
         return 1
     if bir then
       match flattenUnit pre core checked .v3 with
-      | .ok progs =>
+      | .ok (progs, _) =>
         for X in progs do IO.print (BPF.BIR.print X.prog)
         return 0
       | .error m =>

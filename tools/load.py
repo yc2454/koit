@@ -35,6 +35,8 @@ import koitobj  # noqa: E402
 BPF_MAP_CREATE = 0
 BPF_MAP_LOOKUP_ELEM = 1
 BPF_MAP_GET_NEXT_KEY = 4
+BPF_MAP_UPDATE_ELEM = 2
+BPF_MAP_FREEZE = 22
 BPF_PROG_LOAD = 5
 BPF_PROG_TEST_RUN = 10
 BPF_BTF_LOAD = 18
@@ -154,6 +156,20 @@ def create_map(unit, m, log_dir):
     entries = m["entries"]
     fd, _ = bpf(BPF_MAP_CREATE, attr_map_create(m["type_id"], m["key_size"], m["value_size"], entries,
                                                 m["flags"], m["name"], btf_fd, key_id, value_id))
+    # the contents the object holds, entry by entry, then the freeze
+    # that makes a read-only map's contents final, as libbpf does
+    if m.get("data"):
+        contents = bytes.fromhex(m["data"])
+        vs = m["value_size"]
+        for i in range(entries):
+            chunk = contents[i * vs:(i + 1) * vs]
+            if not chunk:
+                break
+            kb = ctypes.create_string_buffer(struct.pack("<I", i), 4)
+            vb = ctypes.create_string_buffer(chunk + bytes(vs - len(chunk)), vs)
+            bpf(BPF_MAP_UPDATE_ELEM, attr_map_elem(fd, kb, vb))
+    if m.get("access") == "ro":
+        bpf(BPF_MAP_FREEZE, struct.pack("<I", fd))
     return fd
 
 

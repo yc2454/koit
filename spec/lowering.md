@@ -392,8 +392,9 @@ its operands from their slots into `r1` to `r3`, the instruction on
 those registers, and a store of the result to its slot; a `call`
 lays its registers out by the declaration's implementation clause, koit's
 operands at their positions from their slots, the context from
-`r6`, constants and sizes as immediates, a `printk` format as `lea`
-of its frame object and its size, then calls and stores `r0`; a
+`r6`, constants and sizes as immediates, a `printk` format as
+`mapval` into the unit's read-only data and its size, then calls and
+stores `r0`; a
 call of an inline declaration becomes the kernel's own sequence of `bir.md`
 section 7 in place of the call; `lea` becomes `mov r1, r10; add r1,
 off`. Labels become instruction offsets. If the slots and objects
@@ -669,8 +670,8 @@ host with the kernel, and never builds Lean there.
    kernel's sequences under a lemma per declaration; the encoder produces
    the object, words with relocations and notes, and `encode_decode`
    is stated on it (entry 38).
-7b. `printk` formats are frame objects the flattening fills at the
-   call site, until the ELF writer's read-only data (entry 37).
+7b. `printk` formats live in the unit's read-only data map, one
+   `mapval` per call (entries 37 and 52).
 8. Lemma L's syntactic part is a property of the translations and a
    runner check; its semantic part stays P9's conjecture.
 9. Every level has an interpreter and the runner compares adjacent

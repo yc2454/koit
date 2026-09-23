@@ -53,3 +53,20 @@ instance : ToString Span := ⟨fun s => toString s.start⟩
 end Span
 
 end Koit
+
+namespace Koit
+
+/-- What a program may do with a map: read and write, only read
+(`readonly`, the kernel's `BPF_F_RDONLY_PROG`), or only write
+(`writeonly`, `BPF_F_WRONLY_PROG`). -/
+inductive MapAccess where
+  | rw | ro | wo
+  deriving Repr, BEq, DecidableEq, Inhabited
+
+def MapAccess.print : MapAccess → String
+  | .rw => "" | .ro => " readonly" | .wo => " writeonly"
+
+def MapAccess.flags : MapAccess → Nat
+  | .rw => 0 | .ro => 1 <<< 7 | .wo => 1 <<< 8
+
+end Koit

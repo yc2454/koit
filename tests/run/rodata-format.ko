@@ -1,0 +1,19 @@
+// run:
+// p: printk: n = 7
+// p: PASS
+// map c:
+//   [0] = { n: 7 }
+// map cfg:
+//   [0] = 7
+
+// A read-only global with its contents in the object, read into a
+// counter, and a format printed from the unit's read-only data: the
+// object holds both in `.rodata`, and the loader freezes the map.
+license "GPL"
+map c : array[1] of { n: u64 }
+map cfg : array[1] of u32 readonly = [7]
+program p : xdp {
+  c[0].n = c[0].n + (cfg[0] as u64)
+  printk("n = {}", c[0].n)
+  pass
+}

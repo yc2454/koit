@@ -1,0 +1,11 @@
+// expect: is in the read-only map
+// selftest: progs/verifier_array_access.c a_read_only_array_2_2 (T0895; T0894 a_read_only_array_1_2, socket kind; rule 05.14, master fe2ec83)
+// A store into the value of a map created with BPF_F_RDONLY_PROG. The
+// map is declared read-only; its values are immutable places.
+map tab : array[4] of { v: u32 } readonly
+
+program p : tc {
+  let i = ctx.mark
+  if i < 4 { tab[i].v = 1 }
+  pass
+}
