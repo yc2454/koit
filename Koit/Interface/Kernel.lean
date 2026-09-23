@@ -146,4 +146,9 @@ def Side.kfuncsFor (k : Side) (pt : String) : List Kfunc :=
 def Side.kfunc? (k : Side) (name : String) : Option Kfunc :=
   k.kfuncs.find? (·.name == name)
 
+/-- Whether any kfunc of the tag carries the flag, which says the
+kernel has it at all. -/
+def Side.hasFlag (k : Side) (flag : String) : Bool :=
+  k.kfuncs.any (·.flags.contains flag)
+
 end Koit.Interface.Kernel

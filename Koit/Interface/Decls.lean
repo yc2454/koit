@@ -145,6 +145,13 @@ structure CallDecl where
   `insert`, `delete`, and the atomics are those of their place or map
   argument and are computed at the call. -/
   effects : List Effect
+  /-- Whether the kernel admits the call while a spin lock is held:
+  `bpf_spin_unlock`, `bpf_kptr_xchg`, and the kfuncs the verifier
+  lists, `KF_SPINLOCK_SAFE` where the kernel has the flag. -/
+  lockSafe : Bool := false
+  /-- The resources that must be held where the call runs, as the
+  kernel requires an RCU section around `KF_RCU_PROTECTED` kfuncs. -/
+  requires : List Resource := []
   /-- The failure kind when the call is fallible. -/
   fails : Option Kind
   /-- The resource the result must be bound to with `hold`. -/
@@ -211,6 +218,11 @@ structure ResourceDecl where
   /-- Effects forbidden while held; `sleep` is forbidden under every
   declaration. -/
   forbidden : List Effect
+  /-- Whether the kernel admits the acquisition while a spin lock is
+  held. -/
+  lockSafe : Bool := false
+  /-- The resources that must be held where the acquisition runs. -/
+  requires : List Resource := []
   /-- Whether another instance of the same resource may be held. -/
   nesting : Nesting
   guards : String
@@ -429,6 +441,10 @@ structure CallSpec where
   note     : String := ""
   link     : Link := .inline
   linkByKind : List (String × Link) := []
+  /-- The two clauses the kernel marks with a flag where it has one:
+  admitted under a spin lock, and the resources it requires held. -/
+  lockSafe : Bool := false
+  requires : List Resource := []
   deriving Repr, Inhabited
 
 /-- A constant by the kernel's name for its value, byte-swapped when

@@ -877,7 +877,8 @@ def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
     return R
   match env.interface.call? f with
   | some decl =>
-    let mut R := Effs.ofCore decl.effects
+    let mut R := (Effs.ofCore decl.effects decl.lockSafe).addAll
+      (decl.requires.map fun r => .needs r.name)
     match f, args with
     | "copy", .place dst :: _ | "fill", .place dst :: _ =>
       R := R.union (← writesOf env K dst)
@@ -885,7 +886,15 @@ def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
       R := R.add (.map m)
     | _, _ => pure ()
     return R
-  | none => return {}
+  | none =>
+    -- an acquisition by scope or by a place, `rcu` or `lock(p)`, is
+    -- the call of the kernel function behind its declaration
+    match env.interface.resources.find? fun d =>
+        d.arg != .call && d.acquirers.contains f with
+    | some d =>
+      return (Effs.ofList [if d.lockSafe then .callSafe else .call]).addAll
+        (d.requires.map fun r => .needs r.name)
+    | none => return {}
 
 def effectsOfCalls (env : Env) (K : Ctx) (calls : List (String × List Arg)) :
     M Effs := do
@@ -940,6 +949,41 @@ def checkHeld (env : Env) (K : Ctx) (span : Span) (E : Effs) : M Unit := do
       unless decl.sleep do
         err span s!"a sleeping call is not permitted in {article decl.name} \
           `{decl.name}` program"
+
+/-- Whether a required resource is held. A required RCU section is
+satisfied the way the kernel tests it: by an RCU section, a spin
+lock, a preempt-off or IRQ-off section in the held set, or a program
+kind that cannot sleep. -/
+def needSatisfied (env : Env) (K : Ctx) (res : String) : Bool :=
+  let heldAny (names : List String) := names.any fun n => (K.held.holds ⟨n⟩).isSome
+  if res == "rcu" then
+    heldAny ["rcu", "spinlock", "preempt", "irq"] ||
+      (match env.kind with | some row => !row.sleep | none => false)
+  else heldAny [res]
+
+/-- The demands of a statement's calls against the held set: a demand
+met here is discharged; one not met is an error in a program body,
+and in a function body it stays in the effect set, a demand on the
+function's callers. -/
+def resolveNeeds (env : Env) (K : Ctx) (span : Span) (E : Effs) : M Effs := do
+  let mut R : Effs := {}
+  for e in E.effs do
+    match e with
+    | .needs r =>
+      if needSatisfied env K r then pure ()
+      else if K.fnName.isSome then R := R.add e
+      else
+        let what := match env.interface.resource? ⟨r⟩ with
+          | some d => d.describe
+          | none => r
+        let how := match env.interface.resource? ⟨r⟩ with
+          | some d => match d.acquirers with
+            | a :: _ => s!"; open one with `hold {a}`"
+            | [] => ""
+          | none => ""
+        err span s!"a call here requires {what} to be held{how}"
+    | e => R := R.add e
+  return R
 
 /-- A resource acquired while an instance of it is held, when its declaration
 does not nest. -/
@@ -1012,6 +1056,7 @@ partial def checkStmt (env : Env) (K : Ctx) (s : Stmt) :
   let E ← stmtEffects env K s
   checkPreserved env K s.span E
   checkHeld env K s.span E
+  let E ← resolveNeeds env K s.span E
   return (env', F', names, E.union Esub)
 
 /-- The typing of one statement, yielding the effects of the blocks

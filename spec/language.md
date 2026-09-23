@@ -894,14 +894,29 @@ Everything after `hold` is a resource declaration, supplied by the kernel
 interface for the kernel version the unit targets; the core knows only
 the clauses. Declarations in this draft:
 
-| resource | acquisition | argument | can fail | normal exit | abnormal exit | forbidden while held | nesting | class | guards |
-|---|---|---|---|---|---|---|---|---|---|
-| spin lock | `lock(p)` | a place of the slot type `spinlock`, in a map value | no | unlock | unlock | `call`, `resize`, `sleep`, another spin lock, calls to separately verified functions | no | | the allocation `p` lies in, for graph nodes moved into it |
-| RCU section | `rcu` | none | no | unlock | unlock | `sleep` | yes, counted | | RCU-protected pointers, in the kernel-memory extension |
-| preempt-off | `preempt_off` | none | no | enable | enable | `sleep` | yes, counted | | |
-| IRQ-off | `irq_off` | none | no | restore | restore | `sleep` | yes, LIFO | native or lock; a flag saved by one class cannot be restored by the other | |
-| ring-buffer record | `rb.reserve<T>()`, yields `own T` | the ring buffer and the record type | yes, `failed_call` | submit | discard | none | yes | | |
-| socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the interface type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `not_found` | release | release | none | yes | | |
+| resource | acquisition | argument | can fail | normal exit | abnormal exit | forbidden while held | nesting | class | guards | lock-safe | requires |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| spin lock | `lock(p)` | a place of the slot type `spinlock`, in a map value | no | unlock | unlock | `call`, `resize`, `sleep`, another spin lock, calls to separately verified functions | no | | the allocation `p` lies in, for graph nodes moved into it | no | none |
+| RCU section | `rcu` | none | no | unlock | unlock | `sleep` | yes, counted | | RCU-protected pointers, in the kernel-memory extension | no | none |
+| preempt-off | `preempt_off` | none | no | enable | enable | `sleep` | yes, counted | | | no | none |
+| IRQ-off | `irq_off` | none | no | restore | restore | `sleep` | yes, LIFO | native or lock; a flag saved by one class cannot be restored by the other | | no | none |
+| ring-buffer record | `rb.reserve<T>()`, yields `own T` | the ring buffer and the record type | yes, `failed_call` | submit | discard | none | yes | | | no | none |
+| socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the interface type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `not_found` | release | release | none | yes | | | no | none |
+
+An acquisition is a call: it has the effects of the kernel function
+that performs it, `call` for the helper or kfunc behind every
+declaration above, and those effects are checked against the held set
+at the `hold` itself (11.4). The last two clauses are empty in this
+draft and exist for the extensions. `lock-safe` says the kernel
+admits the acquisition while a spin lock is held; none above is, and
+the spin lock's own nesting clause already refuses a second lock.
+`requires` names the resources that must be held when the acquisition
+runs, as the kernel demands an RCU section around the constructors it
+marks `KF_RCU_PROTECTED`; what satisfies a required RCU section is
+the kernel's own test: an RCU section, a spin lock, a preempt-off or
+IRQ-off section in the held set, or a program kind whose declaration
+says it cannot sleep. Both clauses are also clauses of a call's
+declaration (section 13).
 
 Declarations the extensions add with no change to the core: resilient locks,
 whose acquisition can fail; kernel iterators, generic over the iterated
@@ -929,10 +944,22 @@ last-acquired-first order by construction.
 
 Statements with an effect the resource's declaration forbids are type
 errors in the body, reported with the resource named. Functions called
-in the body must have effect sets the declaration allows. Nesting a
+in the body must have effect sets the declaration allows. An
+acquisition inside the body is a statement like any other: its effects
+are checked against the resources already held, so `hold rcu { }`
+inside `hold lock(p) { }` is an error, since the kernel refuses the
+call that opens the section while a spin lock is held. Nesting a
 resource whose declaration says no inside another instance of itself is
 a type error. `sleep` is forbidden under every declaration, which is the
 kernel's rule that nothing sleeps while anything is held.
+
+The spin lock forbids `call` and admits `call(lock-safe)`, the class of
+calls the kernel allows in a critical section: a call or acquisition
+whose declaration is marked lock-safe, and a function whose every
+call is (section 12). Every other declaration treats the two classes
+alike. A call whose declaration requires a resource is a type error
+where the requirement is not satisfied, reported with the resource
+named and the `hold` that would supply it.
 
 ### 11.5 Ownership and `move`
 
@@ -980,7 +1007,11 @@ regions:
 Region r ::= pkt[a..b) | m | ctx.f
 ```
 
-- `call`: invokes a kernel helper or kfunc.
+- `call`: invokes a kernel helper or kfunc. A call the kernel admits
+  while a spin lock is held is written `call(lock-safe)`; its
+  declaration carries the `lock-safe` clause, hand-written on the koit
+  side to the kernel's list and checked against the kernel side where
+  the kernel marks it. Only the spin lock tells the two apart.
 - `resize`: may move or resize the packet; implies `call`. It drops the
   packet's layout token, the guard of every view (below).
 - `sleep`: may sleep; implies `call`. Permitted only in program kinds
@@ -995,9 +1026,14 @@ Region r ::= pkt[a..b) | m | ctx.f
 - `write(ctx.f)`: a store to a context field.
 
 Function effects are the union over the body, with write ranges over
-the function's parameters and constants. Resources are not effects of
-functions, because a resource cannot be held across a function
-boundary; they are context flags used by section 11.4.
+the function's parameters and constants; `call` is lock-safe for the
+function only when every call in its body is. A function also carries
+the resources its calls require, unioned over the body, as a demand on
+its callers: the requirement is checked at each call site against the
+caller's held set, the way the kernel checks a static subprogram in
+the context of its caller. Resources are not effects of functions,
+because a resource cannot be held across a function boundary; they
+are context flags used by section 11.4.
 
 **Guards.** A place may carry a guard: a resource in the held set, or a
 stability token. Reading or writing through the place demands that
@@ -1063,8 +1099,9 @@ slots, and enumerations. Every declaration has a koit side and a kernel
 side (decision 58). The koit side is written by hand and holds the
 decisions: a kind's verdicts, default failure, and packet access; a
 context field's name, type, and writability; a call's signature,
-effects, failure kind, and acquisition; the resource, region, and slot
-declarations; the constants and header types. The kernel side is
+effects, failure kind, acquisition, lock-safe mark, and required
+resources; the resource, region, and slot declarations; the constants
+and header types. The kernel side is
 transcribed from the kernel's sources for the version and holds the
 facts: a kind's program type and section name; a context field's offset;
 a helper's number, prototype, the argument kinds its `bpf_func_proto`
@@ -1233,7 +1270,8 @@ every item exists in every variant.
 - The call graph must be acyclic. Whether a call is inlined or compiled
   to a subprogram is not part of the language.
 - A function may be called inside a resource block only if its effect
-  set is allowed there.
+  set is allowed there, and anywhere only if the resources its calls
+  require are held there (section 12).
 - In interface signatures, a parameter of type `own T` is a `move` sink
   and a result of type `own T` must be bound by `hold` at the call
   site; a parameter written `const n: T` takes a constant expression
@@ -1496,7 +1534,13 @@ the Core form on the right. Sequencing, conditionals, and
 loops are as expected, with `kill(F, p)` removing facts about `p` after
 a store, `inv(F, s)` keeping facts about variables not assigned in `s`
 at a loop head, and `meet` intersecting the facts of two branches.
-Effects are unioned along the way.
+Effects are unioned along the way. Two side conditions hold of every
+statement and are not repeated below: its effects are disjoint from
+what the held set `H` forbids, where the spin lock forbids `call` but
+not `call(lock-safe)`; and the resources every call in it requires are
+satisfied by `K`, which for an RCU section means an RCU section, a spin
+lock, a preempt-off or IRQ-off section in `H`, or a kind that cannot
+sleep.
 
 The three operations, precisely. A fact is about the places it
 mentions, with a reference bound by `let r = p` read as the place `p`
@@ -1613,6 +1657,7 @@ not what it holds.
 
 (Hold)
     acq : resource R, yielding own T or nothing, fallible of kind k or not
+    effects(acq) disjoint from forbidden(H)      requires(acq) satisfied by K
     G,x:own T; F; K[H += R(x)] |- body ~> body' -| F1 ; E
     E disjoint from forbidden(R)
     R nests per its declaration
@@ -2251,6 +2296,22 @@ session 8:
     `preserve` region may be looser than the program, since a promise
     to the outside is what lets the body change, while a handler is
     code.
+
+64. An acquisition is a call, checked against the held set at the
+    `hold`; `call` has a lock-safe class, `call(lock-safe)`, that the
+    spin lock admits, a clause of call and resource declarations
+    hand-written to the kernel's list; and a declaration may require
+    held resources, a clause satisfied by the kernel's own test for an
+    RCU section. A function is lock-safe only if every call in it is,
+    and carries the resources its calls require as a demand on its
+    callers. Found by writing the selftests' spin-lock rule in koit:
+    an RCU section opened under a spin lock checked, and every kernel
+    refuses the kfunc call that opens it. Rejected: closing the hole
+    with a nesting rule per resource, which says nothing about the
+    helpers and kfuncs the extensions add; a lattice of call classes,
+    when the kernel has one and `sleep` is already an effect; and
+    `requires` on kinds, when the kernel checks it per kfunc. Both
+    new clauses arrive empty (entry 50).
 
 Open questions, with the default the checker implements until decided:
 

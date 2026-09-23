@@ -27,6 +27,13 @@ open Koit.Core
 /-- One effect. -/
 inductive Eff where
   | call | resize | sleep | fail
+  /-- `call(lock-safe)`: a call the kernel admits while a spin lock is
+  held, which is the one distinction the spin lock's declaration
+  draws among calls. -/
+  | callSafe
+  /-- A demand that the resource be held where the call runs: a
+  function carries the demands of its calls to its callers. -/
+  | needs (res : String)
   /-- `write(pkt[lo..hi))`, as expressions over the names in scope. -/
   | pkt (lo hi : Expr)
   /-- A write somewhere in the packet: a helper that writes it, or a
@@ -47,7 +54,8 @@ namespace Eff
 
 def print : Eff → String
   | .call => "call" | .resize => "resize" | .sleep => "sleep"
-  | .fail => "fail"
+  | .fail => "fail" | .callSafe => "call(lock-safe)"
+  | .needs r => s!"requires {r}"
   | .pkt lo hi => s!"write(pkt[{lo.print} .. {hi.print}))"
   | .pktAll => "write(pkt)"
   | .map m => s!"write({m})"
@@ -71,7 +79,7 @@ def ofCore : Core.Effect → Eff
 /-- Whether the effect is one of the four flags, as opposed to a
 write. -/
 def isFlag : Eff → Bool
-  | .call | .resize | .sleep | .fail => true
+  | .call | .resize | .sleep | .fail | .callSafe | .needs _ => true
   | _ => false
 
 end Eff
@@ -96,11 +104,15 @@ def union (E F : Effs) : Effs := E.addAll F.effs
 
 def ofList (es : List Eff) : Effs := empty.addAll es
 
-/-- The effects a interface declaration declares. `resize` and `sleep` imply
-`call`. -/
-def ofCore (es : List Core.Effect) : Effs :=
+/-- The effects an interface declaration declares. `resize` and
+`sleep` imply `call`; a lock-safe declaration's `call` is
+`call(lock-safe)`, and it never resizes or sleeps. -/
+def ofCore (es : List Core.Effect) (lockSafe : Bool := false) : Effs :=
   let E := ofList (es.map Eff.ofCore)
-  if E.has .resize || E.has .sleep then E.add .call else E
+  let E := if E.has .resize || E.has .sleep then E.add .call else E
+  if lockSafe && E.has .call then
+    { effs := E.effs.map fun e => match e with | .call => .callSafe | e => e }
+  else E
 
 def isEmpty (E : Effs) : Bool := E.effs.isEmpty
 

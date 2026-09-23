@@ -207,6 +207,22 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
             if kf.ret != "" && abi.length != kf.args.length then
               problems := problems ++ problem
                 s!"`{cs.name}` in {kind}: the layout has {abi.length} arguments; {name} takes {kf.args.length}"
+            -- the clauses the kernel marks with a flag: a required RCU
+            -- section on every tag, lock safety only where the flag
+            -- exists
+            let rcu := kf.flags.contains "KF_RCU_PROTECTED"
+            let needsRcu := cs.requires.any (·.name == "rcu")
+            if rcu && !needsRcu then
+              problems := problems ++ problem
+                s!"`{cs.name}`: {k.tag} marks {name} KF_RCU_PROTECTED, but the declaration does not require `rcu`"
+            if needsRcu && !rcu then
+              problems := problems ++ problem
+                s!"`{cs.name}`: the declaration requires `rcu`, but {k.tag} does not mark {name} KF_RCU_PROTECTED"
+            if k.hasFlag "KF_SPINLOCK_SAFE" then
+              let safe := kf.flags.contains "KF_SPINLOCK_SAFE"
+              if safe != cs.lockSafe then
+                problems := problems ++ problem
+                  s!"`{cs.name}`: {k.tag} {if safe then "marks" else "does not mark"} {name} KF_SPINLOCK_SAFE, but the declaration {if cs.lockSafe then "is" else "is not"} lock-safe"
             avail := avail ++ [kind]
             implBy := implBy ++ [(kind, .kfunc name abi)]
       | .helper name abi =>
@@ -239,6 +255,7 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
       calls := calls ++ [{ name := cs.name, sig := cs.sig, effects := cs.effects, fails := cs.fails,
                            acquires := cs.acquires, kinds := if restricted then avail else [],
                            gplOnly := gpl, kernel := kernelName,
+                           lockSafe := cs.lockSafe, requires := cs.requires,
                            impl := match cs.sig with
                              | .builtin => .inline
                              | .fn .. => ((implBy.head?).map (·.2)).getD .inline,
