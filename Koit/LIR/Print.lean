@@ -65,6 +65,7 @@ def Builtin.print : Builtin → String
   | .copy n => s!"copy {n}"
   | .fill n => s!"fill {n}"
   | .printk fmt => s!"printk {Core.strLit fmt}"
+  | .tail m => s!"tail {m}"
   | .atomic op s w fetch =>
     s!"atomic {(op.spelling.drop 7).toString}({Ty.print (.int s w)})" ++
       (if fetch then " fetch" else "")

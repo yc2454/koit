@@ -164,7 +164,7 @@ def exprTy (Γ : List (String × LIR.Ty)) : LIR.Expr → LIR.Ty
 1 for absence, `2 + k` for a failure of kind `k`. -/
 def kindIndex : Kind → Nat
   | .short_packet => 0 | .not_found => 1 | .bad_value => 2 | .failed_check => 3
-  | .failed_call => 4 | .fail => 5
+  | .failed_call => 4 | .fail => 5 | .no_program => 6
 
 /-- Whether a function uses the status protocol. -/
 def statusFn (f : LIR.Fn) : Bool := f.fails || f.opt
@@ -384,6 +384,7 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
     | .enter r => return (line s!"{scopeCall r true};", c)
     | .leave r => return (line s!"{scopeCall r false};", c)
     | .copy sz => return (line s!"__builtin_memcpy({a 0}, {a 1}, {sz});", c)
+    | .tail m => return (line s!"bpf_tail_call(ctx, &{cname m}, {a 0});", c)
     | .fill sz => return (line s!"__builtin_memset({a 0}, {a 1}, {sz});", c)
     | .printk fmt =>
       let tys := args.map (exprTy c.Γ)
@@ -555,6 +556,7 @@ def mapTypeName : Core.MapKind → String
   | .percpu .. => "BPF_MAP_TYPE_PERCPU_ARRAY"
   | .hash .. => "BPF_MAP_TYPE_HASH"
   | .ringbuf .. => "BPF_MAP_TYPE_RINGBUF"
+  | .progArray .. => "BPF_MAP_TYPE_PROG_ARRAY"
 
 def cmap (types : List Core.TypeDecl) (d : Core.MapDecl) : String :=
   let count (n : Core.Expr) : String := match n with
@@ -594,6 +596,9 @@ def cmap (types : List Core.TypeDecl) (d : Core.MapDecl) : String :=
   | .ringbuf n =>
     s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); } \
       {mname} SEC(\".maps\");\n"
+  | .progArray n _ =>
+    s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); \
+      __uint(key_size, 4); __uint(value_size, 4); } {mname} SEC(\".maps\");\n"
 
 /-- Whether the text calls a C function by name. -/
 def calls (text name : String) : Bool := (text.splitOn s!"{name}(").length > 1

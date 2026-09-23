@@ -1,0 +1,11 @@
+// expect: is not a program array
+// selftest: progs/verifier_tailcall.c invalid_map_for_tail_call (T2612, rule 06.20, master fe2ec83)
+// A tail call through a map that is not a program array: "expected
+// prog array map for tail call". In koit `tail` takes a slot of a
+// `prog_array` map and nothing else. Socket kind, written as tc.
+map tab : array[4] of u32
+
+program p : tc {
+  tail tab[0] else { drop }
+  drop
+}

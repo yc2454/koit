@@ -30,6 +30,9 @@ kernel, and the program's own logic. -/
 inductive Kind where
   | short_packet | not_found | bad_value | failed_check | failed_call
   | fail
+  /-- A tail call not taken: the slot empty, the index outside the
+  array, or the kernel's limit reached. -/
+  | no_program
   deriving Repr, BEq, DecidableEq, Inhabited
 
 namespace Kind
@@ -42,11 +45,12 @@ def spelling : Kind → String
   | .short_packet => "short_packet" | .not_found => "not_found"
   | .bad_value => "bad_value"       | .failed_check => "failed_check"
   | .failed_call => "failed_call"   | .fail => "fail"
+  | .no_program => "no_program"
 
 /-- Every kind, in the order of the failure table. -/
 def all : List Kind :=
   [.short_packet, .not_found, .bad_value, .failed_check, .failed_call,
-   .fail]
+   .fail, .no_program]
 
 def ofString? (s : String) : Option Kind := all.find? (·.spelling == s)
 
@@ -226,6 +230,8 @@ inductive Fallible where
       (args : List Arg)
   | callopt (span : Span) (f : String) (args : List Arg)
   | coerce (span : Span) (e : Expr) (ty : Ty)
+  /-- `tail m[i]`: taken, it never returns; not taken, it fails. -/
+  | tail (span : Span) (map : String) (idx : Expr)
 
 end
 
@@ -264,7 +270,7 @@ def Arg.span : Arg → Span
   | .map s _ => s
 
 def Fallible.span : Fallible → Span
-  | .view s .. | .lookup s .. | .loadw s .. | .call s .. | .acquire s ..
+  | .view s .. | .lookup s .. | .loadw s .. | .call s .. | .acquire s .. | .tail s ..
   | .callopt s .. | .coerce s .. => s
 
 /-- The failure kind of a fallible operation other than `acquire`,
@@ -276,6 +282,7 @@ def Fallible.kind? : Fallible → Option Kind
   | .call .. => some .failed_call
   | .callopt .. => some .not_found
   | .coerce .. => some .failed_check
+  | .tail .. => some .no_program
   | .acquire .. => none
 
 /-- A field initializer of a struct literal. -/
@@ -385,6 +392,8 @@ inductive MapKind where
   | percpu (n : Expr) (value : Ty)
   | hash (n : Expr) (key value : Ty)
   | ringbuf (n : Expr)
+  /-- A program array: `n` slots of programs of the kind. -/
+  | progArray (n : Expr) (kind : String)
   deriving Repr, Inhabited
 
 structure MapDecl where

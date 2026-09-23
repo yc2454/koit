@@ -282,7 +282,7 @@ converge. Iterator loops carry a cap. The kernel's loop mechanisms,
 compiler chooses from the cap, never constructs the programmer writes.
 Section 9.
 
-**F, the failure model.** Failures have six kinds fixed by the language,
+**F, the failure model.** Failures have seven kinds fixed by the language,
 one per party to blame. A fallible operation appears only on the right
 of a binding, marked with `?` or with an `else` block that must exit;
 the runtime coercion `e as T?` is one such operation. A failure carries
@@ -381,6 +381,7 @@ MapDecl   ::= 'map' Ident ':' MapType Access? Init?
 Access    ::= 'readonly' | 'writeonly'
 Init      ::= '=' '[' Expr (',' Expr)* ']'
 MapType   ::= 'array' '[' Expr ']' 'of' Type
+            | 'prog_array' '[' Expr ']' 'of' ProgKind
             | 'percpu_array' '[' Expr ']' 'of' Type
             | 'hash' '[' Expr ']' 'of' Type '->' Type
             | 'ringbuf' '[' Expr ']'
@@ -569,6 +570,15 @@ are packet-representable, `V` may contain slot types per their declarations.
 For a per-CPU
 array, `m[i]` is the current CPU's slot.
 
+`prog_array[n] of K` is a program array: its entries are programs of
+the kind `K`, and its initializer names programs of the unit in slot
+order, `map jumps : prog_array[4] of tc = [parse, police]`, the rest
+of the slots empty. Its one use is the `tail` statement (section 10).
+An array without an initializer is filled by the loader, and its
+entries are then any program of `K`. The kind is what the kernel
+checks agreement on among the programs sharing an array, and their
+sleepability follows from it.
+
 A map declaration may end in an access word. `readonly` says the
 program never writes the map: its places are immutable, so a store,
 an atomic update, `insert`, `delete`, `fill` or `copy` into one, and
@@ -728,6 +738,7 @@ Stmt      ::= 'let' Ident (':' Type ('where' Pred)?)? '=' Expr Tail?
             | 'for' Pattern 'in' Expr 'bounded' Expr '?'? Block
             | 'hold' (Ident '=')? Expr Tail? Block
             | 'check' Expr Tail?
+            | 'tail' Ident '[' Expr ']' Tail
             | Expr Tail
             | 'break' | 'continue'
             | 'return' Expr? | 'pass' | 'drop' | 'tx' | 'abort'
@@ -779,6 +790,7 @@ name.
 | `failed_check` | a coercion `e as T?`, or its sugar `check`, whose predicate is false; an iterator loop marked `bounded N?` reaching its cap | the program's assumptions |
 | `failed_call` | a kernel call that reported failure; the reason defaults to the call's negative return | the kernel or resources |
 | `fail` | a `fail` statement outside an `else` block, named after it as `short_packet` is named after its condition | the program's own logic |
+| `no_program` | a tail call whose slot is empty, whose index is outside the array, or that reached the kernel's limit of 33 in one invocation | the environment |
 
 The kind of a fallible operation is fixed by the operation (section
 8.3). A failure carries a reason, an unsigned 32-bit value chosen by the
@@ -795,7 +807,21 @@ let x = e as T?                // coerce to a refinement type, else bound
 hold x = e? { body }           // acquire a resource (section 11)
 e?                             // a fallible call used for its effect
 check P                        // sugar for the coercion (section 10.4)
+tail m[i]?                     // a tail call, which returns only when not taken
 ```
+
+`tail m[i]` replaces the running program by the `i`-th entry of the
+program array `m` (section 7), on the same context and packet: a
+taken call never returns, and the callee's verdict is the program's.
+When the slot is empty, `i` is outside the array, or the kernel's
+limit of 33 tail calls in one invocation is reached, nothing happens
+and the next statement runs, which is the failure `no_program`; so
+the statement is fallible and marked like any other, and what follows
+it runs only when the call was not taken. `i` is any `u32`, since the
+kernel bounds it. The held set must be empty at a `tail`, because a
+taken call is an exit (11.4); it has the `call` effect, and it
+appears only in a program body, never in a function, since the
+kernel counts a tail call against every frame that can reach it.
 
 A fallible expression anywhere else is a type error. There is one
 fallible operation per statement; a nested form such as
@@ -1005,7 +1031,12 @@ whose declaration is marked lock-safe, and a function whose every
 call is (section 12). Every other declaration treats the two classes
 alike. A call whose declaration requires a resource is a type error
 where the requirement is not satisfied, reported with the resource
-named and the `hold` that would supply it.
+named and the `hold` that would supply it. A `tail` statement
+(section 10) inside any `hold` is a type error naming the resource
+and the `hold`: a taken tail call never returns, and the kernel
+refuses one with anything held; since a call that was not taken
+continues inside the block, the scope cannot release around it, and
+the statement moves past the block's end.
 
 ### 11.5 Ownership and `move`
 
@@ -1195,7 +1226,8 @@ workqueue body, is a kind in this sense, with its own context, verdict
 range, and an empty held set; the extensions define those declarations.
 
 Verdict statements and `return` end the program, releasing held
-resources on the way. A `syscall` body may also fall off its end,
+resources on the way, and a taken `tail` ends it with the callee's
+verdict (section 10). A `syscall` body may also fall off its end,
 which returns 0; the body of a packet kind must end in an exit, as a
 handler must. The verdict type of a kind is an enumeration type
 (section 7) whose constants are the kind's verdicts: `XdpAction` for
@@ -1231,7 +1263,13 @@ loaded from a map gets its fact from the marked load. Every handler's
 exit and the default failure verdict are exits, so both are checked
 against `S` in the header: a contract cannot be satisfied by failing. A
 `redirect` call yields `{v | v == REDIRECT}`, so a contract without
-REDIRECT rejects the call.
+REDIRECT rejects the call. A `tail m[i]` yields the union of its
+entries' verdict sets, since a taken call's verdict is the program's:
+a declared entry contributes its own set, or the kind's whole type
+when it states none, and an array without an initializer the kind's
+whole type; so a contract narrower than the entries rejects the tail
+call, and an undeclared array admits only a program whose set is the
+whole type.
 
 **Preserved region.** `preserve R` for a region `R` is the demand that
 no statement in the program, including the functions it calls, carries
@@ -1777,6 +1815,17 @@ not what it holds.
     resize not in E when W mentions pkt
     ----------------------------------------------------
     |- program(S, W, H, body')
+
+(Tail)
+    m : prog_array[n] of K      K = the program's kind
+    G;F |- i : u32
+    H = {}      not in a function
+    verdicts(m) subset of S, when the program has a verdict set S
+    G;F;K |- rest ~> rest' -| F1 ; E
+    --------------------------------------------------------------
+    G;F;K |- tail m[i] Tail; rest
+        ~> tail m i then rest' else <tail'>   -| F1 ; E + {call}
+    the failure has kind no_program; a taken call ends the program
 
 (Return)
     G;F |- e <= K.ret            (K.ret refined by S)
@@ -2423,6 +2472,22 @@ session 8:
     the checker using a frozen map's contents as facts; and keeping
     the formats in the frame (entry 52).
 
+67. Tail calls: a map kind `prog_array[n] of K` with an initializer
+    naming the unit's programs in slot order, and a statement
+    `tail m[i]?`, a fallible call of kind `no_program` that never
+    returns when taken and continues when not, as the kernel does;
+    the held set is empty at it, it appears in program bodies only,
+    and the program's verdict set must include every entry's, the
+    kind's whole type for an entry without a contract or an array
+    without an initializer. The machine runs a taken call as the
+    callee's body with one counter of 33 per invocation. Rejected: an
+    exit statement with `hold` releasing around it, since a call not
+    taken continues inside the resources; collapsing dispatch into
+    functions, which koit does where the source writes a function;
+    arrays without declared entries only, under which the verdict
+    contract says nothing; and `not_found` as the kind, which names an
+    absent value where nothing was sought (entry 53).
+
 Open questions, with the default the checker implements until decided:
 
 - Q1. Handlers on functions. Default: no; a function-level handler is
@@ -2492,9 +2557,6 @@ choice (decision 18).
 
 **Features not tied to a program type**, deferred:
 
-- tail calls as an explicit exit that never returns, with the `call`
-  effect, for programs that dispatch through program arrays by design
-  rather than by necessity;
 - separately verified functions with declared contracts, for program
   size, once the verifier's global-function interface is modeled;
 - the userspace boundary: a map declaration generating its userspace

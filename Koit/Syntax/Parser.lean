@@ -463,6 +463,19 @@ partial def parseStmt : M Stmt := do
     let c ← parseExpr
     let tail ← parseTail
     return .check (← spanFrom l.span) c tail
+  -- `tail m[i]`: `tail` is a word of the statement, not a keyword,
+  -- so that a function may still be named so
+  | .ident "tail" =>
+    match (← lexemeAt 1).tok, (← lexemeAt 2).tok with
+    | .ident _, .punct .lbrack =>
+      advance
+      let (m, _) ← expectIdent "a program array"
+      let _ ← expectPunct .lbrack
+      let i ← withNl false parseExpr
+      let _ ← expectPunct .rbrack
+      let tail ← parseTail
+      return .tail (← spanFrom l.span) m i tail
+    | _, _ => parseExprStmt
   | .keyword .«break» =>
     advance
     return .brk l.span
@@ -730,6 +743,10 @@ partial def parseMapType : M MapType := do
     let v ← parseType
     return .hash (ks.merge v.span) n k v
   | "ringbuf" => return .ringbuf (ks.merge close) n
+  | "prog_array" =>
+    let _ ← expectKw .«of»
+    let (k, kspan) ← expectIdent "a program kind"
+    return .progArray (ks.merge kspan) n k
   | _ => failAt ks s!"unknown map kind `{kind}`; expected `array`, \
       `percpu_array`, `hash`, or `ringbuf`"
 

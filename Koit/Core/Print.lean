@@ -121,6 +121,7 @@ partial def Fallible.print : Fallible → String
       (match ty with | some t => "<" ++ t.print ++ ">" | none => "") ++
       "(" ++ Arg.printList args ++ ")"
   | .callopt _ f args => "callopt " ++ f ++ "(" ++ Arg.printList args ++ ")"
+  | .tail _ m i => "tail " ++ m ++ "[" ++ i.print ++ "]"
   | .coerce _ e t => "coerce(" ++ e.print ++ ", " ++ t.print ++ ")"
 
 end
@@ -200,6 +201,7 @@ def MapKind.print : MapKind → String
   | .hash n k v =>
     "hash[" ++ n.print ++ "] of " ++ k.print ++ " -> " ++ v.print
   | .ringbuf n => "ringbuf[" ++ n.print ++ "]"
+  | .progArray n k => "prog_array[" ++ n.print ++ "] of " ++ k
 
 def Region.print : Region → String
   | .pkt _ none => "pkt"

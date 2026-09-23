@@ -112,6 +112,9 @@ inductive Builtin where
   | copy (n : Nat)
   | fill (n : Nat)
   | printk (fmt : String)
+  /-- `bpf_tail_call` through the program array: the index; taken, it
+  never returns. -/
+  | tail (m : String)
   | atomic (op : AtomicOp) (signed : Bool) (w : Nat) (fetch : Bool)
   deriving Repr, Inhabited
 

@@ -136,6 +136,8 @@ inductive Stmt where
   | hold (span : Span) (name : Option String) (acq : Expr)
       (tail : Option Tail) (body : Block)
   | check (span : Span) (cond : Expr) (tail : Option Tail)
+  /-- `tail m[i]`, a tail call through the program array `m`. -/
+  | tail (span : Span) (map : String) (idx : Expr) (tail : Option Tail)
   | expr (span : Span) (e : Expr) (tail : Option Tail)
   | brk (span : Span)
   | cont (span : Span)
@@ -159,7 +161,7 @@ deriving instance Repr, Inhabited for Stmt, Tail, Block
 
 def Stmt.span : Stmt → Span
   | .decl s .. | .assign s .. | .ite s .. | .iteLet s .. | .loop s ..
-  | .forRange s .. | .forIter s .. | .hold s .. | .check s .. | .expr s ..
+  | .forRange s .. | .forIter s .. | .hold s .. | .check s .. | .tail s .. | .expr s ..
   | .brk s | .cont s | .ret s .. | .verdict s .. | .fail s .. => s
 
 def Tail.span : Tail → Span
@@ -215,6 +217,8 @@ inductive MapType where
   | percpuArray (span : Span) (n : Expr) (value : Ty)
   | hash (span : Span) (n : Expr) (key value : Ty)
   | ringbuf (span : Span) (n : Expr)
+  /-- `prog_array[n] of K`: slots for programs of the kind. -/
+  | progArray (span : Span) (n : Expr) (kind : String)
   deriving Repr, Inhabited
 
 /-- A region of a `preserve` clause. -/

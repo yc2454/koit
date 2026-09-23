@@ -1,0 +1,19 @@
+// expect: a tail call cannot run while a socket reference is held
+// selftest: progs/tailcall_fail.c reject_tail_call_ref (T0722, rule 06.21; T2132 T2133 leaked references over a tail call, rule 08.07; master fe2ec83)
+// A tail call while an acquired reference is held: "tail_call would
+// lead to reference leak". The socket's scope has not ended.
+map jumps : prog_array[4] of tc = [leaf]
+
+program leaf : tc {
+  pass
+}
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+map tuples : array[1] of Tuple
+
+program p : tc {
+  let tuple = tuples[0]
+  hold sk = sk_lookup_tcp(tuple)? {
+    tail jumps[0] else { drop }
+  }
+  drop
+}

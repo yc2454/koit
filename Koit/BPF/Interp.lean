@@ -34,6 +34,8 @@ structure Halt (ρ : Type) where
 def run (X : Env ρ τ) (K : Kernel) (m : State ρ) : Nat → Except Refusal (Halt ρ)
   | 0 => .error { cause := .malformed "out of fuel", pc := m.pc }
   | fuel + 1 =>
+    -- a taken tail call ends this program; the driver runs the entry
+    if m.machine.tailTo.isSome then .ok { verdict := 0, state := m } else
     match halted? X m with
     | some v => .ok { verdict := v, state := m }
     | none =>
@@ -56,17 +58,29 @@ def runUnit (pre : Interface) (core : Core.CompUnit) (progs : List (Env ρ τ))
   for X in progs do
     if only.isSome && only != some X.prog.name then continue
     let st : Machine.State := { maps, packet }
-    match run X Machine.synthetic (load X st ctx) fuel with
-    | .ok h =>
-      maps := h.state.machine.maps
-      let (s, w) := match X.kind.verdictTy with
-        | .int _ s w => (s, w)
-        | _ => (false, 32)
-      reports := reports ++ [{ program := X.prog.name,
-                               verdict := Core.Sem.verdictName X.kind
-                                 (Core.Sem.Val.mkInt s w h.verdict),
-                               log := h.state.machine.log }]
-    | .error r => throw s!"`{X.prog.name}` {r.describe}"
+    let mut Y := X
+    let mut h ← match run X Machine.synthetic (load X st ctx) fuel with
+      | .ok h0 => pure h0
+      | .error r => throw s!"`{X.prog.name}` {r.describe}"
+    -- a taken tail call: the entry runs on the same machine state
+    let mut hops := 0
+    while h.state.machine.tailTo.isSome && hops ≤ Machine.maxTailCalls do
+      let some name := h.state.machine.tailTo | break
+      let some Z := progs.find? (·.prog.name == name) | throw s!"no program `{name}`"
+      let mach := { h.state.machine with tailTo := none }
+      h ← match run Z Machine.synthetic (load Z mach ctx) fuel with
+        | .ok h1 => pure h1
+        | .error r => throw s!"`{Z.prog.name}` {r.describe}"
+      Y := Z
+      hops := hops + 1
+    maps := h.state.machine.maps
+    let (s, w) := match Y.kind.verdictTy with
+      | .int _ s w => (s, w)
+      | _ => (false, 32)
+    reports := reports ++ [{ program := X.prog.name,
+                             verdict := Core.Sem.verdictName Y.kind
+                               (Core.Sem.Val.mkInt s w h.verdict),
+                             log := h.state.machine.log }]
   return (reports, Core.Sem.printMaps env maps)
 
 /-- The run agrees with the relation: a halt it reaches is a `Star`

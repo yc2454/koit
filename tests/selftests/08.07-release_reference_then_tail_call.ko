@@ -1,0 +1,20 @@
+// selftest: progs/verifier_ref_tracking.c release_reference_then_tail_call (T2131; T2130 check_reference_or_tail_call; rule 08.07, master fe2ec83)
+// The accepting side: the reference's scope ends, then the tail
+// call, with nothing held.
+map jumps : prog_array[4] of tc = [leaf]
+
+program leaf : tc {
+  pass
+}
+type Tuple = { saddr: be32, daddr: be32, sport: be16, dport: be16 }
+map tuples : array[1] of Tuple
+map out : array[1] of { seen: u32 }
+
+program p : tc {
+  let tuple = tuples[0]
+  hold sk = sk_lookup_tcp(tuple)? {
+    out[0].seen = 1
+  }
+  tail jumps[0] else { drop }
+  drop
+}

@@ -123,6 +123,7 @@ def callsInFallible : Fallible → List (String × List Arg)
   | .lookup _ _ k => callsInPlace k
   | .loadw _ p => callsInPlace p
   | .call _ f args | .callopt _ f args => (f, args) :: callsInArgs args
+  | .tail _ _ i => callsInExpr i
   | .acquire _ _ f _ args => (f, args) :: callsInArgs args
   | .coerce _ e _ => callsInExpr e
 
@@ -184,6 +185,7 @@ def fallibleExprs : Fallible → List Expr
   | .loadw _ p => [.read p.span p]
   | .coerce _ e _ => [e]
   | .call _ _ args | .callopt _ _ args | .acquire _ _ _ _ args => argExprs args
+  | .tail _ _ i => [i]
 
 /-- The expressions a statement evaluates itself, apart from its
 blocks. -/
@@ -943,6 +945,7 @@ def fallibleEffects (env : Env) (K : Ctx) : Fallible → M Effs
   | .coerce _ e _ => effectsOfCalls env K (callsInExpr e)
   | .call _ f args | .callopt _ f args | .acquire _ _ f _ args =>
     effectsOfCalls env K ((f, args) :: callsInArgs args)
+  | .tail _ _ i => do return (← effectsOfCalls env K (callsInExpr i)).add .call
 
 /-- The effects of a statement itself, apart from the blocks inside
 it: the calls in its expressions, the write of its store, and `fail`

@@ -178,6 +178,7 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
   -- array map, scalars in this draft
   unless d.init.isEmpty do
     match d.kind with
+    | .progArray .. => pure ()
     | .array n v =>
       let vn ← env.norm v
       unless vn.isScalar do
@@ -196,6 +197,26 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
         check env.top K0 e vn
     | _ => err d.span s!"only an `array[n]` map takes an initializer"
   match d.kind with
+  | .progArray n k =>
+    capacity n
+    -- the kind, and the entries as programs of it, at most one per slot
+    unless (env.interface.kind? k).isSome do
+      err d.span s!"`{d.name}` holds programs of an unknown kind `{k}`"
+    match env.evalConst n with
+    | some cnt =>
+      if d.init.length > cnt then
+        err d.span s!"`{d.name}` has {cnt} slots and {d.init.length} entries"
+    | none => pure ()
+    for e in d.init do
+      match e with
+      | .var s p =>
+        match env.programs.find? (·.1 == p) with
+        | some (_, pk, _) =>
+          unless pk == k do
+            err s s!"`{p}` is {article pk} `{pk}` program; `{d.name}` holds `{k}` \
+              programs"
+        | none => err s s!"`{p}` is not a program of this unit"
+      | _ => err e.span s!"an entry of `{d.name}` names a program"
   | .array n v | .percpu n v =>
     capacity n
     value v
@@ -312,6 +333,7 @@ partial def calleesFallible : Fallible → List String
   | .call _ f args | .callopt _ f args => f :: calleesArgs args
   | .acquire _ _ f _ args => f :: calleesArgs args
   | .coerce _ e _ => calleesExpr e
+  | .tail _ _ i => calleesExpr i
 
 partial def calleesStmts (ss : List Stmt) : List String :=
   ss.flatMap fun
@@ -533,6 +555,13 @@ def checkUnit (pre : Interface) (u : CompUnit) (smt : Bool := false) :
   for d in u.types do checkTypeDecl env d
   for d in u.consts do checkConst env d
   for d in u.configs do checkConfig env d
+  -- the programs' verdict sets, for the tail calls and the program
+  -- arrays that name them: a program's own clause, or its contract's
+  let env := { env with programs := u.programs.map fun p =>
+    let own := p.verdicts.map (·.map (·.2))
+    let fromContract := p.implements.bind fun (_, c) =>
+      (u.contracts.find? (·.name == c)).bind fun k => k.verdicts.map (·.map (·.2))
+    (p.name, p.kind, own <|> fromContract) }
   for d in u.maps do checkMap env d
   checkCallGraph env u.fns
   let mut env := env

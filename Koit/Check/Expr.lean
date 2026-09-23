@@ -491,6 +491,9 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
       | .hash .. =>
         err s s!"the lookup in the hash map `{m}` can fail (kind `missing`): \
           bind it with `?`, `else`, or `if let`"
+      | .progArray .. =>
+        err s s!"`{m}` is a program array, which has no places; it is used \
+          by `tail {m}[i]`"
       | .ringbuf _ =>
         err s s!"`{m}` is a ring buffer, which has no slots; reserve a record \
           with `hold ev = {m}.reserve<T>()`"
@@ -834,6 +837,44 @@ def fallibleKind (env : Env) : Fallible → Kind
 on its arguments. -/
 def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
   match f with
+  | .tail s m i =>
+    -- (Tail): a program array of the program's kind, any u32 index,
+    -- nothing held, in a program body, and the entries' verdicts
+    -- inside the program's set
+    let some d := env.map? m | err s s!"unknown map `{m}`"
+    let arrayKind ← match d.kind with
+      | .progArray _ k => pure k
+      | _ => err s s!"`{m}` is not a program array; `tail` takes a slot of a \
+          `prog_array` map"
+    let some decl := env.kind | err s "a tail call appears in a program body"
+    if K.fnName.isSome then
+      err s "a tail call appears in a program body, never in a function, \
+        since the kernel counts it against every frame that reaches it"
+    unless arrayKind == decl.name do
+      err s s!"`{m}` holds `{arrayKind}` programs; this is {article decl.name} \
+        `{decl.name}` program"
+    check env K i tU32
+    if let h :: _ := K.held then
+      err s s!"a tail call cannot run while {h.decl.describe} is held (`hold \
+        {h.what}` at line {h.span.start.line}): a taken call never returns; \
+        move it past the block's end"
+    -- the verdicts a taken call can return
+    if let some S := K.verdictSet then
+      let whole := decl.verdicts.map (·.1)
+      let entries := d.init.filterMap fun e => match e with
+        | .var _ p => some p
+        | _ => none
+      let mut union : List String := []
+      if entries.isEmpty then union := whole
+      for p in entries do
+        match env.programs.find? (·.1 == p) with
+        | some (_, _, some vs) => union := union ++ vs
+        | _ => union := union ++ whole
+      for v in union.eraseDups do
+        unless S.contains v do
+          err s s!"the tail call through `{m}` may return `{v}`, which the \
+            program's verdict set excludes"
+    return { ty := none }
   | .view s off t =>
     requirePkt env s
     check env K off tU64

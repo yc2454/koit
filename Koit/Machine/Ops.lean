@@ -144,6 +144,23 @@ def leave (res : Resource) : Op Unit := do
 def print (fmt : String) (args : List Val) : Op Unit :=
   modify (·.record (.print fmt args))
 
+/-- The kernel's limit of tail calls in one invocation. -/
+def maxTailCalls : Nat := 33
+
+/-- `bpf_tail_call`: taken when the slot holds a program and the
+limit is not reached, which the run driver honors by running that
+program on this state; otherwise nothing happens. -/
+def tailCall (m : String) (i : Nat) : Op Bool := do
+  let st ← get
+  let some ms := st.maps.lookup m | throw s!"unknown map `{m}`"
+  match ms.progs.lookup i with
+  | some p =>
+    if st.tailCount < maxTailCalls then
+      set { st with tailTo := some p, tailCount := st.tailCount + 1 }
+      return true
+    else return false
+  | none => return false
+
 /-! ### Kernel functions -/
 
 /-- The resource declarations a kernel function releases: those whose exit

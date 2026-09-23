@@ -1,0 +1,26 @@
+// run:
+// leaf: OK
+// taken: OK
+// empty: SHOT
+// map jumps:
+//   [0] = leaf
+
+// selftest: the run tests of rule 06.23 (T0704 to T0715 in prog_tests/tailcalls.c, master fe2ec83): a taken tail call returns the callee's verdict, an empty slot falls through
+// The runtime shape: the first slot holds `leaf`, the second is
+// empty, so the first program returns the callee's verdict and the
+// second falls through to its own.
+map jumps : prog_array[2] of tc = [leaf]
+
+program leaf : tc {
+  pass
+}
+
+program taken : tc {
+  tail jumps[0] else { drop }
+  drop
+}
+
+program empty : tc {
+  tail jumps[1] else { drop }
+  drop
+}

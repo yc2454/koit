@@ -172,7 +172,16 @@ def map_definition(btf, types, m):
     add("max_entries", btf.array(u32, m["entries"]))
     if m.get("flags"):
         add("map_flags", btf.array(u32, m["flags"]))
-    return btf.struct("", off, members), off
+    values_off = None
+    if m["kind"] == "prog_array":
+        # the entries: an array of pointers to a function prototype,
+        # which libbpf fills from the relocations against the programs
+        proto = btf.func_proto(u32, [("ctx", btf.ptr(0))])
+        slot = btf.ptr(proto)
+        values_off = off
+        members.append(("values", btf.array(slot, m["entries"]), off))
+        off += 8 * m["entries"]
+    return btf.struct("", off, members), off, values_off
 
 
 def write(unit):
@@ -208,22 +217,27 @@ def write(unit):
     direct = [m for m in unit.maps if m["direct"]]
     maps_data = bytearray()
     maps_vars = []
+    prog_slots = []   # (offset in .maps of the slot, program name)
     for m in declared:
         if m.get("data"):
             raise SystemExit(f"elf: {unit.name}: map {m['name']} has an initializer but is not "
                              "global data; libbpf cannot fill it from the object, the koit loader can")
-        tid, size = map_definition(btf, unit.types, m)
+        tid, size, values_off = map_definition(btf, unit.types, m)
         var = btf.var(m["name"], tid)
         maps_vars.append((var, len(maps_data), size, m["name"]))
+        if values_off is not None:
+            for slot, pname in enumerate(m.get("programs", [])):
+                prog_slots.append((len(maps_data) + values_off + 8 * slot, pname))
         maps_data += bytes(size)
     if maps_vars:
         btf.datasec(".maps", len(maps_data), [(v, off, sz) for v, off, sz, _ in maps_vars])
 
     map_symbol = {}
+    maps_idx = None
     if maps_vars:
-        idx = elf.section(".maps", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, bytes(maps_data), align=8)
+        maps_idx = elf.section(".maps", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, bytes(maps_data), align=8)
         for _, off, size, name in maps_vars:
-            map_symbol[name] = elf.symbol(name, off, size, STB_GLOBAL, STT_OBJECT, idx)
+            map_symbol[name] = elf.symbol(name, off, size, STB_GLOBAL, STT_OBJECT, maps_idx)
 
     def data_section(name, members, flags, nobits):
         """One global-data section: its variables laid out in order, the
@@ -295,6 +309,19 @@ def write(unit):
         idx = elf.section(sec, SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR, bytes(text), align=8)
         if rels:
             elf.section(".rel" + sec, SHT_REL, 0, bytes(rels), info=idx, align=8, entsize=16)
+
+    # a program array's entries: relocations in `.maps` against the
+    # programs' symbols, which libbpf turns into descriptors at load
+    if prog_slots:
+        prog_symbol = {}
+        for i, sym in enumerate(elf.symbols):
+            prog_symbol[sym["name"]] = i
+        rels = bytearray()
+        for off, pname in prog_slots:
+            if pname not in prog_symbol:
+                raise SystemExit(f"elf: {unit.name}: program array names `{pname}`, which is not a program here")
+            rels += struct.pack("<QQ", off, (prog_symbol[pname] << 32) | R_BPF_64_64)
+        elf.section(".rel.maps", SHT_REL, 0, bytes(rels), info=maps_idx, align=8, entsize=16)
 
     lic = unit.license.encode() + b"\0"
     idx = elf.section("license", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, lic, align=1)

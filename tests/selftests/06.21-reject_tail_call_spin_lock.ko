@@ -1,0 +1,19 @@
+// expect: a tail call cannot run while a spin lock is held
+// selftest: progs/tailcall_fail.c reject_tail_call_spin_lock (T0719; T0720 rcu, T0721 preempt; rule 06.21, master fe2ec83)
+// A tail call while a spin lock is held. A tail call never returns
+// when it succeeds, so the held set must be empty at it; the same
+// for an RCU or preempt-off section.
+map jumps : prog_array[4] of tc = [leaf]
+
+program leaf : tc {
+  pass
+}
+map c : array[1] of { lk: spinlock, n: u64 }
+
+program p : tc {
+  let c = c[0]
+  hold lock(c.lk) {
+    tail jumps[0] else { drop }
+  }
+  drop
+}

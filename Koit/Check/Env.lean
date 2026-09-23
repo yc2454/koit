@@ -51,6 +51,9 @@ structure Env where
   /-- The effect summary of each function checked so far, stated over
   its parameters; callees are checked before their callers. -/
   fnEffects : List (String × Effs) := []
+  /-- The unit's programs: name, kind, and verdict set when one is
+  stated, for the tail calls that name them. -/
+  programs  : List (String × String × Option (List String)) := []
   /-- Trace each accepted entailment as a solver query, for the
   testing cross-check. -/
   smt       : Bool := false

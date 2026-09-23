@@ -108,7 +108,8 @@ partial def coreMarkers (ss : List Core.Stmt) : Nat :=
     | .ite _ _ t e => 1 + coreMarkers t + coreMarkers e
     | .loop _ _ b | .«for» _ _ _ _ b => 1 + coreMarkers b
     | .«try» _ _ op t e _ =>
-      (match op with | .callopt .. => 0 | _ => 1) + coreMarkers t + coreMarkers e
+      -- a tail call not taken falls through: the kernel emits no test
+      (match op with | .callopt .. | .tail .. => 0 | _ => 1) + coreMarkers t + coreMarkers e
     | .hold _ _ _ _ b e =>
       (if e.isSome then 1 else 0) + coreMarkers b + coreMarkers (e.getD [])
     | _ => 0) 0

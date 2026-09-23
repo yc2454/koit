@@ -719,6 +719,7 @@ def boundTy (c : LCtx) (f : Fallible) : LM (Option Ty × Origin) := do
       | _ => lerr s!"`{f}` returns no optional"
     | none => lerr s!"unknown function `{f}`"
   | .coerce _ _ t => return (some t, .stack)
+  | .tail .. => return (none, .stack)
   | .acquire s r f t args =>
     match c.env.interface.resource? r with
     | some decl =>
@@ -954,6 +955,13 @@ partial def lowerTry (c : LCtx) (sp : Span) (x : String) (f : Fallible)
     | none => c
   let zero64 : LIR.Cond := { op := .eq, signed := false, w := 64, l := .var "", r := lit 64 0 }
   match f with
+  | .tail _ m i =>
+    -- the call, then the code for a call not taken; a taken call
+    -- never returns, so nothing follows for it
+    let I ← lowerExpr c sp i (some Interface.tU32)
+    let c ← takeMoves c
+    let (els', _) ← lowerStmts c els
+    return (I.pre ++ [.builtin sp none (.tail m) [I.e]] ++ els', c)
   | .view _ off t =>
     let O ← lowerExpr c sp off (some Interface.tU64)
     let n ← sizeOfTy c t
@@ -1254,7 +1262,8 @@ def foldMapDecl (env : Env) (d : MapDecl) : MapDecl :=
       | .array n v => .array (count n) (foldTy env v)
       | .percpu n v => .percpu (count n) (foldTy env v)
       | .hash n k v => .hash (count n) (foldTy env k) (foldTy env v)
-      | .ringbuf n => .ringbuf (count n) }
+      | .ringbuf n => .ringbuf (count n)
+      | .progArray n k => .progArray (count n) k }
 
 /-- Pass B on a folded unit. -/
 def lower (pre : Interface) (folded : Folded) : Except String LIR.CompUnit := do

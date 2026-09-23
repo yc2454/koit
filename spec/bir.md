@@ -138,6 +138,7 @@ consult the kernel parameter:
 | `enter R`, `leave R` | none | push, pop, for the scope declarations |
 | `copy n`, `fill n` | locations, a byte | byte moves, expanded by the flattening |
 | `printk fmt n` | `n` scalars; the format is on the instruction, and in bytecode the location in the read-only data and the size holding its bytes, filled at the call site by the flattening (entry 37) | an event on the trace with the format and the scalars |
+| `tail m` | the context, the array `m`, and the index; a taken call replaces the program, and the machine runs the entry's body with one counter of 33 per invocation; not taken, the next instruction runs (decision 67) | the callee's trace and verdict, or nothing |
 | `atomic op(w)` | a location, one or two scalars | the read-modify-write of section 8.5, at 32 or 64 bits |
 
 A key or value argument may lie in any readable region, and its

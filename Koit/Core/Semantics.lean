@@ -49,6 +49,7 @@ def bindingOf : Val → Binding
 def abortOut : Abort → Outcome
   | .raise k r => .raise k r
   | .err m => .err m
+  | .tail p => .tail p
 
 /-- The value an atomic update stores, or none for a `cmpxchg` whose
 comparison fails. -/
@@ -450,6 +451,14 @@ inductive ExecFall (K : Kernel) :
   | calloptAbort {st s f args d a st1} :
       st.env.fn? f = some d → ExecFn K st d args (.error a) st1 →
       ExecFall K st (.callopt s f args) (.error a) st1
+  /-- (Tail, not taken): the slot empty or the limit reached, the
+  operation fails; the taken case is a statement outcome (below). -/
+  | tailNotTaken {st s m i v st1} :
+      EvalExpr K st i (.ok v) st1 →
+      (Machine.tailCall m (toNatMod ((v.toInt?).getD 0) 32)).exec st1.machine = .ok (false, st1.machine) →
+      ExecFall K st (.tail s m i) (.ok none) st1
+  | tailAbort {st s m i a st1} :
+      EvalExpr K st i (.error a) st1 → ExecFall K st (.tail s m i) (.error a) st1
   /-- (Coerce): the predicate of the value, under the refined name. -/
   | coerce {st s e t x base pred v ok st1 st2} :
       t = .refined s x base pred → EvalExpr K st e (.ok v) st1 →
@@ -603,6 +612,13 @@ inductive ExecStmt (K : Kernel) : State → Stmt → Outcome → State → Prop
       ExecStmt K st (.«try» s x f thn els ex) o st2
   | tryAbort {st s x f thn els ex a st1} :
       ExecFall K st f (.error a) st1 → ExecStmt K st (.«try» s x f thn els ex) (abortOut a) st1
+  /-- (Tail, taken): the program named by the slot runs in this one's
+  place; the statement's outcome is that program, for the driver. -/
+  | tailTaken {st s x m i thn els ex v p st1 mach} :
+      EvalExpr K st i (.ok v) st1 →
+      (Machine.tailCall m (toNatMod ((v.toInt?).getD 0) 32)).exec st1.machine = .ok (true, mach) →
+      mach.tailTo = some p →
+      ExecStmt K st (.«try» s x (.tail s m i) thn els ex) (.tail p) { st1 with machine := mach }
   /-- (Hold-in), then (Hold-out) or the abnormal release: the body under
   the resource, released on the machine normally when the body
   completes and abnormally on any other exit, unless `move` took it. -/

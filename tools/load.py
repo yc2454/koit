@@ -318,8 +318,20 @@ def main():
             kfunc_ids[n] = kid
 
     map_fds = {m["name"]: create_map(unit, m, a.log_dir) for m in unit.maps}
+    # every program loads before any runs, so that the program arrays
+    # can hold their descriptors first
+    prog_fds = {}
     for p in programs:
-        fd = load_program(unit, p, map_fds, kfunc_ids, a.log_dir)
+        prog_fds[p["name"]] = load_program(unit, p, map_fds, kfunc_ids, a.log_dir)
+    for m in unit.maps:
+        for slot, pname in enumerate(m.get("programs") or []):
+            if pname not in prog_fds:
+                raise SystemExit(f"load: program array {m['name']} names `{pname}`, which did not load")
+            kb = ctypes.create_string_buffer(struct.pack("<I", slot), 4)
+            vb = ctypes.create_string_buffer(struct.pack("<I", prog_fds[pname]), 4)
+            bpf(BPF_MAP_UPDATE_ELEM, attr_map_elem(map_fds[m["name"]], kb, vb))
+    for p in programs:
+        fd = prog_fds[p["name"]]
         retval, out = test_run(p, fd, packet)
         print(f"{p['name']}: {koitobj.verdict_name(p, retval)}")
         if a.show_packet and p["kind"] != "syscall":

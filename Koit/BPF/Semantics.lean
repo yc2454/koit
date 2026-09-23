@@ -331,6 +331,15 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     | some obj => pure obj
     | none => throw (.badArgument name s!"{v.print} is not a lock's field or a kernel object")
   match b, args with
+  | .tail m', [.handle mn, idx] =>
+    -- taken, the machine records the entry and the run stops here;
+    -- not taken, nothing happens
+    unless mn == m' do throw (.badArgument name s!"`tail` through `{mn}`, declared for `{m'}`")
+    let i ← match idx with
+      | .scalar i => pure (toNatMod i 32)
+      | v => throw (.badArgument name s!"`tail` takes an index, not {v.print}")
+    let (_, st') ← machineOp st (Machine.tailCall mn i)
+    return (none, st')
   | .lookup, [.handle mn, key] =>
     let some ms := st.map? mn | throw (.malformed s!"unknown map `{mn}`")
     let kb ← readBytes X m key (keySize ms)

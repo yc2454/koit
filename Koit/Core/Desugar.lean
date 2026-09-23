@@ -169,6 +169,7 @@ def describe : Fallible → String
   | .acquire _ _ f .. => s!"`{f}`"
   | .callopt _ f _ => s!"`{f}`, which returns an optional,"
   | .coerce .. => "the coercion"
+  | .tail _ m _ => s!"the tail call through `{m}`"
 
 /-- A fallible operation as the surface writes it: one of section
 8.3's forms, or the byte read `pkt[off]`, which binds the byte read
@@ -566,6 +567,15 @@ partial def dStmts (c : Ctx) : List Syntax.Stmt → M (List Stmt)
               the resources the interface declares are {", ".intercalate decls}"
         let s' : Stmt := .invalid acq.span msg
         return s' :: (← dStmts c rest)
+    | .tail span m i tail =>
+      -- a taken call never returns, so nothing follows it for that
+      -- case; the else block is what a call not taken runs
+      let i' ← dExpr c i
+      let els ← match tail with
+        | some t => dTail c .no_program t
+        | none => pure [.raise span .no_program (lit0 span)]
+      let rest' ← dStmts c rest
+      return [.«try» span "_" (.tail span m i') [] els true] ++ rest'
     | .check span cond tail =>
       let p ← dExpr c cond
       let bs := cond.span
@@ -791,6 +801,7 @@ def dItem (info : Info) (u : CompUnit) : Syntax.Item → M CompUnit
       | .hash _ e k v =>
         pure (MapKind.hash (← dExpr c e) (← dTy c k) (← dTy c v))
       | .ringbuf _ e => pure (MapKind.ringbuf (← dExpr c e))
+      | .progArray _ e k => pure (MapKind.progArray (← dExpr c e) k)
     let init ← match init with
       | some es => es.mapM (dExpr c)
       | none => pure []

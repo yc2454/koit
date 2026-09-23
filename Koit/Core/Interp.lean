@@ -374,6 +374,17 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
         | some v => return some (v.map bindingOf)
         | none => return none
     | none => fail s!"unknown function `{f}`"
+  | .tail _ m i => do
+    -- taken, the program is left for the entry; not taken, a failure
+    let v ← evalExpr K i
+    let idx := toNatMod ((v.toInt?).getD 0) 32
+    let st ← get
+    match (Machine.tailCall m idx).exec st.machine with
+    | .ok (true, mach) =>
+      set { st with machine := mach }
+      throw (.tail ((mach.tailTo).getD ""))
+    | .ok (false, _) => return none
+    | .error e => fail e
   | .callopt _ f args => do
     let env ← getEnv
     let some d := env.fn? f | fail s!"unknown function `{f}`"
@@ -596,10 +607,19 @@ def runProgram (K : Kernel) (st : State) (p : Program) : Except String Halt := d
         | .ret (some v) => coerceTo st.kind.verdictTy v
         | _ => fail s!"the handler for `{k}` fell off its end"
       | .err m => throw (.err m)
-  match handled.exec st with
+      | .tail p => throw (.tail p)
+  -- a taken tail call leaves the program with the entry recorded on
+  -- the machine; the verdict is the entry's, which the driver runs
+  -- next on this state
+  let escaped : M Val := do
+    try handled catch
+      | .tail _ => pure (Val.mkInt true 32 0)
+      | e => throw e
+  match escaped.exec st with
   | .ok (v, st') => return { verdict := v, state := st' }
   | .error (.err m) => throw m
   | .error (.raise k _) => throw s!"an unhandled failure of kind `{k}`"
+  | .error (.tail p) => throw s!"a tail call to `{p}` escaped"
 
 /-- The map state of a unit at the start of a run: every map empty
 or zero-filled. -/
@@ -634,6 +654,15 @@ def initMaps (env : Env) (u : CompUnit) :
       | .ringbuf n =>
         pure { decl := d, valueTy := .int d.span false 8, valueSize := 1,
                capacity := ← cap n }
+      | .progArray n _ =>
+        -- the entries are the programs the initializer names
+        let progs := (List.range d.init.length).filterMap fun i =>
+          match (d.init[i]? : Option Expr) with
+          | some (Expr.var _ p) => some (i, p)
+          | _ => none
+        pure { decl := d, valueTy := .int d.span false 32, valueSize := 4,
+               keyTy := some (.int d.span false 32), keySize := 4,
+               capacity := ← cap n, progs }
     ms := ms ++ [(d.name, m)]
   return ms
 
@@ -687,6 +716,9 @@ def printMaps (env : Env) (maps : List (String × Machine.MapState)) : List Stri
   -- the compiler's own data map, the formats, is not the program's
   (maps.filter (·.2.decl.bytes.isEmpty)).map fun (name, ms) =>
     match ms.decl.kind with
+    | .progArray .. =>
+      if ms.progs.isEmpty then s!"map {name}: no programs" else
+      s!"map {name}:" ++ String.join (ms.progs.map fun (i, p) => s!"\n  [{i}] = {p}")
     | .ringbuf _ =>
       s!"map {name}: {ms.ring.length} record(s)" ++
         String.join (ms.ring.map fun r => s!"\n  0x{hexOf r.toList}")
@@ -749,7 +781,18 @@ def runUnit (pre : Interface) (u : CompUnit) (packet : ByteArray)
     if only.isSome && only != some p.name then continue
     let some decl := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
     let st := initState env decl packet ctx maps fuel
-    let h ← runProgram Machine.synthetic st p
+    let mut h ← runProgram Machine.synthetic st p
+    -- a taken tail call: the entry runs on the same machine state,
+    -- its trace continuing, and its verdict is the invocation's
+    let mut hops := 0
+    while h.state.machine.tailTo.isSome && hops ≤ Machine.maxTailCalls do
+      let some name := h.state.machine.tailTo | break
+      let some q := u.programs.find? (·.name == name) | throw s!"no program `{name}`"
+      let some qdecl := pre.kind? q.kind | throw s!"unknown kind `{q.kind}`"
+      let mach := { h.state.machine with tailTo := none }
+      let st2 := { initState env qdecl packet ctx mach.maps fuel with machine := mach }
+      h ← runProgram Machine.synthetic st2 q
+      hops := hops + 1
     maps := h.state.maps
     reports := reports ++ [{ program := p.name, verdict := verdictName decl h.verdict,
                              log := h.state.log }]

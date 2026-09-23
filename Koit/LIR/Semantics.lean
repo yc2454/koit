@@ -37,6 +37,8 @@ inductive Outcome where
   | ret (v : Option Val)
   | raise (k : Kind) (reason : Nat)
   | err (msg : String)
+  /-- A taken tail call: the program named runs in this one's place. -/
+  | tail (p : String)
   deriving Repr, Inhabited
 
 /-! ### Values -/
@@ -244,6 +246,12 @@ def execBuiltin (b : Builtin) (args : List Val) : M (Option Val) := do
     return none
   | .printk fmt, vs =>
     op (Machine.print fmt (vs.map Val.observe))
+    return none
+  | .tail m, [i] =>
+    -- taken, the program is left for the entry; not taken, nothing
+    let some iv := i.toInt? | fail "`tail` takes an index"
+    if ← op (Machine.tailCall m (toNatMod iv 32)) then
+      throw (.tail (((← get).machine.tailTo).getD ""))
     return none
   | .atomic o s w fetch, a :: vs =>
     let l ← locOf a "an atomic update"

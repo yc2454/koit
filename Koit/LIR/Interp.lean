@@ -90,7 +90,7 @@ partial def execStmt (K : Kernel) (fns : Fns) (s : Stmt) : M LOut := do
         -- the releases the call site owes, then the failure goes on
         let _ ← execStmts K fns (u.getD [])
         throw e
-      | .err _ => throw e
+      | .err _ | .tail _ => throw e
     restore
     unless heldEq (← get).held st0.held do
       fail s!"`{f}` returns holding something it did not hold at entry"
@@ -152,10 +152,18 @@ def runProgram (K : Kernel) (fns : Fns) (st : State) (p : Program) : Except Stri
         | .ret (some v) => return fitCore st.kind.verdictTy v
         | _ => fail s!"the handler for `{k}` does not return a verdict"
       | .err m => throw (.err m)
-  match handled.exec st with
+      | .tail p => throw (.tail p)
+  -- a taken tail call leaves the program with the entry recorded on
+  -- the machine, for the driver
+  let escaped : M Val := do
+    try handled catch
+      | .tail _ => pure (Val.mkInt true 32 0)
+      | e => throw e
+  match escaped.exec st with
   | .ok (v, st') => return { verdict := v, state := st' }
   | .error (.err m) => throw m
   | .error (.raise k _) => throw s!"an unhandled failure of kind `{k}`"
+  | .error (.tail p) => throw s!"a tail call to `{p}` escaped"
 
 /-- A unit's programs run in order over one map state, as Core's
 `runUnit` does, reporting the same lines. -/
@@ -172,7 +180,17 @@ def runUnit (pre : Interface) (core : Core.CompUnit) (u : CompUnit) (packet : By
     if only.isSome && only != some p.name then continue
     let some decl := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
     let st := initState env decl packet ctx maps fuel
-    let h ← runProgram Machine.synthetic u.fns st p
+    let mut h ← runProgram Machine.synthetic u.fns st p
+    -- a taken tail call: the entry runs on the same machine state
+    let mut hops := 0
+    while h.state.machine.tailTo.isSome && hops ≤ Machine.maxTailCalls do
+      let some name := h.state.machine.tailTo | break
+      let some q := u.programs.find? (·.name == name) | throw s!"no program `{name}`"
+      let some qdecl := pre.kind? q.kind | throw s!"unknown kind `{q.kind}`"
+      let mach := { h.state.machine with tailTo := none }
+      let st2 := { initState env qdecl packet ctx mach.maps fuel with machine := mach }
+      h ← runProgram Machine.synthetic u.fns st2 q
+      hops := hops + 1
     maps := h.state.maps
     reports := reports ++ [{ program := p.name, verdict := Core.Sem.verdictName decl h.verdict,
                              log := h.state.log }]

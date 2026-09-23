@@ -107,6 +107,7 @@ def foldFallible (env : Env) (decl : Interface.KindDecl) : Fallible → Fallible
   | .acquire s r f t args => .acquire s r f t (args.map (foldArg env decl))
   | .callopt s f args => .callopt s f (args.map (foldArg env decl))
   | .coerce s e t => .coerce s (foldExpr env decl e) t
+  | .tail s m i => .tail s m (foldExpr env decl i)
 
 def foldInit (env : Env) (decl : Interface.KindDecl) : Init → Init
   | .expr e => .expr (foldExpr env decl e)

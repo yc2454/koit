@@ -105,6 +105,7 @@ def mapJson (pre : Interface) (env : Check.Env) (direct : List String) (d : MapD
     | .percpu n v => pure ("percpu", some u32, some v, n)
     | .hash n k v => pure ("hash", some k, some v, n)
     | .ringbuf n => pure ("ringbuf", none, none, n)
+    | .progArray n _ => pure ("prog_array", some u32, some u32, n)
   let keyJson ← match key with
     | some k => pure (← typeJson env k)
     | none => pure Json.null
@@ -124,7 +125,8 @@ def mapJson (pre : Interface) (env : Check.Env) (direct : List String) (d : MapD
     ("data", ← do
       if !d.bytes.isEmpty then
         pure (Json.str (String.join (d.bytes.map fun b => hex2 b.toNat)))
-      else if d.init.isEmpty then pure Json.null
+      else if d.init.isEmpty || (match d.kind with | .progArray .. => true | _ => false) then
+        pure Json.null
       else
         let size ← match value with
           | some v => sizeOf v
@@ -137,6 +139,10 @@ def mapJson (pre : Interface) (env : Check.Env) (direct : List String) (d : MapD
           | none => throw s!"the initializer of `{d.name}` is not constant"
         pure (Json.str out)),
     ("direct", Json.bool (direct.contains d.name)),
+    -- a program array's entries, by slot
+    ("programs", Json.arr ((d.init.filterMap fun e => match e with
+      | .var _ p => some (Json.str p)
+      | _ => none).toArray)),
     ("spin_lock", match value.bind (spinLockOffset env) with
       | some o => toJson o
       | none => Json.null)]

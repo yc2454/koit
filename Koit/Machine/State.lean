@@ -74,6 +74,8 @@ structure MapState where
   entries   : List (Nat × List UInt8 × ByteArray) := []
   ring      : List ByteArray := []
   nextEntry : Nat := 0
+  /-- A program array's entries: the program at each slot. -/
+  progs     : List (Nat × String) := []
   deriving Inhabited
 
 /-! ### The protocol state and the trace -/
@@ -116,6 +118,11 @@ inductive Event where
 
 structure State where
   maps       : List (String × MapState) := []
+  /-- The program a taken tail call replaces the running one by, for
+  the run driver, and the calls taken in this invocation, which the
+  kernel caps at 33. -/
+  tailTo     : Option String := none
+  tailCount  : Nat := 0
   packet     : ByteArray := ByteArray.empty
   /-- The layout token: changed by a resize, so that a location into
   the packet made before it is dead. -/

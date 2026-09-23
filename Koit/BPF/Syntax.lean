@@ -85,6 +85,8 @@ inductive Builtin where
   frame object holding the kernel's format with its size, which the
   allocation passes to the helper. -/
   | printk (fmt : String) (n : Nat) (size : Nat)
+  /-- `bpf_tail_call`: the context, the program array, the index. -/
+  | tail (m : String)
   deriving Repr, BEq, Inhabited
 
 /-- What a `call` calls: a builtin, or a kernel function by the name
@@ -236,6 +238,7 @@ def Builtin.arity : Builtin → Nat
   | .reserve _ | .submit | .discard | .lock | .unlock => 1
   | .enter _ | .leave _ => 0
   | .printk _ n _ => n + 1
+  | .tail _ => 2
 
 /-- The kernel's argument layout of a builtin, for the fixed
 convention and the encoder: the map operations take the map first
@@ -243,6 +246,7 @@ and a flags word last, `reserve` its size, `printk` the format's
 location and size before its arguments. -/
 def Builtin.abi : Builtin → List Interface.AbiArg
   | .lookup => [.arg 0, .arg 1]
+  | .tail _ => [.ctx, .arg 0, .arg 1]
   | .update => [.arg 0, .arg 1, .arg 2, .const 0]
   | .delete => [.arg 0, .arg 1]
   | .reserve n => [.arg 0, .const n, .const 0]
@@ -256,6 +260,7 @@ the number is the kernel side of the interface's. The scope declarations are
 kfuncs, encoded by the name their resource declaration gives. -/
 def Builtin.helper : Builtin → Option String
   | .lookup => some "map_lookup_elem"
+  | .tail _ => some "tail_call"
   | .update => some "map_update_elem"
   | .delete => some "map_delete_elem"
   | .reserve _ => some "ringbuf_reserve"
@@ -278,6 +283,7 @@ def Builtin.print : Builtin → String
   | .enter r => s!"enter {r}"
   | .leave r => s!"leave {r}"
   | .printk fmt n size => s!"printk {Core.strLit fmt} {n} {size}"
+  | .tail m => s!"tail {m}"
 
 def Callee.print : Callee → String
   | .builtin b => b.print

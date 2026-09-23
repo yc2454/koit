@@ -287,6 +287,8 @@ inductive Outcome where
   | ret (v : Option Val)
   | raise (k : Kind) (reason : Nat)
   | err (msg : String)
+  /-- A taken tail call: the program named runs in this one's place. -/
+  | tail (p : String)
   deriving Repr, Inhabited
 
 /-- What a fallible operation yields: a value, a place, nothing, or a
@@ -315,6 +317,8 @@ way to the program's handler, or an error. -/
 inductive Abort where
   | raise (k : Kind) (reason : Nat)
   | err (msg : String)
+  /-- A taken tail call leaves the program for the one named. -/
+  | tail (p : String)
   deriving Repr, Inhabited
 
 /-- The evaluation monad: exceptions over state, so that a failure on

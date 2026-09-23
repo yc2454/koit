@@ -618,6 +618,11 @@ partial def builtin (x : Option String) (b : LIR.Builtin) (args : List LIR.Expr)
     let h ← mapHandle m
     let rk ← exprTemp k .ptr
     emit (.call (.builtin .lookup) [h, rk] (← bindResult .ptr))
+  | .tail m, [i] =>
+    -- the array's handle and the index; the context is the layout's
+    let h ← mapHandle m
+    let ri ← exprTemp i .u32
+    emit (.call (.builtin (.tail m)) [h, ri] none)
   | .update m, [k, v] =>
     let h ← mapHandle m
     let rk ← exprTemp k .ptr

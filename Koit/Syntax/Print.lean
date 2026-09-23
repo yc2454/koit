@@ -166,6 +166,7 @@ partial def Stmt.print (s : Stmt) (ind : Nat) : String :=
     "hold " ++ (match name with | some n => n ++ " = " | none => "") ++
       acq.print ++ Tail.printOpt tail ind ++ " " ++ body.print ind
   | .check _ c tail => "check " ++ c.print ++ Tail.printOpt tail ind
+  | .tail _ m i tail => "tail " ++ m ++ "[" ++ i.print ++ "]" ++ Tail.printOpt tail ind
   | .expr _ e tail => e.print ++ Tail.printOpt tail ind
   | .brk _ => "break"
   | .cont _ => "continue"
@@ -214,6 +215,7 @@ def MapType.print : MapType → String
   | .hash _ n k v =>
     "hash[" ++ n.print ++ "] of " ++ k.print ++ " -> " ++ v.print
   | .ringbuf _ n => "ringbuf[" ++ n.print ++ "]"
+  | .progArray _ n k => "prog_array[" ++ n.print ++ "] of " ++ k
 
 def Region.print : Region → String
   | .pkt _ none => "pkt"
