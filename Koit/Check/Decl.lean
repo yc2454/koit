@@ -19,7 +19,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Interface (KindRow tU32 tU64)
+open Koit.Interface (KindDecl tU32 tU64)
 open Koit.Facts (Facts Fact Caps Scope)
 open Koit.Effects (Effs)
 
@@ -167,7 +167,7 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
     if let some why ← env.notRepresentable v true then
       err v.span s!"the value type of map `{d.name}` may not contain {why}: \
         map keys and values are packet-representable, and a value may hold \
-        slot types per their rows"
+        slot types per their declarations"
     let _ ← env.layout v
   match d.kind with
   | .array n v | .percpu n v =>
@@ -349,19 +349,19 @@ def calleesFirst (env : Env) (fns : List Fn) : List Fn :=
   go [] fns fns.length
 
 /-- The verdict names and regions of a contract or a program header. -/
-def checkClauses (env : Env) (row : KindRow)
+def checkClauses (env : Env) (decl : KindDecl)
     (verdicts : Option (List (Span × String))) (preserved : List Region) :
     M Unit := do
   if let some vs := verdicts then
     for (s, n) in vs do
-      unless row.verdicts.any (·.1 == n) do
-        err s s!"`{n}` is not a verdict of {article row.name} `{row.name}` \
+      unless decl.verdicts.any (·.1 == n) do
+        err s s!"`{n}` is not a verdict of {article decl.name} `{decl.name}` \
           program"
   for r in preserved do
     match r with
     | .pkt s range =>
-      unless row.hasPkt do
-        err s s!"{article row.name} `{row.name}` program has no packet \
+      unless decl.hasPkt do
+        err s s!"{article decl.name} `{decl.name}` program has no packet \
          "
       if let some (lo, hi) := range then
         for e in [lo, hi] do
@@ -376,13 +376,13 @@ def checkClauses (env : Env) (row : KindRow)
         unless (env.map? m).isSome do
           err s s!"unknown map `{m}` in `preserve maps except`"
     | .ctx s f =>
-      unless row.ctx.any (·.name == f) do
-        err s s!"the context of {article row.name} `{row.name}` program has no \
+      unless decl.ctx.any (·.name == f) do
+        err s s!"the context of {article decl.name} `{decl.name}` program has no \
           field `{f}`"
 
-def kindRow (env : Env) (span : Span) (kind : String) : M KindRow := do
+def kindDecl (env : Env) (span : Span) (kind : String) : M KindDecl := do
   match env.interface.kind? kind with
-  | some row => return row
+  | some decl => return decl
   | none =>
     err span s!"unknown program kind `{kind}`; the kinds are \
       {", ".intercalate (env.interface.kinds.map (·.name))}"
@@ -425,8 +425,8 @@ def checkNamedHandlers (env : Env) (p : Program) : M Unit := do
         cannot run; remove it, or mark the operation that should raise it"
 
 def checkContract (env : Env) (c : Contract) : M Unit := do
-  let row ← kindRow env c.span c.kind
-  checkClauses env row c.verdicts c.preserved
+  let decl ← kindDecl env c.span c.kind
+  checkClauses env decl c.verdicts c.preserved
 
 /-- (Program) and (Handler): the kind, the contract, the clauses,
 every handler exiting in a non-failing context, and the body, each
@@ -434,7 +434,7 @@ every handler exiting in a non-failing context, and the body, each
 effects checked against the preserved regions. Yields the caps of
 the loops and the program's effects. -/
 def checkProgram (env : Env) (p : Program) : M (Caps × Effs) := do
-  let row ← kindRow env p.span p.kind
+  let decl ← kindDecl env p.span p.kind
   checkNamedHandlers env p
   if let some (s, c) := p.implements then
     match env.contracts.find? (·.name == c) with
@@ -443,15 +443,15 @@ def checkProgram (env : Env) (p : Program) : M (Caps × Effs) := do
         err s s!"contract `{c}` is for `{k.kind}` programs; `{p.name}` is \
           {article p.kind} `{p.kind}` program"
     | none => err s s!"unknown contract `{c}`"
-  checkClauses env row p.verdicts p.preserved
-  let env := { env with kind := some row }
+  checkClauses env decl p.verdicts p.preserved
+  let env := { env with kind := some decl }
   let vset := p.verdicts.map (·.map (·.2))
   let mut caps : Caps := []
   let mut E : Effs := {}
   for h in p.handlers do
     let hEnv := env.bind { name := "reason", ty := tU32, mutable := false,
                            origin := .stack }
-    let K : Ctx := { mayFail := false, ret := .handler row.verdictTy,
+    let K : Ctx := { mayFail := false, ret := .handler decl.verdictTy,
                      inHandler := true, verdictSet := vset,
                      preserved := p.preserved }
     let (F, Eh) ← checkStmts hEnv K h.body
@@ -460,11 +460,11 @@ def checkProgram (env : Env) (p : Program) : M (Caps × Effs) := do
     unless exits h.body do
       err h.span s!"the handler for `{h.kind}` must end in an exit \
        "
-  let K : Ctx := { mayFail := true, ret := .program row.verdictTy,
+  let K : Ctx := { mayFail := true, ret := .program decl.verdictTy,
                    verdictSet := vset, preserved := p.preserved }
   let (F, Eb) ← checkStmts env K p.body
-  if row.hasPkt && !exits p.body then
-    err p.span s!"the body of {article row.name} `{row.name}` program must end \
+  if decl.hasPkt && !exits p.body then
+    err p.span s!"the body of {article decl.name} `{decl.name}` program must end \
       in an exit"
   return (caps ++ F.caps, E.union Eb)
 

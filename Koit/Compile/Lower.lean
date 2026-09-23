@@ -38,7 +38,7 @@ namespace Koit.Compile
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env Ctx Local Checked synth check)
-open Koit.Interface (CallRow ResourceRow KindRow)
+open Koit.Interface (CallDecl ResourceDecl KindDecl)
 open Koit.Facts (Origin)
 
 /-! ### The monad and the context -/
@@ -93,7 +93,7 @@ inductive Marker where
 
 inductive Scope where
   | construct (m : Marker)
-  | release (row : ResourceRow) (obj : Option LIR.Addr) (name : Option String)
+  | release (decl : ResourceDecl) (obj : Option LIR.Addr) (name : Option String)
 
 /-- What `return` returns to. -/
 inductive RetTo where
@@ -110,7 +110,7 @@ structure LCtx where
   rho    : List Scope := []
   mu     : List String := []
   ret    : RetTo
-  kind   : Option KindRow
+  kind   : Option KindDecl
   /-- The `err` local of the enclosing failed call, for `errno`. -/
   errno  : Option String := none
   direct : List String
@@ -129,7 +129,7 @@ def normTy (c : LCtx) (t : Ty) : LM Ty := liftC (c.env.norm t)
 
 /-- The LIR type of a Core type: integers at their width, byte-order
 values as unsigned patterns, enumerations as unsigned integers of
-their row's width, booleans as bytes, places as locations. Below this
+their declaration's width, booleans as bytes, places as locations. Below this
 point no type of the source language exists. -/
 def lty (c : LCtx) (t : Ty) : LM LIR.Ty := do
   match ← normTy c t with
@@ -138,7 +138,7 @@ def lty (c : LCtx) (t : Ty) : LM LIR.Ty := do
   | .bool _ => return .u8
   | .enum s n =>
     match c.env.interface.enum? n with
-    | some row => return .int false row.width
+    | some decl => return .int false decl.width
     | none => lerr s!"{s.start}: unknown enumeration `{n}`"
   | _ => return .ptr
 
@@ -257,10 +257,10 @@ unreachable; in a function, an early return of nothing. -/
 def deadBranch (c : LCtx) (sp : Span) : List LIR.Stmt :=
   let verdict (vt : LIR.Ty) : List LIR.Stmt :=
     match c.kind with
-    | some row =>
+    | some decl =>
       let (_, w) := intParts vt
-      let v : Nat := match row.defaultExit with
-        | .verdict name => (row.verdicts.lookup name).getD 0
+      let v : Nat := match decl.defaultExit with
+        | .verdict name => (decl.verdicts.lookup name).getD 0
         | .value v => Machine.toNatMod v w
       [.ret sp (some (lit w v))]
     | none => [.ret sp none]
@@ -297,9 +297,9 @@ partial def lowerExpr (c : LCtx) (sp : Span) (e : Expr) (expected : Option Ty) :
         match d.init with
         | some i => lowerExpr c sp i (some d.ty)
         | none => lerr s!"`{x}` has no value for this build"
-      else if let some (row, n) := c.kind.bind fun row =>
-          (row.verdicts.lookup x).map (row, ·) then
-        let vt ← lty c row.verdictTy
+      else if let some (decl, n) := c.kind.bind fun decl =>
+          (decl.verdicts.lookup x).map (decl, ·) then
+        let vt ← lty c decl.verdictTy
         return { pre := [], e := lit (intParts vt).2 n, ty := vt }
       else if let some d := c.env.interface.const? x then
         lowerExpr c sp d.value (d.ty <|> expected)
@@ -413,7 +413,7 @@ partial def lowerCond (c : LCtx) (sp : Span) (e : Expr) : LM (List LIR.Stmt × L
       -- an enumeration compares as the unsigned integer it is
       | .enum _ n =>
         match c.env.interface.enum? n with
-        | some row => pure (false, row.width)
+        | some decl => pure (false, decl.width)
         | none => lerr s!"unknown enumeration `{n}`"
       | _ => lerr "a comparison of values that are not integers"
     let L ← lowerExpr c sp l (some tn)
@@ -446,7 +446,7 @@ partial def lowerPlace (c : LCtx) (sp : Span) (p : Place) : LM (List LIR.Stmt ×
       | t => return ([], .local x' t)
     | none => lerr s!"`{x}` is not a place"
   | .field _ (.var _ "ctx") f =>
-    match c.kind.bind fun row => row.ctx.find? (·.name == f) with
+    match c.kind.bind fun decl => decl.ctx.find? (·.name == f) with
     | some cf => return ([], .ctx f cf.ty)
     | none => lerr s!"the context has no field `{f}`"
   | .field _ q f =>
@@ -562,7 +562,7 @@ partial def lowerLooseArgs (c : LCtx) (sp : Span) (args : List Arg) :
 
 /-- A call in a value or statement position: a function of the unit
 as `call`, a kernel function as a `kernel` statement whose `r0` is
-cast to the row's result, a builtin as itself. `binder` names the
+cast to the declaration's result, a builtin as itself. `binder` names the
 result when the source bound it. -/
 partial def lowerCall (c : LCtx) (sp : Span) (f : String) (args : List Arg)
     (binder : Option String) : LM (List LIR.Stmt × Option (LIR.Expr × LIR.Ty)) := do
@@ -580,8 +580,8 @@ partial def lowerCall (c : LCtx) (sp : Span) (f : String) (args : List Arg)
         | none => freshName "t"
       return (pre ++ [.call sp (some x) f args' unwind none], some (.var x, lt))
     | none => return (pre ++ [.call sp none f args' unwind none], none)
-  let some row := c.env.interface.call? f | lerr s!"unknown function `{f}`"
-  match row.sig with
+  let some decl := c.env.interface.call? f | lerr s!"unknown function `{f}`"
+  match decl.sig with
   | .fn params ret =>
     let (pre, args') ← lowerArgs c sp params args
     let t ← freshName "t"
@@ -624,14 +624,14 @@ partial def lowerCall (c : LCtx) (sp : Span) (f : String) (args : List Arg)
     | _, _ => lerr s!"`{f}` has no lowering in this position"
 
 /-- The release of a resource, normally or abnormally: the builtin of
-its row, or the kernel function its exit column names. -/
-partial def releaseStmt (c : LCtx) (sp : Span) (row : ResourceRow) (normal : Bool)
+its declaration, or the kernel function its exit clause names. -/
+partial def releaseStmt (c : LCtx) (sp : Span) (decl : ResourceDecl) (normal : Bool)
     (obj : Option LIR.Addr) : LM LIR.Stmt := do
   let objArgs := match obj with
     | some a => [LIR.Expr.addr a]
     | none => []
-  match Machine.releaseOf c.env.interface row normal with
-  | .ok .leave => return .builtin sp none (.leave row.res) []
+  match Machine.releaseOf c.env.interface decl normal with
+  | .ok .leave => return .builtin sp none (.leave decl.res) []
   | .ok .unlock => return .builtin sp none .unlock objArgs
   | .ok .submit => return .builtin sp none .submit objArgs
   | .ok .discard => return .builtin sp none .discard objArgs
@@ -645,12 +645,12 @@ partial def releasesUpTo (c : LCtx) (sp : Span) (stop : Marker → Bool) :
   let rec go : List Scope → LM (List LIR.Stmt)
     | [] => pure []
     | .construct m :: rest => if stop m then pure [] else go rest
-    | .release row obj name :: rest => do
+    | .release decl obj name :: rest => do
       let rest' ← go rest
       match name with
       | some x => if c.mu.contains x then pure rest' else
-          pure ((← releaseStmt c sp row false obj) :: rest')
-      | none => pure ((← releaseStmt c sp row false obj) :: rest')
+          pure ((← releaseStmt c sp decl false obj) :: rest')
+      | none => pure ((← releaseStmt c sp decl false obj) :: rest')
   go c.rho
 
 /-- Every release owed: at `return`, `raise`, and in an `unwind`. -/
@@ -706,8 +706,8 @@ def boundTy (c : LCtx) (f : Fallible) : LM (Option Ty × Origin) := do
   | .loadw .. => lerr "a marked load reads a field"
   | .call _ h _ =>
     match c.env.interface.call? h with
-    | some row =>
-      match row.sig with
+    | some decl =>
+      match decl.sig with
       | .fn _ ret => return (ret, .stack)
       | .builtin => return (none, .stack)
     | none => return (none, .stack)
@@ -721,8 +721,8 @@ def boundTy (c : LCtx) (f : Fallible) : LM (Option Ty × Origin) := do
   | .coerce _ _ t => return (some t, .stack)
   | .acquire s r f t args =>
     match c.env.interface.resource? r with
-    | some row =>
-      match row.arg with
+    | some decl =>
+      match decl.arg with
       | .place _ | .scope => return (none, .kernel)
       | .call =>
         if f == "reserve" then
@@ -731,14 +731,14 @@ def boundTy (c : LCtx) (f : Fallible) : LM (Option Ty × Origin) := do
           | none => lerr "`reserve` takes a record type"
         else
           match c.env.interface.call? f with
-          | some row =>
-            match row.sig with
+          | some decl =>
+            match decl.sig with
             | .fn _ ret => return (ret, .kernel)
             | .builtin => lerr s!"`{f}` has no signature"
           | none => lerr s!"unknown function `{f}`"
     | none =>
       let _ := args
-      lerr s!"no row for `{r}`"
+      lerr s!"no declaration for `{r}`"
 
 mutual
 
@@ -1028,14 +1028,14 @@ partial def lowerTry (c : LCtx) (sp : Span) (x : String) (f : Fallible)
             { c with mu := muT })
   | .coerce .. => lerr "a coercion targets a refinement type"
   | .call _ h args =>
-    let some row := c.env.interface.call? h | lerr s!"unknown function `{h}`"
-    match row.sig with
+    let some decl := c.env.interface.call? h | lerr s!"unknown function `{h}`"
+    match decl.sig with
     | .fn params ret =>
       let (pre, args') ← lowerArgs c sp params args
       let t ← freshName "t"
       let call : LIR.Stmt := .kernel sp (some t) h args'
       let c ← takeMoves c
-      match LIR.rowResult row with
+      match LIR.rowResult decl with
       | .ptr =>
         -- a location result: null is the failure
         let x' ← if x == "_" then freshName "p" else nameFor x
@@ -1103,7 +1103,7 @@ a block under the release action, the normal release after it. -/
 partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
     (acq : Fallible) (body : List Stmt) (els : Option (List Stmt)) :
     LM (List LIR.Stmt × LCtx) := do
-  let some row := c.env.interface.resource? r | lerr s!"no row for `{r}`"
+  let some decl := c.env.interface.resource? r | lerr s!"no declaration for `{r}`"
   let (bt, _) ← boundTy c acq
   let zero64 (x : String) : LIR.Cond :=
     { op := .eq, signed := false, w := 64, l := .var x, r := lit 64 0 }
@@ -1113,9 +1113,9 @@ partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
     let cb := match x, x', bt with
       | some n, some n', some t => bindLocal c n t false .kernel n'
       | _, _, _ => c
-    let cb := pushConstruct { cb with rho := .release row obj x :: cb.rho } .plain
+    let cb := pushConstruct { cb with rho := .release decl obj x :: cb.rho } .plain
     lowerStmts cb body
-  match row.arg, acq with
+  match decl.arg, acq with
   | .place _, .acquire _ _ _ _ [.place p] =>
     let (pp, pr) ← lowerPlace c sp p
     let a ← match pr with
@@ -1142,8 +1142,8 @@ partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
         | _, _ => lerr "`reserve` takes a ring buffer and a record type"
       else
         match c.env.interface.call? f with
-        | some row =>
-          match row.sig with
+        | some decl =>
+          match decl.sig with
           | .fn params _ =>
             let (pre, args') ← lowerArgs c sp params args
             pure (pre, LIR.Stmt.kernel sp (some x') f args')
@@ -1152,10 +1152,10 @@ partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
     let c ← takeMoves c
     let (body', mu) ← bodyUnder c (some (.var x')) (some x')
     let normal ← if mu.contains n then pure [] else
-      pure [← releaseStmt c sp row true (some (.var x'))]
+      pure [← releaseStmt c sp decl true (some (.var x'))]
     -- a refused reservation has no return code; the model's reason
     -- for it is `ENOMEM`, as Core's rule sets `errno`
-    let (errDecl, ce) ← if row.fails == some .failed_call then
+    let (errDecl, ce) ← if decl.fails == some .failed_call then
         let err ← freshName "err"
         pure ([LIR.Stmt.«let» sp err .u32 (lit 32 (Machine.toNatMod (-12) 32))],
               { c with errno := some err })
@@ -1163,7 +1163,7 @@ partial def lowerHold (c : LCtx) (sp : Span) (r : Resource) (x : Option String)
     let (els', _) ← lowerStmts ce (els.getD [])
     return (pre ++ [acqStmt, .ite sp (zero64 x') (errDecl ++ els') (.block sp body' :: normal)],
             { c with mu := mu.filter (· != n) })
-  | _, _ => lerr s!"`{Check.acqName acq}` does not fit the row of `{r}`"
+  | _, _ => lerr s!"`{Check.acqName acq}` does not fit the declaration of `{r}`"
 
 end
 
@@ -1211,11 +1211,11 @@ def lowerFn (env : Env) (fns : List Fn) (direct : List String) (d : Fn) : LM LIR
 
 def lowerProgram (env : Env) (fns : List Fn) (direct : List String) (p : Program) :
     LM LIR.Program := do
-  let some row := env.interface.kind? p.kind | lerr s!"unknown kind `{p.kind}`"
+  let some decl := env.interface.kind? p.kind | lerr s!"unknown kind `{p.kind}`"
   resetNames
-  let env := { env.top with kind := some row }
-  let c0 : LCtx := { env, K := synthCtx, ret := .program .u32, kind := some row, direct, fns }
-  let vt ← lty c0 row.verdictTy
+  let env := { env.top with kind := some decl }
+  let c0 : LCtx := { env, K := synthCtx, ret := .program .u32, kind := some decl, direct, fns }
+  let vt ← lty c0 decl.verdictTy
   let c := { c0 with ret := .program vt }
   let (body, _) ← lowerStmts c p.body
   let mut handlers : List LIR.Handler := []

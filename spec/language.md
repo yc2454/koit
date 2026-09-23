@@ -15,7 +15,7 @@ re-derived the mechanisms against the kernel's own state
    sanctioned escape of a place, with join consistency instead of
    runtime flags (sections 7, 11.5, 18.4).
 4. Guards: a place's validity may be tied to a held resource or to the
-   packet layout; view invalidation is the first row of that table
+   packet layout; view invalidation is the first of those guards
    (section 12).
 5. Views are the one operation for any region of dynamic extent; the
    packet is the instance this draft defines (section 7).
@@ -25,7 +25,7 @@ re-derived the mechanisms against the kernel's own state
    iterator loops `for x in it bounded N` with `?` making the cap a
    failure (sections 9, 18.4). `bpf_loop`, open-coded iterators, and
    `may_goto` are lowering targets, never source constructs.
-8. The `sleep` effect; sleepability is a column of the kind table
+8. The `sleep` effect; sleepability is a clause of the kind declaration
    (sections 12, 13).
 9. The reason of a `failed_call` failure defaults to the helper's negative
    return (section 10.5).
@@ -33,14 +33,14 @@ re-derived the mechanisms against the kernel's own state
     fragment is fixed by acceptance, not expressiveness; no solver in
     the type system; the path-fact lemma (sections 3, 18.5, 20).
 11. `license` declaration per unit (section 6).
-12. Slot types: the storage side of M3 is a table like the acquisition
-    side; `spinlock` is its one stage-1 row, not a keyword (sections
+12. Slot types: the storage side of M3 is declared like the acquisition
+    side; `spinlock` is its one stage-1 declaration, not a keyword (sections
     5, 7, 11, 18.1).
-13. The kernel interface's seven tables are specified: kinds, context fields,
+13. The kernel interface's seven parts are specified: kinds, context fields,
     calls, resources, regions, slots; the target kernel is a compiler
-    input; `const` parameters; sleepable kinds as rows; the trusted
-    columns (sections 6, 7, 12, 13, 16, 20).
-14. `own T` uniformly; the acquisition's argument form is a column;
+    input; `const` parameters; sleepable kinds as declarations; the trusted
+    clauses (sections 6, 7, 12, 13, 16, 20).
+14. `own T` uniformly; the acquisition's argument form is a clause;
     lexical scoping of resources stated as a non-claim (sections 7,
     8.3, 11).
 15. The callback-loop rules recorded with the deferral of iterator
@@ -81,7 +81,7 @@ entry numbers are that file's):
    must exit (entry 1; sections 9, 13).
 4. A function body may end in an expression, its result (entry 7;
    sections 9, 16).
-5. The kernel interface is a table the compiler carries, hand-written
+5. The kernel interface is data the compiler carries, hand-written
    for stage 1; protocol numbers are interface constants (entry 5;
    section 6).
 6. The newline rule's scope, `else` placement, and `abort` (entry 6;
@@ -92,7 +92,7 @@ Revisions folded on 2026-09-14 from `ISSUES.md`:
 1. Twelve points of Core representation the grammar of 18.1 left open,
    decided in the implementation and now part of the definition (entry
    11; sections 6, 8.2, 8.4, 16, 18.1).
-2. Iterator loops range over the resource table's iterator rows, which
+2. Iterator loops range over the interface's iterator resources, which
    this draft leaves to the extensions; the form is parse-only until
    then (entry 12; sections 9, 11.2).
 3. A `T?` function returns absence with a bare `return`; `T` is a
@@ -124,7 +124,7 @@ Revisions folded on 2026-09-19 from `ISSUES.md` entries 25 to 27:
 Revision folded on 2026-09-20 from `ISSUES.md` entry 40, at the start
 of session 8:
 
-1. The prelude is renamed the kernel interface; each of its rows has
+1. The prelude is renamed the kernel interface; each of its declarations has
    a koit side, written by hand, and a kernel side, transcribed from
    the kernel tree and checked against the koit side in the build;
    Q10 closed (sections 6, 13, 20, 21).
@@ -140,11 +140,11 @@ koit is a core language plus an extension per program type.
 The core is independent of program type: the four mechanisms, the
 failure model, contracts, configuration, functions, maps, and the formal
 semantics of sections 18 to 20. Everything a program type contributes is
-a set of tables the core consumes: its region kinds, what memory the
+a set of declarations the core consumes: its region kinds, what memory the
 program can see and how a place in it is obtained; its context type; its
 verdict type and default failure verdict; the resources it may hold;
 and the kernel functions it may call, with their signatures and effects.
-The verifier is organized the same way, by program type, and the tables
+The verifier is organized the same way, by program type, and the declarations
 are generated from its own.
 
 Defined in this draft: the packet extension, for XDP and TC programs,
@@ -187,7 +187,7 @@ The verifier still checks; it no longer has to discover.
 | a packet pointer's valid range after a comparison | a refinement established by a test | carving a view |
 | pointer-or-null kinds and the required null test | option types | fallible operations, `?`, `if let` |
 | acquired references that must be released | linear types | `hold` blocks |
-| a held spin lock and the calls forbidden under it | typestate, effect restrictions | resource table |
+| a held spin lock and the calls forbidden under it | typestate, effect restrictions | resource declarations |
 | packet pointers invalidated by a resize | capability revocation | view invalidation |
 | bounded loops walked to convergence | termination checking | declared bounds |
 | helper prototypes | function types with effects | interface signatures |
@@ -261,7 +261,7 @@ ownership transfer of M3. Sections 7, 8.
 
 **M3, effects, ownership, and protocols.** Each function has an effect
 set: whether it may call the kernel, resize the packet, sleep, fail,
-and which regions it may write. Three parts share one resource table.
+and which regions it may write. Three parts share one set of resources.
 A scoped resource is acquired at the entry of a `hold` block and
 released on every exit of it, with an action that depends on the
 resource and on whether the exit was normal; while it is held, some
@@ -330,12 +330,12 @@ Contextual names, ordinary identifiers whose meaning is fixed by
 position: map kinds `array percpu_array hash ringbuf`; program kinds
 `xdp tc syscall`; failure kinds `short_packet missing invariant bound
 helper program`; resource constructors `lock rcu preempt_off irq_off
-reserve` and the acquiring kernel functions, all from the resource
-table, so that a new kernel resource adds a row and not a keyword; slot
-types such as `spinlock`, from the slot table, likewise; the verdict
-`abort`, which is the verdict statement when it stands alone in
-statement position; the region name `maps`; the implicit objects `pkt ctx reason`;
-the primitive types.
+reserve` and the acquiring kernel functions, all from the interface's
+resources, so that a new kernel resource adds a declaration and not a
+keyword; slot types such as `spinlock`, from the interface's slots,
+likewise; the verdict `abort`, which is the verdict statement when it
+stands alone in statement position; the region name `maps`; the implicit
+objects `pkt ctx reason`; the primitive types.
 
 Operators and precedence, tightest first: postfix `.f` `[e]` `(args)`;
 unary `!` `-` `*`; `as`; `* / %`; `+ -`; `<< >>`; `&`; `^`; `|`;
@@ -345,7 +345,7 @@ comparisons, non-associative; `&&`; `||`.
 
 A file is one compilation unit and compiles to one object whose programs
 share the unit's maps. The kernel interface, header types, kernel
-function signatures, slot types, and the seven tables of section 13, is
+function signatures, slot types, and the seven parts of section 13, is
 what the kernel offers a program of each kind as koit states it; the
 compiler carries one per kernel it can compile for, named by its
 `--kernel` option; stage 1 was written under the label `v7.0` with
@@ -353,8 +353,8 @@ no kernel behind it, and the first kernel a program loads on is
 `v6.8`, the stock kernel of a rented node, with `v7.0` following once
 a kernel is built there (entry 42). A call, kind, or slot the
 target kernel lacks is a type error naming that kernel. The interface
-is a table the compiler carries, not a source file, and each of its
-rows has two sides (decision 58): the koit side, which is written by
+is data the compiler carries, not a source file, and each of its
+declarations has two sides (decision 58): the koit side, which is written by
 hand and decides how the kernel's operation is typed, and the kernel
 side, which a tool transcribes from the kernel's own sources for the
 version and which the build checks the koit side against. Protocol
@@ -444,36 +444,37 @@ their operands; a wide access through a misaligned stack object, a
 recurring verifier rejection in production C, cannot be written.
 `T.size` is the padded size. A field may carry a `where` predicate
 (section 17) that may mention sibling fields. A field may have a slot
-type, subject to the slot's row.
+type, subject to the slot's declaration.
 
 **Slot types.** The kernel recognizes a family of special fields in a
-map value, a global-data section, or an allocated object: locks,
-timers, work queues, list and tree heads and nodes, reference counts,
-and kernel-pointer fields. koit calls them slot types. A slot type is an
-opaque type supplied by the interface's slot table and named like any
-type. It has a size and an alignment; it is not data, so a place of a
-slot type is never read, written, copied, compared, viewed, or refined;
-it appears only where its row allows; a row marked unique admits one
-such field per value; and a value holds at most eleven slots in all,
-the kernel's limit. What names a slot is the acquisition, `move` sink,
-or program kind its row points to: a spin lock is named by `lock(p)`.
+map value, a global-data section, or an allocated object: locks, timers,
+work queues, list and tree heads and nodes, reference counts, and
+kernel-pointer fields. koit calls them slot types. A slot type is an
+opaque type supplied by the interface's slots and named like any type.
+It has a size and an alignment; it is not data, so a place of a slot
+type is never read, written, copied, compared, viewed, or refined; it
+appears only where its declaration allows; a declaration marked unique
+admits one such field per value; and a value holds at most eleven slots
+in all, the kernel's limit. What names a slot is the acquisition, `move`
+sink, or program kind its declaration points to: a spin lock is named by
+`lock(p)`.
 
-| column | meaning |
+| clause | meaning |
 |---|---|
 | name, kernel name | the koit spelling and the BTF type the kernel recognizes |
 | size, alignment | its layout |
 | homes | where a field of the type may live: a map value, global data, an allocated object |
 | unique | at most one per value |
-| named by | the resource row, `move` sink, or program kind that uses it |
+| named by | the resource declaration, `move` sink, or program kind that uses it |
 
-Stage 1 has one row, `spinlock`: `bpf_spin_lock`, 4 bytes at 4, in map
+Stage 1 has one declaration, `spinlock`: `bpf_spin_lock`, 4 bytes at 4, in map
 values, unique, named by `lock(p)`. The extensions add
 `bpf_res_spin_lock` (unique; `lock(p)?`), `bpf_timer`, `bpf_wq`, and
 `bpf_task_work` (unique; the asynchronous callback kinds),
 `bpf_list_head` and `bpf_rb_root` (`move` insertion sinks, guarded by
 the value's lock), `bpf_list_node`, `bpf_rb_node`, and `bpf_refcount`
 (fields of allocated object types), and the kernel-pointer fields
-(exchange sinks), all as rows and none as keywords. The kernel's other
+(exchange sinks), all as declarations and none as keywords. The kernel's other
 protocol storage, dynptrs, iterators, and IRQ flags, lives in stack
 slots the verifier types; koit has no user type for those, because
 they are `hold`-bound names (section 11).
@@ -482,17 +483,17 @@ they are `hold`-bound names (section 11).
 integers that mean something: the actions a program kind may return,
 protocol numbers, map flags, error codes. koit calls them enumeration
 types. An enumeration type is an opaque scalar supplied by the
-interface's enumeration table and named like any type. It has a width
+interface's enumerations and named like any type. It has a width
 and a set of named constants, and its values are those constants and
 no others: it is data, so a place of one is read, written, compared,
 and refined, but arithmetic on it is a type error, and no cast
 converts to or from it, since a value of the underlying width becomes
 one only through the coercion of section 8.3. It is the same shape as
-a slot type, an opaque constructor whose meaning is a row, and it
-differs from one on a single column: a slot is not data and an
+a slot type, an opaque constructor whose meaning is a declaration, and it
+differs from one on a single clause: a slot is not data and an
 enumeration is.
 
-| column | meaning |
+| clause | meaning |
 |---|---|
 | name, kernel name | the koit spelling and the enumeration the kernel declares |
 | width | the integer width its values occupy |
@@ -503,9 +504,9 @@ is a local, a parameter, or a result, and it is not a map value, a
 view, or a struct field. A stored one would be read without a test,
 and map contents are untrusted (P8); when storing one is wanted, the
 marked load of an enumeration field is the same shape as the marked
-load of a `where` field, with the row's constants as the predicate.
+load of a `where` field, with the declaration's constants as the predicate.
 
-Stage 1 has two rows, `XdpAction` for `enum xdp_action` and
+Stage 1 has two declarations, `XdpAction` for `enum xdp_action` and
 `TcAction` for the `TC_ACT_` constants, which are the verdict types of
 section 13. The extensions add the protocol and flag enumerations the
 calls take.
@@ -558,7 +559,7 @@ An optional is consumed only by a binding with a failure marker
 
 **Map types.** `array[n] of V`, `percpu_array[n] of V`, `hash[n] of
 K -> V`, and `ringbuf[n]` for a ring buffer of `n` bytes. `K` and `V`
-are packet-representable, `V` may contain slot types per their rows.
+are packet-representable, `V` may contain slot types per their declarations.
 For a per-CPU
 array, `m[i]` is the current CPU's slot.
 
@@ -657,7 +658,7 @@ the marked load of a `where` field is the same coercion with the
 predicate taken from the declaration. There is no `assume`.
 
 `e as E?` for an enumeration type `E` is the same coercion with the
-predicate taken from the row: it tests that `e` is one of `E`'s
+predicate taken from the declaration: it tests that `e` is one of `E`'s
 constants and gives the result the type `E`. It is the one way an
 integer becomes a value of an enumeration, so a number another party
 wrote is a verdict, a protocol, or a flag only after this program has
@@ -718,32 +719,31 @@ Pattern   ::= Ident | '(' Ident ',' Ident ')'
 a..b` binds `i` with the fact `a <= i < b`; its cap is the type of `b`,
 which must have a finite upper bound `n`, because `b` is a constant, a
 configuration constant, or a refined value `{v | v <= n}`. That one
-declaration is the termination measure, the index's refinement, and
-the constant the verifier needs. `for x in it bounded N` iterates a
-kernel iterator or a map, binding each element (a key and value pair
-for a map), and ends when the iterator drains or after `N` elements,
-whichever is first, as `bpf_loop` does for its count; with `bounded
-N?` reaching the cap before the iterator drains is a `failed_check` failure.
-The iterators it ranges over are rows of the resource table (section
-11.2), which this draft leaves to the extensions: the form parses and
-desugars, and the checker rejects it until a row exists.
-Which bytecode form a loop becomes, an unrolled or counted loop, an
-open-coded iterator, `bpf_loop`, or `may_goto`, is the compiler's
-choice from the cap, the body, and the held set, and is not part of
-the language; a form that could end the loop before its cap, such as
-the kernel's timed `may_goto`, is never chosen for a loop whose cap
-is exact. A bare expression statement must be a
-call, except that a function body may end in an expression, which is
-its result (section 16). A conditional whose condition is a constant
-expression is folded by the compiler; both branches are type-checked
-(section 15).
+declaration is the termination measure, the index's refinement, and the
+constant the verifier needs. `for x in it bounded N` iterates a kernel
+iterator or a map, binding each element (a key and value pair for a
+map), and ends when the iterator drains or after `N` elements, whichever
+is first, as `bpf_loop` does for its count; with `bounded N?` reaching
+the cap before the iterator drains is a `failed_check` failure. The
+iterators it ranges over are declarations of the interface's resources
+(section 11.2), which this draft leaves to the extensions: the form
+parses and desugars, and the checker rejects it until a declaration
+exists. Which bytecode form a loop becomes, an unrolled or counted loop,
+an open-coded iterator, `bpf_loop`, or `may_goto`, is the compiler's
+choice from the cap, the body, and the held set, and is not part of the
+language; a form that could end the loop before its cap, such as the
+kernel's timed `may_goto`, is never chosen for a loop whose cap is
+exact. A bare expression statement must be a call, except that a
+function body may end in an expression, which is its result (section
+16). A conditional whose condition is a constant expression is folded by
+the compiler; both branches are type-checked (section 15).
 
 ## 10. Failure
 
 ### 10.1 Kinds
 
 Each kind names the failure, so that `on K` reads as "when K
-happens"; who is to blame is a column of the table and not part of a
+happens"; who is to blame is stated in the table and not part of a
 name.
 
 | kind | raised by | blames |
@@ -842,10 +842,11 @@ runs.
 
 ### 10.7 Defaults
 
-A kind with neither a handler of its own nor a `default` block uses
-the default of the program kind (section 13): abort for XDP, drop for TC, minus one for syscall
-programs. XDP's default is abort because the kernel fires the
-`xdp_exception` tracepoint on it, so failures stay observable.
+A kind with neither a handler of its own nor a `default` block uses the
+default of the program kind (section 13): abort for XDP, drop for TC,
+minus one for syscall programs. XDP's default is abort because the
+kernel fires the `xdp_exception` tracepoint on it, so failures stay
+observable.
 
 ### 10.8 Functions
 
@@ -883,15 +884,15 @@ covers acquisition only, and a refused acquisition, such as a resilient
 lock that would deadlock, goes to the handler of its kind. The bound
 name cannot escape the block. `hold` is the kernel's own word: the
 verifier speaks of the held set and of what is forbidden while held.
-What an acquisition takes is a column of its row, one of three shapes:
+What an acquisition takes is a clause of its declaration, one of three shapes:
 a place of a slot type (`lock(p)`), nothing (`rcu`), or the parameters
 of the acquiring kernel function (`sk_lookup_tcp(t)`).
 
-### 11.2 The resource table
+### 11.2 The resources
 
-Everything after `hold` is a row of this table, supplied by the kernel
+Everything after `hold` is a resource declaration, supplied by the kernel
 interface for the kernel version the unit targets; the core knows only
-the columns. Rows in this draft:
+the clauses. Declarations in this draft:
 
 | resource | acquisition | argument | can fail | normal exit | abnormal exit | forbidden while held | nesting | class | guards |
 |---|---|---|---|---|---|---|---|---|---|
@@ -902,7 +903,7 @@ the columns. Rows in this draft:
 | ring-buffer record | `rb.reserve<T>()`, yields `own T` | the ring buffer and the record type | yes, `failed_call` | submit | discard | none | yes | | |
 | socket reference | `sk_lookup_tcp(t)`, `sk_lookup_udp(t)`, yields `own Sock` | the call's parameters: `t` a place of the interface type `SockTuple` (`saddr`, `daddr`, `sport`, `dport`) | yes, `not_found` | release | release | none | yes | | |
 
-Rows the extensions add with no change to the core: resilient locks,
+Declarations the extensions add with no change to the core: resilient locks,
 whose acquisition can fail; kernel iterators, generic over the iterated
 type, with states active and drained; dynptrs, whose slices are views
 guarded by the dynptr's layout token; references to tasks, cgroups,
@@ -926,12 +927,12 @@ last-acquired-first order by construction.
 
 ### 11.4 Restrictions while held
 
-Statements with an effect the table forbids are type errors in the
-body, reported with the resource named. Functions called in the body
-must have effect sets the table allows. Nesting a resource whose row
-says no inside another instance of itself is a type error. `sleep` is
-forbidden under every row, which is the kernel's rule that nothing
-sleeps while anything is held.
+Statements with an effect the resource's declaration forbids are type
+errors in the body, reported with the resource named. Functions called
+in the body must have effect sets the declaration allows. Nesting a
+resource whose declaration says no inside another instance of itself is
+a type error. `sleep` is forbidden under every declaration, which is the
+kernel's rule that nothing sleeps while anything is held.
 
 ### 11.5 Ownership and `move`
 
@@ -983,7 +984,7 @@ Region r ::= pkt[a..b) | m | ctx.f
 - `resize`: may move or resize the packet; implies `call`. It drops the
   packet's layout token, the guard of every view (below).
 - `sleep`: may sleep; implies `call`. Permitted only in program kinds
-  whose table says so (section 13) and forbidden while any resource is
+  whose declaration says so (section 13) and forbidden while any resource is
   held.
 - `fail`: may raise a failure. Requires `fails` on a function.
 - `write(pkt[a..b))`: a store through a view `h` to a field at offset
@@ -1002,8 +1003,8 @@ boundary; they are context flags used by section 11.4.
 stability token. Reading or writing through the place demands that
 its guard be held. An operation that drops the guard kills every place
 it guards, and a later use is a type error at the use, naming the
-statement that dropped it. The guard column of the region and resource
-tables supplies the rows; this draft has one, and the extensions add
+statement that dropped it. The guard clause of the region and resource
+declarations supplies the guards; this draft has one, and the extensions add
 the other two with no new rule:
 
 | place | guard | dropped by |
@@ -1012,16 +1013,16 @@ the other two with no new rule:
 | an RCU-protected pointer, kernel-memory extension | the RCU section | the outermost `hold rcu` exit |
 | a graph node after `move` into a list or tree, kernel-memory extension | the lock of that allocation | that lock's `hold` exit |
 
-The first row is what draft 2 called view invalidation. The kernel
+The first declaration is what draft 2 called view invalidation. The kernel
 implements the three as separate rules: packet-pointer clearing on
 packet-changing helpers, demotion of RCU pointers to untrusted at
 unlock, and the requirement that a graph node be accessed under the
 lock of its allocation.
 
-**The region table.** A region is a row the kernel interface supplies;
-the core knows only the columns:
+**The regions.** A region is a declaration the kernel interface supplies;
+the core knows only the clauses:
 
-| column | meaning |
+| clause | meaning |
 |---|---|
 | obtained | statically, or through a view |
 | readable, writable | whether places in it may be loaded and stored; the packet's writability is per program kind (section 13) |
@@ -1031,10 +1032,10 @@ the core knows only the columns:
 | guard | the token or resource a place carries |
 | max offset | for a region of dynamic extent, the largest offset a view may lie under, since the verifier bounds a pointer's variable offset before it sees the test; the packet's is the kernel's maximum packet offset, 65535 |
 
-Stage-1 rows: the stack, static, read-write, initialized, no guard; map
+Stage-1 declarations: the stack, static, read-write, initialized, no guard; map
 values, static, read-write, zero-filled, no guard; the context, static,
-writable per field from the kind table, no guard; the packet, by view,
-readable, writable in the kinds whose row says `rw`, guarded by its
+writable per field from the interface's kinds, no guard; the packet, by view,
+readable, writable in the kinds whose declaration says `rw`, guarded by its
 layout token, max offset 65535. A store through a view in a kind whose
 packet is read-only is a type error at the store.
 
@@ -1042,7 +1043,7 @@ packet is read-only is a type error at the store.
 
 `program name : kind [implements C] clause* handler* { body }`.
 The body sees `pkt` in packet kinds and `ctx` in all kinds. The `ctx`
-field tables follow the kernel's context-access rules: names, types,
+field declarations follow the kernel's context-access rules: names, types,
 and writability are their koit side, offsets their kernel side
 (decision 58).
 
@@ -1052,44 +1053,44 @@ and writability are their koit side, offsets their kernel side
 | `tc` | `rw` | `mark: u32` writable, `priority: u32`, `ifindex: u32` | `OK SHOT UNSPEC PIPE REDIRECT` | `pass` = OK, `drop` = SHOT | `drop` | no |
 | `syscall` | none | opaque | `i32` | none | `-1` | yes |
 
-The context table carries, besides each field's name, type, and
-writability, its offset in the kernel's layout, which the lowering
-and the target machine read and no source-level surface shows
-(decision 55). A kind's row is one of seven tables the kernel interface
-carries for a kernel: kinds, context fields per kind, calls with their
+A context field's declaration carries, besides its name, type, and
+writability, its offset in the kernel's layout, which the lowering and
+the target machine read and no source-level surface shows (decision 55).
+A kind's declaration is one of seven parts the kernel interface carries
+for a kernel: kinds, context fields per kind, calls with their
 signatures and effects and availability per kind, resources, regions,
-slots, and enumerations. Every row has a koit side and a kernel side (decision 58).
-The koit side is written by hand and holds the decisions: a kind's
-verdicts, default failure, and packet access; a context field's name,
-type, and writability; a call's signature, effects, failure kind, and
-acquisition; the resource, region, and slot rows; the constants and
-header types. The kernel side is transcribed from the kernel's sources
-for the version and holds the facts: a kind's program type and section
-name; a context field's offset; a helper's number, prototype, the
-argument kinds its `bpf_func_proto` declares, its `gpl_only` flag,
-the kinds it exists in, and whether it changes the packet; a kfunc's
-name, prototype, flags, and program types; the verdict values, map
-types, and constants. Between the two sides of a call row lies its
-correspondence, written by hand: the kernel name the call resolves
-to, per kind where it differs, and the layout of the kernel's
-arguments in terms of koit's, or the mark that the kernel computes
-the row inline, as it does `pkt.len` and the checksum rows; the
-lowering and the target machine read it and no source-level surface
-shows it (decision 57). The build checks the correspondence against
-the kernel side: the name exists in the version, the layout has the
-prototype's arity, each of its entries has the shape the argument
-kind asks for, the availability the koit side claims is within the
-kernel's, and the `resize` effect is claimed exactly by the calls the
-kernel marks as changing the packet. The `pkt`
-column says whether the packet exists and whether views into it may be
-written (`rw`, `ro`, none). The verdict range is the one the kernel
-enforces at every exit. A call, kind, or slot the target kernel lacks is
-a type error naming the kernel. A kind the kernel offers in a sleepable
-variant selected by section name, `fentry` and `fentry.s`, `lsm` and
-`lsm.s`, is two rows differing in the `sleep` column and the section,
-not one kind with an attribute. An asynchronous callback, a timer or
+slots, and enumerations. Every declaration has a koit side and a kernel
+side (decision 58). The koit side is written by hand and holds the
+decisions: a kind's verdicts, default failure, and packet access; a
+context field's name, type, and writability; a call's signature,
+effects, failure kind, and acquisition; the resource, region, and slot
+declarations; the constants and header types. The kernel side is
+transcribed from the kernel's sources for the version and holds the
+facts: a kind's program type and section name; a context field's offset;
+a helper's number, prototype, the argument kinds its `bpf_func_proto`
+declares, its `gpl_only` flag, the kinds it exists in, and whether it
+changes the packet; a kfunc's name, prototype, flags, and program types;
+the verdict values, map types, and constants. Between the two sides of a
+call declaration lies its correspondence, written by hand: the kernel
+name the call resolves to, per kind where it differs, and the layout of
+the kernel's arguments in terms of koit's, or the mark that the kernel
+computes the declaration inline, as it does `pkt.len` and the checksum
+declarations; the lowering and the target machine read it and no
+source-level surface shows it (decision 57). The build checks the
+correspondence against the kernel side: the name exists in the version,
+the layout has the prototype's arity, each of its entries has the shape
+the argument kind asks for, the availability the koit side claims is
+within the kernel's, and the `resize` effect is claimed exactly by the
+calls the kernel marks as changing the packet. The `pkt` clause says
+whether the packet exists and whether views into it may be written
+(`rw`, `ro`, none). The verdict range is the one the kernel enforces at
+every exit. A call, kind, or slot the target kernel lacks is a type
+error naming the kernel. A kind the kernel offers in a sleepable variant
+selected by section name, `fentry` and `fentry.s`, `lsm` and `lsm.s`, is
+two declarations differing in the `sleep` clause and the section, not
+one kind with an attribute. An asynchronous callback, a timer or
 workqueue body, is a kind in this sense, with its own context, verdict
-range, and an empty held set; the extensions define those rows.
+range, and an empty held set; the extensions define those declarations.
 
 Verdict statements and `return` end the program, releasing held
 resources on the way. A `syscall` body may also fall off its end,
@@ -1098,13 +1099,13 @@ handler must. The verdict type of a kind is an enumeration type
 (section 7) whose constants are the kind's verdicts: `XdpAction` for
 `xdp`, `TcAction` for `tc`. Inside a program the alias `verdict` names
 the enclosing kind's type, so in an `xdp` body `verdict` and
-`XdpAction` are one type; a function has no kind and names the row. A
-`syscall` program has no such row, since its result is `i32` with no
+`XdpAction` are one type; a function has no kind and names the declaration. A
+`syscall` program has no such declaration, since its result is `i32` with no
 named constants. `return e` demands that `e` have the kind's verdict
 type, further restricted by the program's verdict set if it has one
 (section 14); the kind's own range is the type, so nothing states it
 as a separate demand. A verdict statement is sugar for a return of the
-constant the kind's table names it with: `pass` is `return PASS` in an
+constant the kind's declaration names it with: `pass` is `return PASS` in an
 `xdp` program and `return OK` in a `tc` one, which is why `tc` has
 `pass` and `drop` and no `tx`. Arithmetic on a verdict is a type
 error, and an integer becomes one only through the coercion `e as
@@ -1121,13 +1122,14 @@ would state without reading it.
 
 **Verdict set.** `verdict in { PASS, DROP }` refines the program's
 return type to `{v: XdpAction | v == PASS || v == DROP}`, the kind's
-verdict type under the disjunction of the equalities the set names. Every exit is a demand: a
-verdict statement is a constant and checks syntactically; `return e`
-demands `e in S` from the facts; a verdict loaded from a map gets its
-fact from the marked load. Every handler's exit and the default failure
-verdict are exits, so both are checked against `S` in the header: a
-contract cannot be satisfied by failing. A `redirect` call yields
-`{v | v == REDIRECT}`, so a contract without REDIRECT rejects the call.
+verdict type under the disjunction of the equalities the set names.
+Every exit is a demand: a verdict statement is a constant and checks
+syntactically; `return e` demands `e in S` from the facts; a verdict
+loaded from a map gets its fact from the marked load. Every handler's
+exit and the default failure verdict are exits, so both are checked
+against `S` in the header: a contract cannot be satisfied by failing. A
+`redirect` call yields `{v | v == REDIRECT}`, so a contract without
+REDIRECT rejects the call.
 
 **Preserved region.** `preserve R` for a region `R` is the demand that
 no statement in the program, including the functions it calls, carries
@@ -1288,12 +1290,12 @@ passes after checking.
 
 ```
 kinds        k ::= short_packet | missing | invariant | bound | helper | program
-resources    R ::= a row of the resource table
+resources    R ::= a resource the interface declares
                    (stage 1: spinlock rcu preempt irq ringbuf sockref)
 guards       g ::= layout(pkt) | R
 regions      r ::= pkt[a..b) | m | ctx.f
 types        T ::= int(s,w) | be(w) | bool | S | T[n]
-                 | ref T | view T | own T | slot(row)
+                 | ref T | view T | own T | slot(decl)
                  | {v: T | P} | T?
 expressions  e ::= c | x | e op e | e cmp e | !e | e && e | e || e
                  | e as T | hton e | ntoh e | rd p | size T | move x
@@ -1613,7 +1615,7 @@ not what it holds.
     acq : resource R, yielding own T or nothing, fallible of kind k or not
     G,x:own T; F; K[H += R(x)] |- body ~> body' -| F1 ; E
     E disjoint from forbidden(R)
-    R nests per the table
+    R nests per its declaration
     moved(x) agrees on every path reaching the end of body
     -------------------------------------------------------
     G;F;K |- hold x = acq Tail body
@@ -1718,28 +1720,28 @@ needed again is held in a name.
 `F |= P` is decided by a procedure that is sound and restricted to:
 syntactic membership and constant comparison against a fact about the
 same variables, with equal names substituted for each other; and
-abstract interpretation of `P` over a state computed forward from `F`
-in the reduced product of intervals and known bits, with exact
-treatment of `%` and `/` by constants and `&` with a constant mask. No
-solver. The state gives each variable one interval, read in the
-signedness of its type, and its known bits, kept consistent with each
-other; a cast between widths is exact, as the verifier tracks it. It
-is computed from the facts in the order they entered, each narrowing
-with what was known when it arrived and no iteration to a fixpoint,
-which is what a verifier re-derives at the branches in that order;
-the join of two paths is the hull, written back as facts by `meet`.
-`F` itself is the list of facts, not the state: the state is built
-when a demand is checked and discarded after, so that membership,
-`kill`, `meet`, and the soundness statement all speak of predicates. The restriction is not provisional: it is principle P9. The
-procedure decides exactly the facts the verifier's own domain
-re-derives from the branches the lowering emits, so a fact it proves
-can be elided without loss of acceptance, and a fact it cannot prove
-is discharged by the coercion of section 10.4, which the verifier then
-reads as a branch. A stronger procedure would elide tests the verifier
-cannot see. The solver appears in two places only, neither of them the
-type system: the testing cross-check below, and the compiler's
-elimination of redundant coercions when it targets a kernel with a
-proof checker, where the kernel re-checks each elision from the path
+abstract interpretation of `P` over a state computed forward from `F` in
+the reduced product of intervals and known bits, with exact treatment of
+`%` and `/` by constants and `&` with a constant mask. No solver. The
+state gives each variable one interval, read in the signedness of its
+type, and its known bits, kept consistent with each other; a cast
+between widths is exact, as the verifier tracks it. It is computed from
+the facts in the order they entered, each narrowing with what was known
+when it arrived and no iteration to a fixpoint, which is what a verifier
+re-derives at the branches in that order; the join of two paths is the
+hull, written back as facts by `meet`. `F` itself is the list of facts,
+not the state: the state is built when a demand is checked and discarded
+after, so that membership, `kill`, `meet`, and the soundness statement
+all speak of predicates. The restriction is not provisional: it is
+principle P9. The procedure decides exactly the facts the verifier's own
+domain re-derives from the branches the lowering emits, so a fact it
+proves can be elided without loss of acceptance, and a fact it cannot
+prove is discharged by the coercion of section 10.4, which the verifier
+then reads as a branch. A stronger procedure would elide tests the
+verifier cannot see. The solver appears in two places only, neither of
+them the type system: the testing cross-check below, and the compiler's
+elimination of redundant coercions when it targets a kernel with a proof
+checker, where the kernel re-checks each elision from the path
 condition.
 
 The procedure is the one component of the checker whose soundness
@@ -1771,18 +1773,18 @@ the packet `B` with its layout token; the held set, innermost first,
 each entry with the name it binds and the object it releases; the
 negative return of the last helper that failed, which `errno` reads;
 and the trace, the kernel calls made so far in order, each with its
-row, its arguments, and its answer, and each `printk` with its format
+declaration, its arguments, and its answer, and each `printk` with its format
 and arguments, an untyped argument settled to `u64`; a held spin lock
 carries the lock's map slot and offset as its object, as a record or
 a socket carries its kernel object, and a memory argument is traced
 as the bytes the kernel received. The map store, the packet and its
-token, the kernel objects, the held set read as rows and objects,
+token, the kernel objects, the held set read as declarations and objects,
 and the trace are the part of the state every level of the lowering
 shares as one definition; the frame, the named context, and `errno`
-are Core's own (decision 54). A row the kernel computes inline,
-`pkt.len` and the checksum rows, is one function of its arguments
+are Core's own (decision 54). A declaration the kernel computes inline,
+`pkt.len` and the checksum declarations, is one function of its arguments
 and the state at every level, makes no call, and leaves no trace
-event; every other row goes through the kernel and is traced, so
+event; every other declaration goes through the kernel and is traced, so
 that the trace lists the calls the kernel sees (decision 57). Values
 are scalars: a fixed-width integer reduced to
 its type's range, a byte-order value, a boolean, or the location of a
@@ -1800,19 +1802,20 @@ field predicate is evaluated in, at a marked load, is built from the
 fields of the place: the loaded field bound to its value and every
 scalar sibling to the value at the place.
 
-Helpers are nondeterministic relations constrained by their
-contracts. The semantics takes them as a parameter: a kernel `K` says,
-for each row of the call table and its evaluated arguments, what the
-call does, a result and a new state, or a failure with the negative
+Helpers are nondeterministic relations constrained by their contracts.
+The semantics takes them as a parameter: a kernel `K` says, for each
+declaration of the interface's calls and its evaluated arguments, what
+the call does, a result and a new state, or a failure with the negative
 return the `failed_call` reason defaults to. How the failure reaches the
-program is a rule of the lowering read off the row's result type: a
-negative return for a scalar result, null for a location; a row that
-needs an exception gets a column then. A kernel is within its
-contracts when it never errs, yields a value exactly when the row's
-signature has a result, changes the packet or its token only when the
-row has the `resize` effect, and fails only when the row is fallible.
-Every statement about runs holds for every such kernel; the evaluator
-of `koitc run` is one of them, with its choices recorded.
+program is a rule of the lowering read off the declaration's result
+type: a negative return for a scalar result, null for a location; a
+declaration that needs an exception gets a clause then. A kernel is
+within its contracts when it never errs, yields a value exactly when the
+declaration's signature has a result, changes the packet or its token
+only when the declaration has the `resize` effect, and fails only when
+the declaration is fallible. Every statement about runs holds for every
+such kernel; the evaluator of `koitc run` is one of them, with its
+choices recorded.
 
 ### 19.2 Judgments
 
@@ -1888,7 +1891,7 @@ with the index's next value.
 (Move)
     <move x, st>  =>  the reference sigma(x), st with x marked moved,
                       so that the scope releases nothing; the sink's
-                      row pops R(x) from the held set when it runs,
+                      declaration pops R(x) from the held set when it runs,
                       which is the transfer (decision 56)
 (Guard-drop)
     a view remembers the layout token it was carved under; a step with
@@ -1904,9 +1907,9 @@ with the index's next value.
     as (Store), with the read-modify-write performed indivisibly and
     the previous value bound
 (Call)
-    K(row, [[a...]], st) = ok(v, st')    =>  v, st'
-    K(row, [[a...]], st) = failed(n, st') =>  failed, st'[errno := n]
-    a call forbidden by a row of the held set  =>  err  (unreachable, T1)
+    K(decl, [[a...]], st) = ok(v, st')    =>  v, st'
+    K(decl, [[a...]], st) = failed(n, st') =>  failed, st'[errno := n]
+    a call forbidden by a resource of the held set  =>  err  (unreachable, T1)
 (Insert)
     mu(m)[k] := copy of the value, or failed when the map is full
 ```
@@ -1918,7 +1921,7 @@ allows; the old packet is gone, which is why typing kills views.
 
 ### 20.1 The properties
 
-Each row names a property of every execution of a well-typed Core
+Each declaration names a property of every execution of a well-typed Core
 program, the mechanism that provides it, and how: statically by typing,
 dynamically by a marked test with a declared consequence, or by
 construction of the semantics.
@@ -1946,8 +1949,8 @@ run has the properties of 20.1. Existence is progress and termination
 in one, since Core's loops are bounded and its calls acyclic; the
 absence of `err` covers the cases the rules make unreachable, an
 out-of-bounds store, a use of a view under a dropped token, a call a
-held row forbids. Proof by induction on the derivation with the typing
-judgment as the invariant, a lemma per row of 20.1.
+held declaration forbids. Proof by induction on the derivation with the typing
+judgment as the invariant, a lemma per declaration of 20.1.
 
 **T2, soundness of entailment.** If `F |= P` and `sigma` satisfies `F`
 then `sigma` satisfies `P`. So no demand accepted statically can fail at
@@ -1972,14 +1975,14 @@ definition; the kernel's own verification is retained as an independent
 check, not replaced.
 
 **Trusted, for the corollary.** Besides the compiler and the ISA
-semantics, the corollary trusts three columns of the interface's call
-table, all on its koit side: a call's effect set, its `own` and `T?`
+semantics, the corollary trusts three clauses of the interface's call
+declarations, all on their koit side: a call's effect set, its `own` and `T?`
 annotations, and the region kinds of its parameters and result. A
 helper marked as not resizing the packet when it does would let a view
-outlive its region; the build's check of the `resize` column against
+outlive its region; the build's check of the `resize` clause against
 the kernel side catches the transcribable half of that error, not the
 semantic half. The availability, context, slot-layout, and
-verdict-range columns, and the whole kernel side, affect acceptance
+verdict-range clauses, and the whole kernel side, affect acceptance
 only: an error there makes a program fail to load or rejects one that
 would have loaded, and never makes a safe program unsafe.
 
@@ -2015,7 +2018,7 @@ Decisions in this draft, each reversible:
    abbreviates `else fail`.
 3. Handlers per kind in the program header; non-failing; must exit; all
    exits checked against the verdict set.
-4. Resources are a table; `with` is the one construct.
+4. Resources are declarations; `with` is the one construct.
 5. Views carry `off(h)`; write effects are region-indexed.
 6. Contracts are the program's signature: verdict set, preserved
    regions, map invariants.
@@ -2056,7 +2059,7 @@ Revisions of 2026-09-13, from `ISSUES.md`:
 25. A `syscall` body may fall off its end and returns 0; packet bodies
     must exit.
 26. A function body may end in an expression, its result.
-27. The kernel interface is a table the compiler carries; protocol
+27. The kernel interface is data the compiler carries; protocol
     numbers are interface constants.
 28. The newline rule applies in blocks and between items; `else` on
     the line of its `}`; `abort` a verdict in statement position.
@@ -2068,7 +2071,7 @@ Revisions of 2026-09-14, from `ISSUES.md`:
     ending in `return` (16), the struct literal's type from the
     binding's annotation or the unique declared struct (8.2), counts of
     any unsigned type (8.4).
-30. Iterator loops wait for their resource row; parse-only in this
+30. Iterator loops wait for their resource declaration; parse-only in this
     draft (entry 12).
 31. Absence from a `T?` function is a bare `return`; `T` is a scalar
     (entry 9).
@@ -2077,14 +2080,14 @@ Revisions of 2026-09-14, from `ISSUES.md`:
 33. The greedy `except` list and the multi-line comment as a newline,
     as the parser and lexer do (entry 10).
 Revisions of 2026-09-14, second pass, from `ISSUES.md` entries 13 to 17:
-34. Slot types: `spinlock` is an interface slot row, not a keyword or
-    a Core constructor; Core's `T` has `slot(row)` and `R` is a row
+34. Slot types: `spinlock` is an interface slot declaration, not a keyword or
+    a Core constructor; Core's `T` has `slot(decl)` and `R` is a declaration
     (entry 13).
 35. The target kernel is the compiler's `--kernel` input; the region
-    table's columns and packet writability per kind; `const n: T`
-    interface parameters; sleepable variants as kind rows; the trusted
-    columns (entry 14).
-36. The acquisition's argument form is a column; lexical scoping is a
+    declarations' clauses and packet writability per kind; `const n: T`
+    interface parameters; sleepable variants as kind declarations; the trusted
+    clauses (entry 14).
+36. The acquisition's argument form is a clause; lexical scoping is a
     stated non-claim; `own T` uniformly (entry 15).
 37. The callback-loop rules recorded with the deferral (entry 16).
 38. Lemma L's two lowering obligations (entry 17).
@@ -2120,7 +2123,7 @@ Revisions of 2026-09-18, from `ISSUES.md` entries 20 to 24:
     kernel and states existence of a halting derivation and absence
     of `err` (sections 19, 20).
 47. A view carve and a byte read demand that the window lies under
-    the region's max offset, a column of the region table, 65535 for
+    the region's max offset, a clause of the region declaration, 65535 for
     the packet; the lowering adds no bound test (entry 21).
 48. P2 admits a branch the verifier requires on a path the kernel's
     contract or the checker's facts make unreachable, ending in the
@@ -2144,7 +2147,7 @@ end of the session that lowered Core to LIR:
     states; the section 23 examples stand unchanged under decision 47
     (entry 25).
 52. The trace settles `printk`'s untyped arguments, a held lock's
-    object is its place, and a row with no effects is still a kernel
+    object is its place, and a declaration with no effects is still a kernel
     call unless its implementation is inline, so that every level of
     the lowering compares equal on the shared state (entry 26; the
     inline exception by decision 57).
@@ -2156,20 +2159,20 @@ end of the session that lowered Core to LIR:
     kernel object, a traced memory argument is bytes; Core's regions
     extend the shared ones with the struct literals' frames (entry
     30, 2026-09-19).
-55. The context table has an offset column for the lowering and the
-    machine, hidden from the source; the two packet rows `data` and
+55. A context field's declaration has an offset clause for the lowering and the
+    machine, hidden from the source; the two packet declarations `data` and
     `data_end` yield locations and are not nameable (entry 31,
     2026-09-19).
 56. `move x` marks the name dead and leaves the held set; the sink's
-    row pops the entry, and a `hold` exit releases through the same
-    operation LIR's release statements use, a kernel call for a row
+    declaration pops the entry, and a `hold` exit releases through the same
+    operation LIR's release statements use, a kernel call for a declaration
     whose exit is one; nothing is held when a program returns or
     raises, else `err` (entry 36, 2026-09-19).
-57. Each call row carries the kernel's calling convention, a helper
+57. Each call declaration carries the kernel's calling convention, a helper
     number or kfunc name with the layout of the kernel's arguments
     relative to koit's, or `inline`; the machine's bytecode instance
     reads koit's arguments back by the layout, so the trace records
-    them at every level, and the inline rows are one untraced
+    them at every level, and the inline declarations are one untraced
     function of the machine that pass D expands (entry 38,
     2026-09-20).
 
@@ -2177,27 +2180,27 @@ Revision of 2026-09-20, from `ISSUES.md` entry 40, at the start of
 session 8:
 
 58. The prelude is the kernel interface: what the kernel offers a
-    program of each kind, as koit states it. Each row has a koit
+    program of each kind, as koit states it. Each declaration has a koit
     side, hand-written, holding the decisions and every trusted
-    column, and a kernel side, transcribed per kernel version from
+    clause, and a kernel side, transcribed per kernel version from
     the kernel tree by a tool and never edited by hand, holding the
     numbers, prototypes, argument kinds, flags, offsets, and
-    availability; a call row's correspondence, hand-written, names
+    availability; a call declaration's correspondence, hand-written, names
     the kernel function and lays out its arguments, and the build
     checks it against the kernel side. Both sides are Lean values
     the build sees, not data read at startup. Context writability and
     per-kind availability stay hand-written until the kernel's
     switches are parsed (entry 40).
 
-59. A kind's verdict type is an enumeration type, a row of a seventh
-    interface table, not `u32`. The core learns one constructor, a
+59. A kind's verdict type is an enumeration type, a seventh part of the
+    interface, not `u32`. The core learns one constructor, a
     scalar whose values are a named finite set, and never learns what
     a verdict is, so section 1 holds: a program type contributes its
-    verdict type as a table the core consumes, and `syscall`, whose
+    verdict type as a declaration the core consumes, and `syscall`, whose
     result is a bare `i32`, needs no case. Arithmetic on one is a type
     error and no cast reaches it, so the kind's range holds by the
     type; an integer becomes one through the coercion of 8.3, which
-    is where a verdict another party wrote is tested. The row's name
+    is where a verdict another party wrote is tested. The declaration's name
     is the type's, `XdpAction`, and `verdict` is an alias for the
     enclosing program's kind. Rejected: a `verdict` constructor in the
     core, which contradicts section 1 and makes `syscall` a special
@@ -2221,8 +2224,8 @@ session 8:
     `short_packet`, `not_found`, `bad_value`, `failed_check`,
     `failed_call`, and `fail`, the last named after the statement
     that raises it. `on K` then reads as "when K happens", where
-    `on helper { pass }` read as declining a helper. Blame stays a
-    column of 10.1's table, which is where it was always stated. The
+    `on helper { pass }` read as declining a helper. Blame stays
+    stated in 10.1's table, which is where it was always stated. The
     wildcard became `on other` here and `default` under decision 62,
     where `on _` had no noun at all.
 
@@ -2256,7 +2259,7 @@ Open questions, with the default the checker implements until decided:
 - Q2. Closed 2026-09-13: local struct literals with scalar fields are
   supported (section 8.2); the stack rule is the compiler's frame
   report (decision 22).
-- Q3. User-defined resources. Default: none; rows come from the kernel
+- Q3. User-defined resources. Default: none; declarations come from the kernel
   interface.
 - Q4. A parsing cursor as sugar over consecutive views. Default: none.
 - Q5. Conditional declarations under `config`. Default: none.
@@ -2283,7 +2286,7 @@ so that later drafts do not rediscover them.
 
 **The kernel-memory extension**, for tracing and LSM programs. A fourth
 region kind, kernel objects read through type information and fallible
-probe reads, with a failure kind for a failed read. It adds the rows
+probe reads, with a failure kind for a failed read. It adds the declarations
 draft 3 designed for: RCU-protected pointers as places guarded by the
 RCU section; owned references to tasks, sockets, and allocated objects
 bound by `hold` and moved into map fields by exchange or into lists
@@ -2296,12 +2299,12 @@ an empty initial held set. Pointer-typed fields
 and arguments are nullable by default and consumed through a marked
 load, so the language never inherits the verifier's table of which
 kernel pointers may be null; two of the CVEs in `cve-study.md` were
-errors in that table. Its resource rows add task and socket references
+errors in that table. Its resource declarations add task and socket references
 and its context types come from the kernel's BTF.
 
 **The struct-ops extension**, for schedulers and similar callback sets.
 A program becomes a set of typed callbacks over kernel objects with
-reference discipline; the resource table grows first, since the sched_ext
+reference discipline; the interface's resources grows first, since the sched_ext
 schedulers we surveyed use spin locks, RCU, cpumask and object references
 heavily.
 
@@ -2326,8 +2329,8 @@ choice (decision 18).
 - the userspace boundary: a map declaration generating its userspace
   accessor with the same key and value types, and program handles with
   a load-then-attach typestate, in KernelScript's style;
-- user-defined resources, adding rows to the resource table from user
-  code;
+- user-defined resources, adding declarations to the interface's
+  resources from user code;
 - conditional verdicts and relational map properties, which need
   predicates over the input and reasoning about memory reads;
 - contracts on functions, a middle layer for helper libraries.

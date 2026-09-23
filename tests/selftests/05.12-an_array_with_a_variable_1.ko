@@ -1,0 +1,14 @@
+// selftest: progs/verifier_array_access.c an_array_with_a_variable_1 (T0884 T0882, rule 05.12, master fe2ec83)
+// The accepted side: an index tested below the array's length, and a
+// constant inside it. The branch is the fact the demand needs, and
+// the lowering keeps the test on the path. Socket kind, written as
+// xdp.
+const M = 12
+map tab : array[1] of { i: u32, v: u32[M] }
+
+program p : xdp {
+  tab[0].v[0] = 1
+  let i = tab[0].i
+  if i < M { tab[0].v[i] = 1 }
+  pass
+}

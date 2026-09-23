@@ -1,6 +1,6 @@
 import Koit.Core.Syntax
 import Koit.Core.Print
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 import Koit.Facts.Entail
 import Koit.Effects.Held
 import Koit.Check.Diag
@@ -19,7 +19,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Interface (KindRow)
+open Koit.Interface (KindDecl)
 open Koit.Facts (Origin Facts)
 open Koit.Effects (Effs Held)
 
@@ -44,7 +44,7 @@ structure Env where
   fns       : List Fn
   contracts : List Contract
   /-- The program kind, inside a program body or handler. -/
-  kind      : Option KindRow := none
+  kind      : Option KindDecl := none
   locals    : List Local := []
   /-- Untyped constants being expanded, to reject a cycle. -/
   visiting  : List String := []
@@ -60,10 +60,10 @@ namespace Env
 
 def type? (env : Env) (n : String) : Option TypeDecl :=
   -- `verdict` is the alias for the enclosing program's kind's verdict
-  -- type; a function has no kind and names the row instead.
+  -- type; a function has no kind and names the declaration instead.
   if n == "verdict" then
-    env.kind.map fun row =>
-      { span := row.verdictTy.span, name := "verdict", ty := row.verdictTy }
+    env.kind.map fun decl =>
+      { span := decl.verdictTy.span, name := "verdict", ty := decl.verdictTy }
   else env.types.find? (·.name == n) <|> env.interface.type? n
 
 def const? (env : Env) (n : String) : Option ConstDecl :=
@@ -83,8 +83,8 @@ def local? (env : Env) (n : String) : Option Local :=
 
 /-- The verdict `n` of the current kind, with its type. -/
 def verdict? (env : Env) (n : String) : Option Ty :=
-  env.kind.bind fun row =>
-    if row.verdicts.any (·.1 == n) then some row.verdictTy else none
+  env.kind.bind fun decl =>
+    if decl.verdicts.any (·.1 == n) then some decl.verdictTy else none
 
 def bind (env : Env) (l : Local) : Env := { env with locals := l :: env.locals }
 

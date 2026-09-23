@@ -15,7 +15,7 @@ This file is the data structure and its operations; the checker
 computes the set statement by statement, since a packet write's
 range comes from the facts at the store. The consumers are the
 contracts (a preserved region against the writes and the resize),
-the resource table (effects forbidden while a resource is held), and
+the interface's resources (effects forbidden while a resource is held), and
 the function summaries at call sites.
 -/
 
@@ -58,7 +58,7 @@ def print : Eff → String
 /-- Structural equality, with expressions compared by their text. -/
 def same (a b : Eff) : Bool := a.print == b.print
 
-/-- The effect a interface row declares. A row's `write(pkt[a..b))`
+/-- The effect a interface declaration declares. A declaration's `write(pkt[a..b))`
 keeps its range; its `write(pkt)` is the whole packet. -/
 def ofCore : Core.Effect → Eff
   | .call => .call | .resize => .resize | .sleep => .sleep | .fail => .fail
@@ -96,7 +96,7 @@ def union (E F : Effs) : Effs := E.addAll F.effs
 
 def ofList (es : List Eff) : Effs := empty.addAll es
 
-/-- The effects a interface row declares. `resize` and `sleep` imply
+/-- The effects a interface declaration declares. `resize` and `sleep` imply
 `call`. -/
 def ofCore (es : List Core.Effect) : Effs :=
   let E := ofList (es.map Eff.ofCore)
@@ -116,15 +116,15 @@ def bind (E : Effs) (f : Eff → Effs) : Effs :=
 /-- The write effects of the set. -/
 def writes (E : Effs) : List Eff := E.effs.filter fun e => !e.isFlag
 
-/-- Whether a row's forbidden column names the flag `e`. -/
+/-- Whether a declaration's forbidden clause names the flag `e`. -/
 def forbids (forbidden : List Core.Effect) (e : Eff) : Bool :=
   forbidden.any fun f =>
     match f, e with
     | .call, .call | .resize, .resize | .sleep, .sleep | .fail, .fail => true
     | _, _ => false
 
-/-- The first effect of `E` that a resource's row forbids while it is
-held; `sleep` is forbidden under every row. -/
+/-- The first effect of `E` that a resource's declaration forbids while it is
+held; `sleep` is forbidden under every declaration. -/
 def forbiddenBy (forbidden : List Core.Effect) (E : Effs) : Option Eff :=
   E.effs.find? fun e =>
     match e with

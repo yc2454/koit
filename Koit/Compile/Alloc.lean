@@ -11,7 +11,7 @@ slot. A call takes the kernel's calling convention here: the
 callee's argument layout says which register carries which koit
 operand, the context, a constant, a place's size, or `printk`'s
 format, and the allocation materializes each into `r1` to `r5`,
-calls, and stores `r0`. The inline rows, which the kernel computes
+calls, and stores `r0`. The inline declarations, which the kernel computes
 without a call, become the kernel's own instruction sequences. `lea`
 is `mov r1, r10; add r1, base`; the exit sequence loads `r0` from
 the verdict's slot. Labels become signed offsets from the
@@ -28,7 +28,7 @@ Its theorem, `alloc_correct`, is stated in `Rules.lean`.
 namespace Koit.Compile
 
 open Koit.BPF (Instr Src Cls VReg Label Reg BIR Bytecode Cpu)
-open Koit.Interface (KindRow CallRow AbiArg)
+open Koit.Interface (KindDecl CallDecl AbiArg)
 
 /-- What the allocation yields: the bytecode, the slot of each
 virtual register, and the bytecode index each BIR instruction starts
@@ -68,13 +68,13 @@ def r1 : Reg := .r1
 def r2 : Reg := .r2
 def r3 : Reg := .r3
 
-/-- What an expansion reads: the slots, the program, the kind's row,
+/-- What an expansion reads: the slots, the program, the kind's declaration,
 the interface, and the sizes of the types the kernel functions' memory
 parameters name. -/
 structure ACtx where
   slots  : List (VReg × Int)
   prog   : BIR
-  kind   : KindRow
+  kind   : KindDecl
   pre    : Interface
   sizeOf : Core.Ty → Option Nat
 
@@ -167,7 +167,7 @@ def expandCall (h : BPF.Callee) (abi : List AbiArg) (args : List VReg) (dst : Op
     | none => pure []
   return loads ++ [.call h [] none] ++ store
 
-/-- The kernel's own instruction sequence for an inline row. -/
+/-- The kernel's own instruction sequence for an inline declaration. -/
 def expandInline (name : String) (args : List VReg) (dst : Option VReg) : AM Code := do
   let c ← read
   let store (r : Reg) : AM Code := match dst with
@@ -233,9 +233,9 @@ def expand (ins : Instr VReg Label) : AM Code := do
     let c ← read
     match h with
     | .kernel name =>
-      let some row := c.pre.call? name | throw s!"unknown kernel function `{name}`"
-      if row.isInline then expandInline name args dst
-      else expandCall h (row.implIn c.kind.name).abi args dst
+      let some decl := c.pre.call? name | throw s!"unknown kernel function `{name}`"
+      if decl.isInline then expandInline name args dst
+      else expandCall h (decl.implIn c.kind.name).abi args dst
     | .builtin b => expandCall h b.abi args dst
   | .atomic op cls f d off s =>
     let (rd, ld) ← fetch d r1

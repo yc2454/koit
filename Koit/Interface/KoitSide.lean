@@ -1,4 +1,4 @@
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 
 /-!
 The koit side of the interface, hand-written: how each kernel
@@ -7,7 +7,7 @@ to. Nothing the kernel's sources state appears here, no helper number,
 no offset, no verdict value, no `gpl_only`: those are the kernel side,
 transcribed per tag under `Kernel/`, and `Join.lean` fills them in and
 checks every correspondence against the kernel's own prototype. Every
-row cites the kernel object it corresponds to. A unit's own
+declaration cites the kernel object it corresponds to. A unit's own
 declarations shadow interface names; the interface is the outer
 scope.
 -/
@@ -127,7 +127,7 @@ def callSpecs : List CallSpec := [
     effects := [], note := "inline arithmetic" },
   { name := "csum_fold", sig := .fn [param "csum" tU32] (some tU16), effects := [],
     note := "inline arithmetic" },
-  -- Core forms, listed so that the table names the whole vocabulary
+  -- Core forms, listed so that the interface names the whole vocabulary
   { name := "hton", sig := .builtin, effects := [], note := "byte swap" },
   { name := "ntoh", sig := .builtin, effects := [], note := "byte swap" },
   { name := "atomic_add", sig := .builtin, effects := [], note := "BPF_ATOMIC BPF_ADD | BPF_FETCH" },
@@ -141,8 +141,8 @@ def callSpecs : List CallSpec := [
 /-! ### Resources -/
 
 /-- The kernel functions named here are checked to exist on the tag;
-a row whose function the tag lacks is dropped with that reason. -/
-def resourceRows : List ResourceRow := [
+a declaration whose function the tag lacks is dropped with that reason. -/
+def resourceDecls : List ResourceDecl := [
   { res := ⟨"spinlock"⟩, describe := "a spin lock", acquirers := ["lock"], arg := .place "spinlock",
     yields := false, fails := none,
     normalExit := "bpf_spin_unlock", abnormalExit := "bpf_spin_unlock",
@@ -176,7 +176,7 @@ def resourceRows : List ResourceRow := [
 
 /-! ### Region kinds -/
 
-def regionRows : List RegionRow := [
+def regionDecls : List RegionDecl := [
   { name := "stack", dynamic := false, writable := true, initialized := true,
     guard := none,
     note := "locals and struct literals; frame size reported by the compiler" },
@@ -184,7 +184,7 @@ def regionRows : List RegionRow := [
     initialized := true, guard := none,
     note := "array slots and hash lookups; zero-filled; valid for the whole run" },
   { name := "ctx", dynamic := false, writable := false, initialized := true,
-    guard := none, note := "fields per kind, table 2; writability per field" },
+    guard := none, note := "fields per kind; writability per field" },
   -- `MAX_PACKET_OFF`, include/linux/filter.h: the largest offset the
   -- verifier admits for a packet pointer
   { name := "pkt", dynamic := true, writable := true, initialized := true,
@@ -196,7 +196,7 @@ def regionRows : List RegionRow := [
 
 /-- `enum btf_field_type` and `btf_get_field_type`, kernel/bpf/btf.c;
 stage 1 has the spin lock, whose size the join checks. -/
-def slotRows : List SlotRow := [
+def slotDecls : List SlotDecl := [
   { name := "spinlock", kernel := "bpf_spin_lock", size := 4, align := 4,
     unique := true, homes := [.mapValue], namedBy := "`hold lock(p)`" }
 ]
@@ -219,7 +219,7 @@ def constSpecs : List ConstSpec := [
 
 /-- `Sock` is opaque; `SockTuple` is `struct bpf_sock_tuple`'s IPv4
 member, the argument of the socket lookups. -/
-def typeRows : List TypeDecl := [
+def typeDecls : List TypeDecl := [
   { span := noSpan, name := "spinlock", ty := .slot noSpan "spinlock" },
   { span := noSpan, name := "XdpAction", ty := .enum noSpan "XdpAction" },
   { span := noSpan, name := "TcAction", ty := .enum noSpan "TcAction" },
@@ -232,7 +232,7 @@ def typeRows : List TypeDecl := [
 /-- The koit side, for every kernel tag. -/
 def koitSide : Spec :=
   { kinds := [xdpKind, tcKind, syscallKind], calls := callSpecs,
-    resources := resourceRows, regions := regionRows, slots := slotRows,
-    enums := [], consts := constSpecs, types := typeRows }
+    resources := resourceDecls, regions := regionDecls, slots := slotDecls,
+    enums := [], consts := constSpecs, types := typeDecls }
 
 end Koit.Interface

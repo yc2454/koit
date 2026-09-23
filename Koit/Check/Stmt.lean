@@ -87,7 +87,7 @@ a interface call with the `call` effect. -/
 def callKills (env : Env) (f : String) : Bool :=
   if (env.fn? f).isSome then true
   else match env.interface.call? f with
-    | some row => row.effects.any fun
+    | some decl => decl.effects.any fun
       | .call => true
       | _ => false
     | none => false
@@ -231,11 +231,11 @@ end
 
 /-! ### Guards -/
 
-/-- Whether a call has the `resize` effect: a interface row that says
+/-- Whether a call has the `resize` effect: a interface declaration that says
 so, or a function of the unit whose summary has it. -/
 def resizes (env : Env) (f : String) : Bool :=
   match env.interface.call? f with
-  | some row => (Effs.ofCore row.effects).has .resize
+  | some decl => (Effs.ofCore decl.effects).has .resize
   | none => ((env.fnEffects.lookup f).map (·.has .resize)).getD false
 
 /-- The call as the programmer names it: `adjust_head` for the
@@ -484,14 +484,14 @@ def checkRet (env : Env) (K : Ctx) (span : Span) (v : Option Expr) :
     check env K e ty
     match K.verdictSet with
     | some vset =>
-      let row := env.kind.get!
-      let vals := vset.filterMap fun n => (row.verdicts.lookup n).map Int.ofNat
+      let decl := env.kind.get!
+      let vals := vset.filterMap fun n => (decl.verdicts.lookup n).map Int.ofNat
       let setText := "{" ++ ", ".intercalate vset ++ "}"
       unless Koit.Facts.entailsIn sc K.facts e vals do
         -- a value the facts pin down is named
         match Koit.Facts.constOf sc K.facts e with
         | some c =>
-          match row.verdicts.find? (·.2 == c.toNat) with
+          match decl.verdicts.find? (·.2 == c.toNat) with
           | some (n, _) =>
             err e.span s!"`{n}` is not in the verdict set {setText}"
           | none => err e.span s!"the verdict {c} is not in the verdict set \
@@ -723,10 +723,10 @@ def holdEntry (env : Env) (K : Ctx) (isCall : Bool) (acq : Fallible) : Facts :=
 
 /-- The context of a `hold` body: the acquisition's facts, and the
 resource pushed onto the held set with the name it binds. -/
-def holdCtx (env : Env) (K : Ctx) (span : Span) (row : Interface.ResourceRow)
+def holdCtx (env : Env) (K : Ctx) (span : Span) (decl : Interface.ResourceDecl)
     (x : Option String) (acq : Fallible) : Ctx :=
-  { K with facts := holdEntry env K (row.arg == .call) acq,
-           held := { row, name := x, what := acqSpelling acq, span } :: K.held }
+  { K with facts := holdEntry env K (decl.arg == .call) acq,
+           held := { decl, name := x, what := acqSpelling acq, span } :: K.held }
 
 /-- After an atomic update on `p`: the place's facts go. -/
 def atomicAfter (env : Env) (K : Ctx) (p : Place) (args : List Expr)
@@ -856,7 +856,7 @@ def writesOf (env : Env) (K : Ctx) (p : Place) : M Effs := do
 /-- The effects of a call: a function of the unit contributes its
 summary instantiated on the arguments, the writes through its `ref`
 and `view` parameters becoming writes to what was passed; a interface
-call contributes its row, with the writes of `copy`, `fill`,
+call contributes its declaration, with the writes of `copy`, `fill`,
 `insert`, and `delete` from their place or map argument. -/
 def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
     M Effs := do
@@ -876,8 +876,8 @@ def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
       | e => R := R.add e
     return R
   match env.interface.call? f with
-  | some row =>
-    let mut R := Effs.ofCore row.effects
+  | some decl =>
+    let mut R := Effs.ofCore decl.effects
     match f, args with
     | "copy", .place dst :: _ | "fill", .place dst :: _ =>
       R := R.union (← writesOf env K dst)
@@ -927,26 +927,26 @@ def stmtEffects (env : Env) (K : Ctx) : Stmt → M Effs
   | _ => return {}
 
 /-- The held set against the effects of one statement: an effect a
-held row forbids is an error at the statement, naming the resource
+held declaration forbids is an error at the statement, naming the resource
 and the `hold` that acquired it. A sleeping call is also refused in
-a program kind whose row does not permit it. -/
+a program kind whose declaration does not permit it. -/
 def checkHeld (env : Env) (K : Ctx) (span : Span) (E : Effs) : M Unit := do
   if let some (e, h) := K.held.forbidden E then
-    err span s!"the {e.print} effect is forbidden while {h.row.describe} is \
+    err span s!"the {e.print} effect is forbidden while {h.decl.describe} is \
       held (`hold {h.what}` at line {h.span.start.line}); move it outside \
       the block"
   if E.has .sleep then
-    if let some row := env.kind then
-      unless row.sleep do
-        err span s!"a sleeping call is not permitted in {article row.name} \
-          `{row.name}` program"
+    if let some decl := env.kind then
+      unless decl.sleep do
+        err span s!"a sleeping call is not permitted in {article decl.name} \
+          `{decl.name}` program"
 
-/-- A resource acquired while an instance of it is held, when its row
+/-- A resource acquired while an instance of it is held, when its declaration
 does not nest. -/
-def checkNesting (K : Ctx) (span : Span) (row : Interface.ResourceRow) :
+def checkNesting (K : Ctx) (span : Span) (decl : Interface.ResourceDecl) :
     M Unit := do
-  if let some h := K.held.nestingConflict row then
-    err span s!"{row.describe} cannot be held inside another: `hold \
+  if let some h := K.held.nestingConflict decl then
+    err span s!"{decl.describe} cannot be held inside another: `hold \
       {h.what}` at line {h.span.start.line} is still held"
 
 /-- What a write effect touches, for a message. -/
@@ -1042,10 +1042,10 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     unless info.mutable do
       match p, info.origin with
       | .field _ _ f, .ctx =>
-        let row := env.kind.get!
-        let writable := (row.ctx.filter (·.writable)).map (·.name)
+        let decl := env.kind.get!
+        let writable := (decl.ctx.filter (·.writable)).map (·.name)
         err span s!"the context field `{f}` is not writable in \
-          {article row.name} `{row.name}` program; \
+          {article decl.name} `{decl.name}` program; \
           {if writable.isEmpty then "none of its fields is" else
             "the writable fields are " ++ ", ".intercalate writable}"
       | _, _ =>
@@ -1151,13 +1151,13 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     joinMoved span (Ft.dropNames [x]) Fe
     return (env, meetK env K (Ft.dropNames [x]) Fe, [], Et.union Ee)
   | .hold span r x acq body els =>
-    -- (Hold): the body under the resource, which its row must allow
+    -- (Hold): the body under the resource, which its declaration must allow
     -- to nest; `move` consistency comes with ownership
     let b ← fallibleTy env K acq
-    let row ← match env.interface.resource? r with
-      | some row => pure row
-      | none => err span s!"`{r}` has no row in the resource table"
-    match row.fails, els with
+    let decl ← match env.interface.resource? r with
+      | some decl => pure decl
+      | none => err span s!"`{r}` is not a resource the interface declares"
+    match decl.fails, els with
     | some k, none =>
       err span s!"`{acqName acq}` can fail (kind `{k}`); the acquisition \
         needs `?` or `else`"
@@ -1175,16 +1175,16 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
       | none, some _ =>
         err span s!"`{acqName acq}` yields a value; bind it with \
           `hold x = ...`"
-    checkNesting K span row
-    let F := holdEntry env K (row.arg == .call) acq
-    let (Fb, Eb) ← checkStmts env' (holdCtx env K span row x acq) body
+    checkNesting K span decl
+    let F := holdEntry env K (decl.arg == .call) acq
+    let (Fb, Eb) ← checkStmts env' (holdCtx env K span decl x acq) body
     let Fb := match x with
       | some n => Fb.dropNames [n]
       | none => Fb
     match els with
     | some e =>
       let (Fe, Ee) ← checkStmts env
-        { K with facts := F, errnoOk := row.fails == some .failed_call } e
+        { K with facts := F, errnoOk := decl.fails == some .failed_call } e
       unless exits e do
         err span s!"the `else` block must end in an exit: {exitForms} \
          "

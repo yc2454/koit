@@ -2,7 +2,7 @@ import Koit.Core.Syntax
 import Koit.Interface.Kernel
 
 /-!
-The interface's row types. The six tables a kernel version supplies to
+The interface's declaration types: what a kernel version declares to
 the core, which the checker, the interpreter, and the lowering all
 read: program kinds with their verdicts, default failure, packet
 access, and sleepability; context fields per kind; calls with
@@ -10,7 +10,7 @@ signatures, effects, availability, and license; resources with their
 acquisition and its argument form, release, forbidden effects, and
 nesting; region kinds; slot types with their layout and homes.
 
-Two layers. The joined rows below (`KindRow`, `CallRow`, ...) are
+Two layers. The joined declarations below (`KindDecl`, `CallDecl`, ...) are
 what the compiler reads, complete with the kernel's numbers and
 offsets. They are computed, never written: `Join.lean` fills them
 from the koit side, the hand-written `Spec` at the end of this file,
@@ -25,7 +25,7 @@ namespace Koit.Interface
 
 open Koit (Span)
 open Koit.Core
-/-- The span every interface node carries: a interface row has no source
+/-- The span every interface node carries: a interface declaration has no source
 position, and a diagnostic about one names the call site instead. -/
 def noSpan : Span := Span.point Koit.Pos.origin
 
@@ -44,7 +44,7 @@ def field (name : String) (ty : Ty) : Field := .mk noSpan name ty none
 def param (name : String) (ty : Ty) (pred : Option Expr := none) : Param :=
   { span := noSpan, name, ty, pred }
 
-/-! ### Table 1, program kinds -/
+/-! ### The program kinds -/
 
 /-- What a program returns on a failure of a kind it has no handler
 for. -/
@@ -53,7 +53,7 @@ inductive DefaultExit where
   | value (v : Int)
   deriving Repr, Inhabited
 
-/-- Table 2, one context field the source can name: `ctx.f`. -/
+/-- A context field the source can name: `ctx.f`. -/
 structure CtxField where
   name     : String
   ty       : Ty
@@ -64,9 +64,9 @@ structure CtxField where
   writable : Bool
   deriving Repr, Inhabited
 
-/-- Table 2, the other rows of a packet kind's context: `data` and
+/-- The other fields of a packet kind's context: `data` and
 `data_end`, which the kernel converts to packet pointers when a
-program loads them. They are rows of the same table by offset, so
+program loads them. They are fields of the same context by offset, so
 that the machine admits the load, but the source never names them;
 it reaches the packet through views. -/
 structure CtxBound where
@@ -76,7 +76,7 @@ structure CtxBound where
   isEnd  : Bool
   deriving Repr, Inhabited
 
-structure KindRow where
+structure KindDecl where
   name    : String
   /-- The kernel's program type, `BPF_PROG_TYPE_XDP`, the key into
   the kernel side. -/
@@ -91,7 +91,7 @@ structure KindRow where
   /-- The named verdicts with the values the kernel gives them. -/
   verdicts : List (String × Nat)
   /-- The verdict statements `pass`, `drop`, `tx`, `abort` as names
-  in `verdicts`; a statement with no row is not available. -/
+  in `verdicts`; a statement with no declaration is not available. -/
   sugar : List (String × String)
   defaultExit : DefaultExit
   /-- Whether views into the packet may be written, for kinds that
@@ -99,11 +99,11 @@ structure KindRow where
   pktWritable : Bool := false
   sleep : Bool
   ctx : List CtxField
-  /-- The location-yielding rows of a packet kind's context. -/
+  /-- The location-yielding declarations of a packet kind's context. -/
   ctxBounds : List CtxBound := []
   deriving Repr, Inhabited
 
-/-! ### Table 3, calls -/
+/-! ### The calls -/
 
 /-- How a call is typed: by a signature, or by a rule of the checker
 keyed by the name, for the generic builtins whose
@@ -114,7 +114,7 @@ inductive Sig where
   deriving Repr, Inhabited
 
 /-- One argument of a kernel function as the kernel takes it: the
-`i`-th argument of the koit row, the program's context, a constant,
+`i`-th argument of the koit declaration, the program's context, a constant,
 the byte size of the `i`-th argument's place, or the format of
 `printk`. -/
 inductive AbiArg where
@@ -125,7 +125,7 @@ inductive AbiArg where
   | fmt
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- How a row reaches the kernel: a helper by its number with the
+/-- How a declaration reaches the kernel: a helper by its number with the
 layout of its arguments, a kfunc by name with the layout, or an
 inline sequence of instructions with no call at all. -/
 inductive Impl where
@@ -138,7 +138,7 @@ def Impl.abi : Impl → List AbiArg
   | .helper _ abi | .kfunc _ abi => abi
   | .inline => []
 
-structure CallRow where
+structure CallDecl where
   name : String
   sig  : Sig
   /-- The effects; the write effects of `copy`, `fill`,
@@ -164,24 +164,24 @@ structure CallRow where
   implByKind : List (String × Impl) := []
   deriving Repr, Inhabited
 
-def callRow (name : String) (sig : Sig) (effects : List Effect)
+def callDecl (name : String) (sig : Sig) (effects : List Effect)
     (kernel : String) (fails : Option Kind := none)
     (acquires : Option Resource := none) (kinds : List String := [])
     (gplOnly : Bool := false) (impl : Impl := .inline)
-    (implByKind : List (String × Impl) := []) : CallRow :=
+    (implByKind : List (String × Impl) := []) : CallDecl :=
   { name, sig, effects, fails, acquires, kinds, gplOnly, kernel, impl, implByKind }
 
-/-- The implementation of a row in a kind. -/
-def CallRow.implIn (row : CallRow) (kind : String) : Impl :=
-  (row.implByKind.lookup kind).getD row.impl
+/-- The implementation of a declaration in a kind. -/
+def CallDecl.implIn (decl : CallDecl) (kind : String) : Impl :=
+  (decl.implByKind.lookup kind).getD decl.impl
 
-/-- Whether the row is computed inline, with no kernel call. -/
-def CallRow.isInline (row : CallRow) : Bool :=
-  match row.impl with
+/-- Whether the declaration is computed inline, with no kernel call. -/
+def CallDecl.isInline (decl : CallDecl) : Bool :=
+  match decl.impl with
   | .inline => true
   | _ => false
 
-/-! ### Table 4, resources -/
+/-! ### The resources -/
 
 inductive Nesting where
   | no | counted | lifo | yes
@@ -196,7 +196,7 @@ inductive AcqArg where
   | call
   deriving Repr, BEq, DecidableEq, Inhabited
 
-structure ResourceRow where
+structure ResourceDecl where
   res : Resource
   /-- The resource as a message names it: "a spin lock". -/
   describe : String
@@ -209,24 +209,24 @@ structure ResourceRow where
   normalExit : String
   abnormalExit : String
   /-- Effects forbidden while held; `sleep` is forbidden under every
-  row. -/
+  declaration. -/
   forbidden : List Effect
   /-- Whether another instance of the same resource may be held. -/
   nesting : Nesting
   guards : String
-  /-- The kernel function a scope row's acquisition calls, a kfunc,
+  /-- The kernel function a scope declaration's acquisition calls, a kfunc,
   for the encoder. -/
   acquireKernel : Option String := none
   deriving Repr, Inhabited
 
-/-! ### Table 5, region kinds -/
+/-! ### The region kinds -/
 
-structure RegionRow where
+structure RegionDecl where
   name : String
   /-- Whether places in it are obtained statically or through views. -/
   dynamic : Bool
   /-- Whether places in it may be stored to; the packet's writability
-  is per kind, `KindRow.pktWritable`. -/
+  is per kind, `KindDecl.pktWritable`. -/
   writable : Bool
   /-- Whether a place is defined before its first read: locals at
   declaration, map values zero-filled, context and packet by the
@@ -242,7 +242,7 @@ structure RegionRow where
   note : String
   deriving Repr, Inhabited
 
-/-! ### Table 6, slot types -/
+/-! ### The slot types -/
 
 /-- Where a field of a slot type may live. -/
 inductive Home where
@@ -256,7 +256,7 @@ def Home.describe : Home → String
 /-- One slot type: an opaque field type the kernel recognizes in a map
 value, global data, or an allocated object, with its layout, its
 homes, whether a value holds at most one, and what names it. -/
-structure SlotRow where
+structure SlotDecl where
   name    : String
   /-- The BTF type name the kernel recognizes. -/
   kernel  : String
@@ -270,11 +270,11 @@ structure SlotRow where
   deriving Repr, Inhabited
 
 /-- An enumeration type: a scalar whose values are the named
-constants of this row and no others. The same shape as a slot row, an
-opaque type the interface names, differing on one column: a slot is
-not data and an enumeration is. A kind's verdict type is a row of
-this table. -/
-structure EnumRow where
+constants of its declaration and no others. The same shape as a
+slot, an opaque type the interface names, differing on one clause: a
+slot is not data and an enumeration is. A kind's verdict type is one
+of these. -/
+structure EnumDecl where
   name      : String
   /-- The enumeration the kernel declares, `enum xdp_action`, or the
   family its constants belong to when the kernel spells them as
@@ -292,22 +292,22 @@ def maxSlots : Nat := 11
 end Koit.Interface
 
 open Koit.Interface Koit.Core in
-/-- The six tables of one kernel version, with its constants and
+/-- What one kernel version declares, with its constants and
 types. -/
 structure Koit.Interface where
   /-- The kernel tag, `v6.8`. -/
   kernel    : String
-  kinds     : List KindRow
-  calls     : List CallRow
-  resources : List ResourceRow
-  regions   : List RegionRow
-  slots     : List SlotRow
-  enums     : List EnumRow
+  kinds     : List KindDecl
+  calls     : List CallDecl
+  resources : List ResourceDecl
+  regions   : List RegionDecl
+  slots     : List SlotDecl
+  enums     : List EnumDecl
   consts    : List ConstDecl
   types     : List TypeDecl
-  /-- The kernel side the rows were joined with. -/
+  /-- The kernel side the declarations were joined with. -/
   side      : Kernel.Side
-  /-- Rows of the koit side this kernel lacks, with the reason, for
+  /-- Declarations of the koit side this kernel lacks, with the reason, for
   the diagnostic that names the kernel. -/
   missing   : List (String × String) := []
   deriving Inhabited
@@ -316,26 +316,26 @@ namespace Koit.Interface
 
 open Koit.Core
 
-def enum? (p : Interface) (name : String) : Option EnumRow :=
+def enum? (p : Interface) (name : String) : Option EnumDecl :=
   p.enums.find? (·.name == name)
 
-/-- The value a constant of an enumeration names, with its row. -/
-def enumConst? (p : Interface) (n : String) : Option (EnumRow × Nat) :=
-  p.enums.findSome? fun row =>
-    (row.constants.lookup n).map fun v => (row, v)
+/-- The value a constant of an enumeration names, with its declaration. -/
+def enumConst? (p : Interface) (n : String) : Option (EnumDecl × Nat) :=
+  p.enums.findSome? fun decl =>
+    (decl.constants.lookup n).map fun v => (decl, v)
 
-def kind? (p : Interface) (name : String) : Option KindRow :=
+def kind? (p : Interface) (name : String) : Option KindDecl :=
   p.kinds.find? (·.name == name)
 
-def call? (p : Interface) (name : String) : Option CallRow :=
+def call? (p : Interface) (name : String) : Option CallDecl :=
   p.calls.find? (·.name == name)
 
-def resource? (p : Interface) (r : Resource) : Option ResourceRow :=
+def resource? (p : Interface) (r : Resource) : Option ResourceDecl :=
   p.resources.find? (·.res == r)
 
 /-- The resource a surface acquirer such as `lock` or `sk_lookup_tcp`
 denotes. -/
-def acquirer? (p : Interface) (name : String) : Option ResourceRow :=
+def acquirer? (p : Interface) (name : String) : Option ResourceDecl :=
   p.resources.find? (·.acquirers.contains name)
 
 def const? (p : Interface) (name : String) : Option ConstDecl :=
@@ -344,10 +344,10 @@ def const? (p : Interface) (name : String) : Option ConstDecl :=
 def type? (p : Interface) (name : String) : Option TypeDecl :=
   p.types.find? (·.name == name)
 
-def slot? (p : Interface) (name : String) : Option SlotRow :=
+def slot? (p : Interface) (name : String) : Option SlotDecl :=
   p.slots.find? (·.name == name)
 
-def region? (p : Interface) (name : String) : Option RegionRow :=
+def region? (p : Interface) (name : String) : Option RegionDecl :=
   p.regions.find? (·.name == name)
 
 /-- Why a name the koit side knows is absent on this kernel. -/
@@ -360,7 +360,7 @@ def helperId? (p : Interface) (name : String) : Option Nat :=
 
 /-! ### The koit side
 
-The hand-written half of every row: what is decided, with the name
+The hand-written half of every declaration: what is decided, with the name
 of the kernel object it corresponds to and nothing the kernel's
 sources state. `Join.lean` turns a `Spec` and a `Kernel.Side` into an
 `Interface`. -/
@@ -373,7 +373,7 @@ structure CtxSpec where
   writable : Bool
   deriving Repr, Inhabited
 
-/-- The koit side of an enumeration row: the constants are not
+/-- The koit side of an enumeration declaration: the constants are not
 repeated here, since the kind's `verdicts` already state them and the
 kernel side supplies their numbers. -/
 structure EnumSpec where
@@ -401,8 +401,8 @@ structure KindSpec where
   pktWritable : Bool := false
   sleep     : Bool
   ctx       : List CtxSpec
-  /-- The location-yielding context rows by field name, with whether
-  the row is the packet's end. -/
+  /-- The location-yielding context declarations by field name, with whether
+  the declaration is the packet's end. -/
   ctxBounds : List (String × Bool) := []
   deriving Repr, Inhabited
 
@@ -425,7 +425,7 @@ structure CallSpec where
   /-- The kinds koit offers the call in; empty means every kind the
   kernel does. Checked to be within the kernel's availability. -/
   kinds    : List String := []
-  /-- What the row is, for the printout: "byte swap". -/
+  /-- What the declaration is, for the printout: "byte swap". -/
   note     : String := ""
   link     : Link := .inline
   linkByKind : List (String × Link) := []
@@ -443,10 +443,10 @@ structure ConstSpec where
 structure Spec where
   kinds     : List KindSpec
   calls     : List CallSpec
-  resources : List ResourceRow
-  regions   : List RegionRow
-  slots     : List SlotRow
-  enums     : List EnumRow
+  resources : List ResourceDecl
+  regions   : List RegionDecl
+  slots     : List SlotDecl
+  enums     : List EnumDecl
   consts    : List ConstSpec
   types     : List TypeDecl
   deriving Inhabited

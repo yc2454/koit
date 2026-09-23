@@ -1,0 +1,18 @@
+// pending: 50
+// expect: forbidden while a spin lock is held
+// selftest: none; the rule's own list (rule 08.22, master fe2ec83): the RCU, preempt, and IRQ kfuncs are not lock-safe
+// An RCU section opened while a spin lock is held. Its acquisition is
+// the kfunc bpf_rcu_read_lock, which no kernel admits under a lock:
+// "function calls are not allowed while holding a lock". The scope
+// declaration's acquisition carries no effect today, so this checks. Written
+// as xdp; the same holds for preempt_off and irq_off on the kernels
+// that have them.
+map c : array[1] of { lk: spinlock, n: u64 }
+
+program p : xdp {
+  let c = c[0]
+  hold lock(c.lk) {
+    hold rcu { c.n += 1 }
+  }
+  pass
+}

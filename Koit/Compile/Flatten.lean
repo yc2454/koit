@@ -27,7 +27,7 @@ namespace Koit.Compile
 open Koit (Span)
 open Koit.Core (ArithOp CmpOp AtomicOp Kind Resource)
 open Koit.BPF (Instr Src Cls AluOp Cmp VReg Label FrameObj RegClass Cpu BIR)
-open Koit.Interface (KindRow CallRow)
+open Koit.Interface (KindDecl CallDecl)
 
 /-! ### The translation state -/
 
@@ -54,7 +54,7 @@ structure FState where
   handlers   : List (Kind × Label) := []
   exitLabel  : Label := ⟨0⟩
   cpu        : Cpu := .v3
-  kind       : KindRow := default
+  kind       : KindDecl := default
   pre        : Interface := default
   deriving Inhabited
 
@@ -230,7 +230,7 @@ def ctxField (f : String) : FM (Nat × Nat) := do
     | _ => ferr s!"the context field `{f}` is not an integer"
   | none => ferr s!"the context has no field `{f}`"
 
-/-- The offset of a packet bound's row. -/
+/-- The offset of a packet bound's declaration. -/
 def ctxBound (isEnd : Bool) : FM Nat := do
   match (← get).kind.ctxBounds.find? (·.isEnd == isEnd) with
   | some b => return b.offset
@@ -592,10 +592,10 @@ partial def stmt (s : LIR.Stmt) : FM Unit := do
   | .call _ _ f .. => ferr s!"a call to `{f}`: the flattening takes closed LIR"
   | .builtin _ x b args => builtin x b args
   | .kernel _ x h args =>
-    let some row := (← get).pre.call? h | ferr s!"unknown kernel function `{h}`"
+    let some decl := (← get).pre.call? h | ferr s!"unknown kernel function `{h}`"
     let regs ← args.mapM fun a => do exprTemp a (← typeOf a)
     let dst ← match x with
-      | some x => some <$> bind x (LIR.rowResult row)
+      | some x => some <$> bind x (LIR.rowResult decl)
       | none => pure none
     emit (.call (.kernel h) regs dst)
 
@@ -685,7 +685,7 @@ end
 without a packet, as LIR halts with; the kind's default failure
 verdict otherwise, where LIR's rule is an error and the code is
 dead, so that a violation stays visible. -/
-def fallOffVerdict (kind : KindRow) : Nat :=
+def fallOffVerdict (kind : KindDecl) : Nat :=
   if kind.hasPkt then
     match kind.defaultExit with
     | .verdict name => (kind.verdicts.lookup name).getD 0
@@ -730,7 +730,7 @@ def flatten (pre : Interface) (cpu : Cpu) (u : LIR.CompUnit) : Except String (Li
   u.programs.mapM (flattenProgram pre cpu)
 
 /-- The machine's environment for a BIR program: the interface, the
-kind's row, BIR's convention, and the checker's layout for the sizes
+kind's declaration, BIR's convention, and the checker's layout for the sizes
 of the kernel functions' memory parameters. -/
 def birEnv (pre : Interface) (env : Check.Env) (B : BIR) : Except String (BPF.Env VReg Label) := do
   let some kind := pre.kind? B.kind | throw s!"unknown kind `{B.kind}`"

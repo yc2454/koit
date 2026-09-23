@@ -1,0 +1,11 @@
+// pending: kfunc declarations
+// selftest: progs/stream.c stream_print_kfuncs_locked (T0581, rule 11.16; also T0865 arena_kfuncs_under_bpf_lock, rule 09.41; master fe2ec83)
+// The accepting side of the lock-safe class: a kfunc flagged
+// KF_SPINLOCK_SAFE called while a spin lock is held, bpf_stream_printk
+// in the test. koit has no kfunc declarations yet, so the unit is a placeholder
+// for the first lock-safe declaration; the arena test is the same shape with
+// bpf_arena_alloc_pages and waits for the arena besides. In C:
+//
+//   bpf_spin_lock(&block);
+//   ret = bpf_stream_printk(BPF_STDOUT, "...");
+//   bpf_spin_unlock(&block);

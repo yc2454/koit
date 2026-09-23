@@ -1,4 +1,4 @@
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 import Koit.Core.Print
 
 /-!
@@ -68,7 +68,7 @@ def Endian.print : Endian → String
 
 /-- The builtins of the machine: the map and ring operations with the
 kernel's fixed semantics, the protocol operations of the resource
-rows, and `printk`, whose format is metadata of the instruction. -/
+declarations, and `printk`, whose format is metadata of the instruction. -/
 inductive Builtin where
   | lookup
   | update
@@ -88,10 +88,10 @@ inductive Builtin where
   deriving Repr, BEq, Inhabited
 
 /-- What a `call` calls: a builtin, or a kernel function by the name
-of its row. -/
+of its declaration. -/
 inductive Callee where
   | builtin (b : Builtin)
-  | kernel (row : String)
+  | kernel (decl : String)
   deriving Repr, BEq, Inhabited
 
 /-- A source operand: a register, or the immediate of the `_imm`
@@ -252,8 +252,8 @@ def Builtin.abi : Builtin → List Interface.AbiArg
   | .printk _ n _ size => [.fmt, .const size] ++ (List.range n).map .arg
 
 /-- The kernel helper a builtin calls, by its name without `bpf_`;
-the number is the kernel side of the interface's. The scope rows are
-kfuncs, encoded by the name their resource row gives. -/
+the number is the kernel side of the interface's. The scope declarations are
+kfuncs, encoded by the name their resource declaration gives. -/
 def Builtin.helper : Builtin → Option String
   | .lookup => some "map_lookup_elem"
   | .update => some "map_update_elem"
@@ -281,7 +281,7 @@ def Builtin.print : Builtin → String
 
 def Callee.print : Callee → String
   | .builtin b => b.print
-  | .kernel row => row
+  | .kernel decl => decl
 
 /-- The registers an instruction reads, a call its explicit operands;
 under the fixed convention the well-formedness check adds the

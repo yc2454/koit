@@ -21,7 +21,7 @@ load and a rejection from the kernel can be matched against the list.
 namespace Koit.BPF
 
 open Koit.Machine (toNatMod wrap leBytes ofLe HeldObj)
-open Koit.Interface (KindRow)
+open Koit.Interface (KindDecl)
 
 /-! ### Regions and values -/
 
@@ -87,11 +87,11 @@ inductive Cause where
   | aluOnLocation (what : String)
   /-- 6: a comparison the machine does not define. -/
   | badComparison (what : String)
-  /-- 7: a context access that is not a row, or a write to a
-  read-only row. -/
+  /-- 7: a context access that is not a declared field, or a write to a
+  read-only field. -/
   | ctxAccess (off : Int) (n : Nat) (write : Bool)
   /-- 8: an argument that does not fit its parameter kind, or a call
-  while a held row forbids it. -/
+  while a held resource forbids it. -/
   | badArgument (callee : String) (what : String)
   | forbiddenCall (callee : String) (held : String)
   /-- 9: a release that is not the innermost held object, or a lock
@@ -106,7 +106,7 @@ inductive Cause where
   | pcOutOfCode (pc : Nat)
   /-- A step on a halted state. -/
   | halted
-  /-- What well-formedness excludes: an unknown map, row, label, or
+  /-- What well-formedness excludes: an unknown map, declaration, label, or
   object, a wrong arity, and the kernel's own error, which its
   contract excludes. -/
   | malformed (what : String)
@@ -122,8 +122,8 @@ def Cause.describe : Cause → String
   | .pointerLeak r off => s!"a store of a location into {r.print} + {off}"
   | .aluOnLocation what => s!"arithmetic on a location: {what}"
   | .badComparison what => s!"a comparison the machine does not define: {what}"
-  | .ctxAccess off n true => s!"a store of {n} bytes to the context at {off}, which is not a writable row"
-  | .ctxAccess off n false => s!"a load of {n} bytes from the context at {off}, which is not a row"
+  | .ctxAccess off n true => s!"a store of {n} bytes to the context at {off}, which is not a writable field of the context"
+  | .ctxAccess off n false => s!"a load of {n} bytes from the context at {off}, which is not a field of the context"
   | .badArgument callee what => s!"`{callee}`: {what}"
   | .forbiddenCall callee held => s!"a call to `{callee}` while {held} is held"
   | .badRelease what => s!"a release out of order: {what}"
@@ -296,12 +296,12 @@ def bytecodeConv : Conv Reg Int :=
     name := Reg.print }
 
 /-- What a step reads besides the state: the interface, the kind's
-row, the convention, the program, and the sizes of the types the
+declaration, the convention, the program, and the sizes of the types the
 kernel functions' memory parameters name, which the caller supplies
 from the checker's layout so that the machine reads no type. -/
 structure Env (ρ τ : Type) where
   pre    : Interface
-  kind   : KindRow
+  kind   : KindDecl
   conv   : Conv ρ τ
   prog   : Program ρ τ
   sizeOf : Core.Ty → Option Nat

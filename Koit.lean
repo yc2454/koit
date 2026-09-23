@@ -8,7 +8,7 @@ import Koit.Core.Syntax
 import Koit.Core.Print
 import Koit.Core.Desugar
 import Koit.Interface.Kernel
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 import Koit.Interface.Join
 import Koit.Interface.KoitSide
 import Koit.Interface.Kernel.V6_8

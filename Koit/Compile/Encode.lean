@@ -121,13 +121,13 @@ def calleeTarget (pre : Interface) (kind : String) : Callee → Except String (N
       | _ => throw s!"no kernel function acquires `{r}`"
     | .leave r, none =>
       match pre.resource? r with
-      | some row => pure (.inr row.normalExit)
-      | none => throw s!"no row for `{r}`"
+      | some decl => pure (.inr decl.normalExit)
+      | none => throw s!"no declaration for `{r}`"
     | b, none => throw s!"`{b.print}` has no helper"
   | .kernel name =>
     match pre.call? name with
-    | some row =>
-      match row.implIn kind with
+    | some decl =>
+      match decl.implIn kind with
       | .helper id _ => pure (.inl id)
       | .kfunc kname _ => pure (.inr kname)
       | .inline => throw s!"`{name}` is inline and reaches the encoder as a call"

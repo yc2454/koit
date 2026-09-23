@@ -209,7 +209,7 @@ def allocUnit (pre : Interface) (core : Core.CompUnit) (checked : Check.Checked)
 
 /-- A position as JSON: the line and column a diagnostic names, and
 the byte offset, so that a reader slices the source without counting
-columns of its own. -/
+clauses of its own. -/
 def posJson (p : Pos) : Lean.Json :=
   Lean.Json.mkObj [("line", Lean.toJson p.line), ("col", Lean.toJson p.col),
                    ("byte", Lean.toJson p.byte)]

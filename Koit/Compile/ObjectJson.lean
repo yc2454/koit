@@ -36,8 +36,8 @@ partial def typeJson (env : Check.Env) : Ty → Except String Json
   | .refined _ _ t _ => typeJson env t
   | .slot s n =>
     match env.interface.slot? n with
-    | some row => pure <| Json.mkObj [("kind", "slot"), ("name", n), ("kernel", row.kernel),
-                                      ("size", toJson row.size), ("align", toJson row.align)]
+    | some decl => pure <| Json.mkObj [("kind", "slot"), ("name", n), ("kernel", decl.kernel),
+                                      ("size", toJson decl.size), ("align", toJson decl.align)]
     | none => throw s!"{s.start}: unknown slot type `{n}`"
   | t@(.array s elem n) => do
     let some len := env.evalConst n | throw s!"{s.start}: the array length is not a constant"
@@ -125,16 +125,16 @@ def relocJson (r : Reloc) : Json :=
   | .kfunc n => Json.mkObj [("index", toJson r.index), ("kind", "kfunc"), ("name", n)]
 
 def objectJson (pre : Interface) (o : Object) : Except String Json := do
-  let some row := pre.kind? o.kind | throw s!"unknown kind `{o.kind}`"
-  let some pt := pre.side.progType? row.progType | throw s!"{pre.kernel} has no {row.progType}"
-  let result := match row.verdictTy with
+  let some decl := pre.kind? o.kind | throw s!"unknown kind `{o.kind}`"
+  let some pt := pre.side.progType? decl.progType | throw s!"{pre.kernel} has no {decl.progType}"
+  let result := match decl.verdictTy with
     | .int _ true w => s!"i{w}"
     | .int _ false w => s!"u{w}"
     | t => t.print
   pure <| Json.mkObj [
     ("name", o.name), ("kind", o.kind), ("prog_type", pt.name), ("prog_type_id", toJson pt.id),
     ("section", o.section_), ("result", result),
-    ("verdicts", Json.mkObj (row.verdicts.map fun (n, v) => (n, toJson v))),
+    ("verdicts", Json.mkObj (decl.verdicts.map fun (n, v) => (n, toJson v))),
     ("words", Json.arr (o.words.map fun w => Json.str (hex16 w))),
     ("relocs", Json.arr (o.relocs.map relocJson).toArray),
     ("notes", Json.arr (o.notes.map fun n =>

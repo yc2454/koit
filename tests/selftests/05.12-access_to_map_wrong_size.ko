@@ -1,0 +1,17 @@
+// expect: the value of `big` is a `Big`
+// selftest: progs/verifier_helper_value_access.c access_to_map_wrong_size (T1669, rule 05.12, master fe2ec83)
+// A map update whose value comes from a map with a smaller value.
+// The kernel measures the value pointer against the map's value size;
+// here the two maps have two value types and the insert is a type
+// error before any size is measured. Tracepoint kind, written as
+// syscall.
+type Key = { k: u32 }
+type Small = { a: u64 }
+type Big = { a: u64, b: u64 }
+map small : hash[4] of Key -> Small
+map big : hash[4] of Key -> Big
+
+program p : syscall {
+  let k = { k: 0 }
+  if let v = small[k] { big.insert(k, v)? }
+}

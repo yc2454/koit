@@ -13,7 +13,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Interface (Home SlotRow maxSlots)
+open Koit.Interface (Home SlotDecl maxSlots)
 
 
 /-- `{v: T | P}` weakened to `T`, at the head. -/
@@ -101,7 +101,7 @@ partial def Env.layout (env : Env) (t : Ty) (fuel : Nat := 64) :
   | .bool _ => return (1, 1)
   | .slot s n =>
     match env.interface.slot? n with
-    | some row => return (row.size, row.align)
+    | some decl => return (decl.size, decl.align)
     | none => err s s!"unknown slot type `{n}`"
   | .struct _ fields =>
     let mut off := 0
@@ -124,7 +124,7 @@ end
 /-- Why a type is not packet-representable, if it is not: a slot type,
 a `ref`, a `view`, an `own`, or an optional inside it. With
 `allowSlots`, slot types are admitted, as in a map value, where their
-rows are checked separately. -/
+declarations are checked separately. -/
 partial def Env.notRepresentable (env : Env) (t : Ty) (allowSlots : Bool)
     (fuel : Nat := 64) : M (Option String) := do
   if fuel == 0 then return some "a type nested too deep"
@@ -168,10 +168,10 @@ partial def Env.slotsIn (env : Env) (t : Ty) (fuel : Nat := 64) :
 /-- What names a slot type, for a diagnostic about using one as data. -/
 def Env.slotUse (env : Env) (n : String) : String :=
   match env.interface.slot? n with
-  | some row => row.namedBy
+  | some decl => decl.namedBy
   | none => "its resource"
 
-/-- The slot rules over a data type: a row for every slot, at most one
+/-- The slot rules over a data type: a declaration for every slot, at most one
 field of a unique slot, at most `maxSlots` in all, and, when `home` is
 given, every slot at home there. `what` names the type in messages. -/
 def Env.checkSlots (env : Env) (span : Span) (what : String) (t : Ty)
@@ -181,17 +181,17 @@ def Env.checkSlots (env : Env) (span : Span) (what : String) (t : Ty)
     err span s!"{what} has {names.length} slot fields; a value holds at \
       most {maxSlots}"
   for n in names.eraseDups do
-    let row ← match env.interface.slot? n with
-      | some row => pure row
+    let decl ← match env.interface.slot? n with
+      | some decl => pure decl
       | none => err span s!"unknown slot type `{n}`"
     let k := names.count n
-    if row.unique && k > 1 then
+    if decl.unique && k > 1 then
       err span s!"{what} has {k} fields of type `{n}`; at most one field of \
         type `{n}`"
     if let some h := home then
-      unless row.homes.contains h do
+      unless decl.homes.contains h do
         err span s!"{what} may not contain a `{n}`: a `{n}` lives in \
-          {", ".intercalate (row.homes.map Home.describe)}, not in \
+          {", ".intercalate (decl.homes.map Home.describe)}, not in \
           {h.describe}"
 
 /-- Base-type equality: structural, through named types, with

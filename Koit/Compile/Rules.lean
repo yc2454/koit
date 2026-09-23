@@ -26,7 +26,7 @@ open Koit.Check (Env Ctx Local Checked UnitOk Synth StmtOk)
 
 /-- `Agree`: the shared states of two levels are equal, one equality
 of one structure, the maps, the packet and its token, the kernel
-objects, the held stack as rows and objects, and the trace; the
+objects, the held stack as declarations and objects, and the trace; the
 levels' private halves, locals and registers, are not mentioned. -/
 def Agree (a b : Machine.State) : Prop := a = b
 

@@ -27,7 +27,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Interface (CallRow Home tU32 tU64)
+open Koit.Interface (CallDecl Home tU32 tU64)
 open Koit.Facts (Origin Facts Scope Shape)
 
 /-- The type of a place, whether it may be written, and where it
@@ -119,8 +119,8 @@ def resolveName (env : Env) (span : Span) (n : String) : M NameRef := do
   if (env.type? n).isSome then err span s!"`{n}` is a type, not a value"
   if env.interface.kinds.any (·.verdicts.any (·.1 == n)) then
     match env.kind with
-    | some row =>
-      err span s!"`{n}` is not a verdict of {article row.name} `{row.name}` \
+    | some decl =>
+      err span s!"`{n}` is not a verdict of {article decl.name} `{decl.name}` \
         program"
     | none =>
       err span s!"`{n}` is a verdict name, available only in a program body \
@@ -160,11 +160,11 @@ partial def Env.refinement? (env : Env) (t : Ty) (fuel : Nat := 64) :
 def shapeOf (env : Env) : Ty → Shape
   | .int _ s w => .int s w
   | .bool _ => .bool
-  -- an enumeration is an unsigned integer of its row's width for the
+  -- an enumeration is an unsigned integer of its declaration's width for the
   -- domain, which is why admitting its constants adds no theory
   | .enum _ n =>
     match env.interface.enum? n with
-    | some row => .int false row.width
+    | some decl => .int false decl.width
     | none => .other
   | _ => .other
 
@@ -175,7 +175,7 @@ def demandMsg (site : String) (P : Expr) : String :=
     establish it with `check`, or read the value with a marked load"
 
 /-- The bound a view's window must lie under: `e + size(T) <= max`,
-with `max` the packet region's largest offset, when the row has one.
+with `max` the packet region's largest offset, when the declaration has one.
 The verifier bounds a packet pointer's variable offset before it
 reads the comparison that follows, so an offset the facts do not
 bound is a program that does not load; a constant offset is entailed
@@ -183,34 +183,34 @@ trivially, and a loop-carried one needs a `check` at the head of the
 body. -/
 def viewOffsetBound (env : Env) (span : Span) (off : Expr) (sz : Nat) :
     Option Expr :=
-  (env.interface.region? "pkt").bind fun row => row.maxOffset.map fun mx =>
+  (env.interface.region? "pkt").bind fun decl => decl.maxOffset.map fun mx =>
     .cmp span .le (.arith span .add off (.lit span sz (toString sz)))
       (.lit span mx (toString mx))
 
 /-- `pkt` exists in the packet kinds only. -/
 def requirePkt (env : Env) (span : Span) : M Unit :=
   match env.kind with
-  | some row =>
-    unless row.hasPkt do
+  | some decl =>
+    unless decl.hasPkt do
       err span s!"`pkt` is available only in a program of a packet kind; \
-        {article row.name} `{row.name}` program has no packet"
+        {article decl.name} `{decl.name}` program has no packet"
   | none =>
     err span "`pkt` is available only in a program body of a packet kind \
      "
 
-/-- The diagnostic for a function name nothing declares: the row the
+/-- The diagnostic for a function name nothing declares: the declaration the
 target kernel lacks, with what it lacks; the kernel's own function
-koit has no row for yet, by its kernel name with or without `bpf_`;
+koit has no declaration for yet, by its kernel name with or without `bpf_`;
 or simply unknown. -/
 def unknownFunction (env : Env) (span : Span) (f : String) : M α := do
   if let some why := env.interface.missing? f then
     err span s!"`{f}` is not on kernel {env.interface.kernel}: {why}"
   let bare := if f.startsWith "bpf_" then (f.drop 4).toString else f
   if (env.interface.side.helper? bare).isSome then
-    err span s!"`{f}` is the kernel's helper bpf_{bare}, which koit has no row for \
+    err span s!"`{f}` is the kernel's helper bpf_{bare}, which koit has no declaration for \
       yet; the calls koit offers are listed by `koitc interface`"
   if (env.interface.side.kfunc? f).isSome || (env.interface.side.kfunc? ("bpf_" ++ bare)).isSome then
-    err span s!"`{f}` is a kfunc of the kernel, which koit has no row for yet; \
+    err span s!"`{f}` is a kfunc of the kernel, which koit has no declaration for yet; \
       the calls koit offers are listed by `koitc interface`"
   err span s!"unknown function `{f}`"
 
@@ -443,17 +443,17 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
   | .field s (.var _ "ctx") f =>
     match env.kind with
     | none => err s "`ctx` is available only in a program body"
-    | some row =>
-      match row.ctx.find? (·.name == f) with
+    | some decl =>
+      match decl.ctx.find? (·.name == f) with
       | some cf =>
         return { ty := cf.ty, mutable := cf.writable, origin := .ctx }
       | none =>
-        if row.ctx.isEmpty then
-          err s s!"the context of {article row.name} `{row.name}` program is \
+        if decl.ctx.isEmpty then
+          err s s!"the context of {article decl.name} `{decl.name}` program is \
             opaque"
-        err s s!"the context of {article row.name} `{row.name}` program has no \
+        err s s!"the context of {article decl.name} `{decl.name}` program has no \
           field `{f}`; the fields are \
-          {", ".intercalate (row.ctx.map (·.name))}"
+          {", ".intercalate (decl.ctx.map (·.name))}"
   | .field s q f =>
     let info ← placeTy env K q
     match ← env.norm info.ty with
@@ -522,7 +522,7 @@ partial def scope (env : Env) (K : Ctx) : Scope :=
       if (env.local? n).isSome then none
       else match env.verdict? n with
         | some _ =>
-          env.kind.bind fun row => (row.verdicts.lookup n).map Int.ofNat
+          env.kind.bind fun decl => (decl.verdicts.lookup n).map Int.ofNat
         | none => env.evalConst (.var Koit.Facts.noSpan n),
     sort := fun t => (env.norm t).toOption.map (shapeOf env),
     size := fun t => (env.layout t).toOption.map (·.1),
@@ -646,26 +646,26 @@ partial def checkArg (env : Env) (K : Ctx) (fname : String) (p : Param)
 
 /-- A interface call with a signature: availability, license, arity,
 arguments. -/
-partial def interfaceFn (env : Env) (K : Ctx) (span : Span) (row : CallRow)
+partial def interfaceFn (env : Env) (K : Ctx) (span : Span) (decl : CallDecl)
     (args : List Arg) : M (Option Ty) := do
-  if row.name.startsWith "pkt." then requirePkt env span
+  if decl.name.startsWith "pkt." then requirePkt env span
   if let some k := env.kind then
-    if !row.kinds.isEmpty && !row.kinds.contains k.name then
-      err span s!"`{row.name}` is not available in {article k.name} `{k.name}` \
+    if !decl.kinds.isEmpty && !decl.kinds.contains k.name then
+      err span s!"`{decl.name}` is not available in {article k.name} `{k.name}` \
         program on kernel {env.interface.kernel}; it is available in \
-        {", ".intercalate (row.kinds.map fun k => s!"`{k}`")}"
-  if row.gplOnly && !env.gplCompatible then
-    err span s!"`{row.name}` is GPL-only; declare `license \"GPL\"` or another \
+        {", ".intercalate (decl.kinds.map fun k => s!"`{k}`")}"
+  if decl.gplOnly && !env.gplCompatible then
+    err span s!"`{decl.name}` is GPL-only; declare `license \"GPL\"` or another \
       GPL-compatible license"
-  match row.sig with
+  match decl.sig with
   | .fn params ret =>
     unless args.length == params.length do
-      err span s!"`{row.name}` takes {params.length} arguments, {args.length} \
+      err span s!"`{decl.name}` takes {params.length} arguments, {args.length} \
         given"
     for (p, a) in params.zip args do
-      checkArg env K row.name p a
+      checkArg env K decl.name p a
     return ret
-  | .builtin => builtinCall env K span row.name args
+  | .builtin => builtinCall env K span decl.name args
 
 /-- The generic builtins, typed by their arguments. -/
 partial def builtinCall (env : Env) (K : Ctx) (span : Span) (f : String)
@@ -771,17 +771,17 @@ partial def synthCall (env : Env) (K : Ctx) (span : Span) (f : String)
       err span s!"`{f}` returns an optional; call it with `?`, `else`, or \
         `if let`"
     | r => return r
-  if let some row := env.interface.call? f then
-    if row.acquires.isSome then
+  if let some decl := env.interface.call? f then
+    if decl.acquires.isSome then
       err span s!"`{f}` yields a resource; bind it with `hold x = {f}(...)` \
        "
-    match row.fails, fallible with
+    match decl.fails, fallible with
     | some k, false =>
       err span s!"`{f}` can fail (kind `{k}`): call it with `?` or `else` \
        "
     | none, true => err span s!"`{f}` cannot fail, so it takes no `?` or `else`"
     | _, _ => pure ()
-    return ← interfaceFn env K span row args
+    return ← interfaceFn env K span decl args
   if (env.local? f).isSome || (env.const? f).isSome ||
       (env.config? f).isSome then
     err span s!"`{f}` is not a function"
@@ -809,7 +809,7 @@ def checkPred (env : Env) (bound : List Local) (p : Expr) : M Unit := do
 def fallibleKind (env : Env) : Fallible → Kind
   | .acquire _ r .. =>
     match env.interface.resource? r with
-    | some row => row.fails.getD .failed_call
+    | some decl => decl.fails.getD .failed_call
     | none => .failed_call
   | f => f.kind?.getD .failed_call
 
@@ -851,15 +851,15 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
     | _ => err s "a marked load reads a field"
   | .call s fn args => return { ty := ← synthCall env K s fn args true }
   | .acquire s r fn tyArg args =>
-    -- the acquisition's argument form is a column of its row
-    let row ← match env.interface.resource? r with
-      | some row => pure row
+    -- the acquisition's argument form is a clause of its declaration
+    let decl ← match env.interface.resource? r with
+      | some decl => pure decl
       | none =>
         if r == .iter then
-          err s "iterator loops are not in this draft's resource table \
+          err s "iterator loops are not among this draft's resources \
             (an open design point)"
-        err s s!"`{r}` has no row in the resource table"
-    match row.arg with
+        err s s!"`{r}` is not a resource the interface declares"
+    match decl.arg with
     | .place slot =>
       match args with
       | [.place p] =>
@@ -926,7 +926,7 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
           call it without `?` or `else`"
     | none =>
       if fn == "next" then
-        err s "iterator loops are not in this draft's resource table \
+        err s "iterator loops are not among this draft's resources \
           (an open design point)"
       err s s!"unknown function `{fn}`"
   | .coerce s e t =>
@@ -940,7 +940,7 @@ def fallibleTy (env : Env) (K : Ctx) (f : Fallible) : M Bound := do
       match bn with
       | .enum _ n =>
         match env.interface.enum? n with
-        | some row => check env K e (.int s false row.width)
+        | some decl => check env K e (.int s false decl.width)
         | none => err s s!"unknown enumeration `{n}`"
       | _ => check env K e base
       checkPred env

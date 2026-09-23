@@ -28,7 +28,7 @@ loader over the system call gives it, with one map for all such
 variables instead of one per name.
 
 A kfunc call needs an extern function in `.BTF` and a call relocation
-against it; no row of the interface calls one yet, so a document with
+against it; no declaration of the interface calls one yet, so a document with
 a kfunc relocation is refused here, saying so.
 """
 

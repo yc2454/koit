@@ -54,7 +54,7 @@ program p : xdp verdict in { PASS, DROP }
   let h = clamp(q * 3)
   let g = tab[0].v[h]
   // a constant verdict and a computed one: a number becomes a verdict
-  // through the coercion, whose predicate the kind's row states
+  // through the coercion, whose predicate the kind's declaration states
   if q == 1 { pass }
   let n: u32 = 1
   let v = n as {v: verdict | v == PASS || v == DROP}?

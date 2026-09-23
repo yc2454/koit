@@ -24,12 +24,12 @@ def Builtin.result : Builtin → Option Ty
   | .atomic _ s w true => some (.int s w)
   | _ => none
 
-/-- The result of a kernel function's row, as its `r0`: a location
-when the row yields an owned or referenced place, the 64-bit signed
+/-- The result of a kernel function's declaration, as its `r0`: a location
+when the declaration yields an owned or referenced place, the 64-bit signed
 return otherwise, which carries the failure signal of a scalar-result
-row. -/
-def rowResult (row : Interface.CallRow) : Ty :=
-  match row.sig with
+declaration. -/
+def rowResult (decl : Interface.CallDecl) : Ty :=
+  match decl.sig with
   | .fn _ (some (.own ..)) | .fn _ (some (.ref ..)) => .ptr
   | _ => .i64
 
@@ -37,7 +37,7 @@ def rowResult (row : Interface.CallRow) : Ty :=
 statement. -/
 structure WfCtx where
   pre     : Interface
-  kind    : Option Interface.KindRow
+  kind    : Option Interface.KindDecl
   fns     : List Fn
   /-- The result type of the function, or the verdict type of the
   program or handler. -/
@@ -92,8 +92,8 @@ partial def typeOf (K : WfCtx) (Γ : Γ) (expected : Option Ty) : Expr → W Ty
     return .int s w
   | .ctx f =>
     match K.kind with
-    | some row =>
-      match row.ctx.find? (·.name == f) with
+    | some decl =>
+      match decl.ctx.find? (·.name == f) with
       | some cf =>
         match cf.ty with
         | .int _ s w => return .int s w
@@ -120,7 +120,7 @@ partial def typeOfAddr (K : WfCtx) (Γ : Γ) : Addr → W Unit
     -- in a function, the bounds serve the element test of a view
     -- parameter, and a view exists in packet kinds only
     match K.kind with
-    | some row => if row.hasPkt then return () else wfErr "no packet in this kind"
+    | some decl => if decl.hasPkt then return () else wfErr "no packet in this kind"
     | none => return ()
   | .mapval .. => return ()
 
@@ -174,8 +174,8 @@ def releasesOnly (K : WfCtx) (ss : List Stmt) : Bool :=
     | .builtin _ none (.leave _) _ => true
     | .kernel _ none h _ =>
       match K.pre.call? h with
-      | some row => K.pre.resources.any fun r =>
-          r.normalExit == row.kernel || r.abnormalExit == row.kernel
+      | some decl => K.pre.resources.any fun r =>
+          r.normalExit == decl.kernel || r.abnormalExit == decl.kernel
       | none => false
     | _ => false
 
@@ -210,8 +210,8 @@ partial def wfStmt (K : WfCtx) (Γ : Γ) (s : Stmt) : W Koit.LIR.Γ := do
     return Γ
   | .ctxStore _ f e =>
     match K.kind with
-    | some row =>
-      match row.ctx.find? (·.name == f) with
+    | some decl =>
+      match decl.ctx.find? (·.name == f) with
       | some cf =>
         unless cf.writable do wfErr s!"the context field `{f}` is read-only"
         match cf.ty with
@@ -279,11 +279,11 @@ partial def wfStmt (K : WfCtx) (Γ : Γ) (s : Stmt) : W Koit.LIR.Γ := do
     | some x, none => wfErr s!"`{b.print}` yields nothing to bind to `{x}`"
     | none, _ => return Γ
   | .kernel _ x h args =>
-    let some row := K.pre.call? h | wfErr s!"unknown kernel function `{h}`"
+    let some decl := K.pre.call? h | wfErr s!"unknown kernel function `{h}`"
     for e in args do
       let _ ← typeOf K Γ none e
     match x with
-    | some x => return (x, rowResult row) :: Γ
+    | some x => return (x, rowResult decl) :: Γ
     | none => return Γ
 
 end
@@ -305,15 +305,15 @@ def wf (pre : Interface) (u : CompUnit) : W Unit := do
     let _ ← wfStmts K Γ0 f.body
       |>.mapError (s!"in `{f.name}`: " ++ ·)
   for p in u.programs do
-    let some row := pre.kind? p.kind | wfErr s!"unknown kind `{p.kind}`"
-    let vt : Ty := match row.verdictTy with
+    let some decl := pre.kind? p.kind | wfErr s!"unknown kind `{p.kind}`"
+    let vt : Ty := match decl.verdictTy with
       | .int _ s w => .int s w
       | _ => .u32
-    let K : WfCtx := { pre, kind := some row, fns := u.fns, ret := some vt, opt := false,
+    let K : WfCtx := { pre, kind := some decl, fns := u.fns, ret := some vt, opt := false,
                        mayRaise := true, inHandler := false }
     declareOnce s!"`{p.name}`" p.body []
     let _ ← wfStmts K [] p.body |>.mapError (s!"in `{p.name}`: " ++ ·)
-    if row.hasPkt && !returns p.body then
+    if decl.hasPkt && !returns p.body then
       wfErr s!"the body of `{p.name}` does not end in `return` on every path"
     for h in p.handlers do
       let Kh := { K with mayRaise := false, inHandler := true }

@@ -26,7 +26,7 @@ inductive LOut where
   | ret (v : Option Val)
   deriving Repr, Inhabited
 
-/-- Two held stacks read as rows and objects. -/
+/-- Two held stacks read as declarations and objects. -/
 def heldEq (a b : List HeldRes) : Bool :=
   a.length == b.length && (a.zip b).all fun (h, h') => h.same h'
 
@@ -170,11 +170,11 @@ def runUnit (pre : Interface) (core : Core.CompUnit) (u : CompUnit) (packet : By
   let mut reports : List Core.Sem.Report := []
   for p in u.programs do
     if only.isSome && only != some p.name then continue
-    let some row := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
-    let st := initState env row packet ctx maps fuel
+    let some decl := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
+    let st := initState env decl packet ctx maps fuel
     let h ← runProgram Machine.synthetic u.fns st p
     maps := h.state.maps
-    reports := reports ++ [{ program := p.name, verdict := Core.Sem.verdictName row h.verdict,
+    reports := reports ++ [{ program := p.name, verdict := Core.Sem.verdictName decl h.verdict,
                              log := h.state.log }]
   return (reports, Core.Sem.printMaps env maps)
 

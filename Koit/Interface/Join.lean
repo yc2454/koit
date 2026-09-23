@@ -1,13 +1,13 @@
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 import Koit.Core.Print
 
 /-!
 The join of the interface's two sides. From the hand-written koit
 side, a `Spec`, and a transcribed kernel side, a `Kernel.Side`, the
-rows the compiler reads, with the kernel's numbers and offsets filled
+declarations the compiler reads, with the kernel's numbers and offsets filled
 in, or the list of disagreements between the two, which the build
-reports as an error. A row the kernel simply lacks, a helper or kfunc
-it does not have yet, is not a disagreement: the row is dropped and
+reports as an error. A declaration the kernel simply lacks, a helper or kfunc
+it does not have yet, is not a disagreement: the declaration is dropped and
 remembered with its reason, so that a program naming it gets a
 diagnostic that names the kernel.
 
@@ -62,7 +62,7 @@ def argShape (kind : String) : ArgShape :=
   else .ptr
 
 /-- Whether a layout entry may fill an argument of the shape; koit's
-parameters, when the row has a signature, say whether an argument is
+parameters, when the declaration has a signature, say whether an argument is
 a scalar or a place. -/
 def entryFits (params : Option (List Param)) : AbiArg → ArgShape → Bool
   | .ctx, s => s == .ctx
@@ -97,7 +97,7 @@ def checkLayout (what : String) (params : Option (List Param)) (abi : List AbiAr
 def valueU32 (v : Int) : Nat :=
   if v < 0 then (2 ^ 32 + v).toNat % 2 ^ 32 else v.toNat % 2 ^ 32
 
-def constRow (name : String) (value : Expr) : ConstDecl :=
+def constDecl (name : String) (value : Expr) : ConstDecl :=
   { span := noSpan, name, ty := none, value }
 
 def lit (n : Nat) : Expr := .lit noSpan n (toString n)
@@ -120,8 +120,8 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
   let problem (s : String) : List String := [s]
 
   -- kinds
-  let mut kinds : List KindRow := []
-  let mut enums : List EnumRow := []
+  let mut kinds : List KindDecl := []
+  let mut enums : List EnumDecl := []
   for ks in spec.kinds do
     match k.progType? ks.progType with
     | none => problems := problems ++ problem s!"kind `{ks.name}`: {k.tag} has no {ks.progType}"
@@ -171,7 +171,7 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
   let allKinds := spec.kinds.map (·.name)
   let progTypeOf (kind : String) : String :=
     ((spec.kinds.find? (·.name == kind)).map (·.progType)).getD ""
-  let mut calls : List CallRow := []
+  let mut calls : List CallDecl := []
   for cs in spec.calls do
     let wanted := if cs.kinds.isEmpty then allKinds else cs.kinds
     let params : Option (List Param) := match cs.sig with
@@ -183,7 +183,7 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
     let mut reasons : List String := []
     let mut kernelName := cs.note
     for kind in wanted do
-      -- a builtin row names its helper in the note; its layout is the
+      -- a builtin declaration names its helper in the note; its layout is the
       -- machine's, checked here under the same rules
       let link := match (cs.linkByKind.lookup kind).getD cs.link, cs.sig with
         | .inline, .builtin =>
@@ -226,10 +226,10 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
             let changes := k.changesPkt.contains name
             if changes && !hasResize cs.effects then
               problems := problems ++ problem
-                s!"`{cs.name}`: {k.tag} lists bpf_{name} as changing the packet, but the row has no `resize` effect"
+                s!"`{cs.name}`: {k.tag} lists bpf_{name} as changing the packet, but the declaration has no `resize` effect"
             if !changes && hasResize cs.effects then
               problems := problems ++ problem
-                s!"`{cs.name}`: the row has the `resize` effect, but {k.tag} does not list bpf_{name} as changing the packet"
+                s!"`{cs.name}`: the declaration has the `resize` effect, but {k.tag} does not list bpf_{name} as changing the packet"
             avail := avail ++ [kind]
             implBy := implBy ++ [(kind, .helper h.id abi)]
     if avail.isEmpty then
@@ -259,7 +259,7 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
             (h.args.any (·.1 == "..."))
 
   -- resources: every kernel function named must exist
-  let mut resources : List ResourceRow := []
+  let mut resources : List ResourceDecl := []
   for r in spec.resources do
     let names := (r.acquireKernel.toList ++ [r.normalExit, r.abnormalExit]).filter (· != "")
     match names.find? (!k.hasFunction ·) with
@@ -282,7 +282,7 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
       if v < 0 then
         problems := problems ++ problem s!"constant `{c.name}`: {c.kernel} is {v}, which no literal spells"
       else
-        consts := consts ++ [constRow c.name (if c.hton then .hton noSpan (hexLit v.toNat) else lit v.toNat)]
+        consts := consts ++ [constDecl c.name (if c.hton then .hton noSpan (hexLit v.toNat) else lit v.toNat)]
 
   unless problems.isEmpty do
     throw ("the koit side of the interface disagrees with " ++ k.tag ++ ":\n  " ++

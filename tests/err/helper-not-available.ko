@@ -1,5 +1,5 @@
 // expect: not available in a `syscall` program
-// From spec/language.md 13: the call table says where a call is
+// From spec/language.md 13: the interface says where a call is
 // available; `redirect` is a packet helper.
 program p : syscall {
   let v = redirect(1)?

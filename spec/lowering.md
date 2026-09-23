@@ -2,14 +2,14 @@
 
 Status: draft 1, 2026-09-18, the third of the three documents that
 settle session 6 before code; revised 2026-09-19 from `ISSUES.md`
-entries 28 to 35 at the start of session 7. `lir.md` defines the first intermediate
-language and `bir.md` the second together with the target machine.
-This one defines the passes between Core and bytecode, states what
-each preserves and how the statements compose into the compiler's
-correctness theorem, restates Lemma L on the code the passes emit,
-fixes the trusted base, and orders the proofs. Decisions 47 to 50 of
-`language.md` are assumed. The decisions this draft embeds are listed
-in section 12.
+entries 28 to 35 at the start of session 7. `lir.md` defines the first
+intermediate language and `bir.md` the second together with the target
+machine. This one defines the passes between Core and bytecode, states
+what each preserves and how the statements compose into the compiler's
+correctness theorem, restates Lemma L on the code the passes emit, fixes
+the trusted base, and orders the proofs. Decisions 47 to 50 of
+`language.md` are assumed. The decisions this draft embeds are listed in
+section 12.
 
 ## 1. The pipeline
 
@@ -73,7 +73,7 @@ checker accepts.
 `Agree st m` holds between a Core state and a machine state when
 their shared states are equal, one equality of one structure: the
 maps, the packet and its token, the kernel objects and rings, the
-trace with memory arguments as bytes, and the held stack as rows and
+trace with memory arguments as bytes, and the held stack as declarations and
 objects described without locations (`bir.md`, 2.5). Locals,
 registers, each level's private regions, and Core's named context
 are not mentioned: at a halt they no longer matter. The per-pass relations
@@ -170,7 +170,7 @@ through statements:
   signedness of every operator and literal are read;
 - `ρ`, the release context: a stack of scopes, each either a boundary
   marker for a `block` or `loop` the translation has opened, or a
-  release action `(row, x, normal, abnormal)` for a `hold` whose body
+  release action `(declaration, x, normal, abnormal)` for a `hold` whose body
   is being translated, innermost last;
 - `μ`, the set of owned names moved on the current path, which is
   the same on every path reaching a point (Lemma M below);
@@ -324,7 +324,7 @@ the object zero-filled by `st` instructions; `copy n` and `fill n`
 become runs of loads and stores by 8, 4, 2, and 1 bytes. Builtins and
 kernel functions become `call` with explicit operands. `ctx f`
 becomes `ldx` from `v_ctx` at the field's offset and width, and
-`pkt_data`, `pkt_end` the two location-yielding rows. A `for` loop's
+`pkt_data`, `pkt_end` the two location-yielding declarations. A `for` loop's
 annotation from pass A selects its form; in stage 1 every loop is the
 counted loop of `lir.md` 6.1, and `bpf_loop` and the iterator forms
 are later selections with their own templates.
@@ -349,7 +349,7 @@ held object and a traced argument are recorded without locations,
 so the injection touches locals and the frame only (entry 30). The
 context is the other private part: LIR binds fields by name, the
 machine holds bytes at the kind's offsets, and `R_C` relates the two
-per row of the context table.
+per declaration of the kind's context declaration.
 
 ### 6.3 Theorem C
 
@@ -390,11 +390,11 @@ gets an 8-byte spill slot below the frame objects; `v_ctx` is copied
 from `r1` into `r6` at entry; each BIR instruction becomes loads of
 its operands from their slots into `r1` to `r3`, the instruction on
 those registers, and a store of the result to its slot; a `call`
-lays its registers out by the row's implementation column, koit's
+lays its registers out by the declaration's implementation clause, koit's
 operands at their positions from their slots, the context from
 `r6`, constants and sizes as immediates, a `printk` format as `lea`
 of its frame object and its size, then calls and stores `r0`; a
-call of an inline row becomes the kernel's own sequence of `bir.md`
+call of an inline declaration becomes the kernel's own sequence of `bir.md`
 section 7 in place of the call; `lea` becomes `mov r1, r10; add r1,
 off`. Labels become instruction offsets. If the slots and objects
 exceed 512 bytes the program is rejected with its frame size.
@@ -424,8 +424,8 @@ theorem encode_decode (O) : decode (encode O) = O
 
 The diagram is a plus simulation, each BIR step matched by one or
 more bytecode steps and no stuttering, so no measure is needed. The
-expansion of an inline row is one case of it, under a lemma that
-the kernel's sequence computes the machine's function of the row;
+expansion of an inline declaration is one case of it, under a lemma that
+the kernel's sequence computes the machine's function of the declaration;
 `encode_decode` is stated on the object, since the words alone do
 not name the callee a helper number stands for (entry 38). The
 star-level statement of section 2.4 follows by induction on the
@@ -539,10 +539,10 @@ printer and not of any pass:
   and `BPF_F_CURRENT_NETNS`; in `tc` programs `pkt.adjust_tail` and
   `pkt.adjust_head` compute `bpf_skb_change_tail`'s new length and
   `bpf_skb_change_head`'s headroom from the delta, which the corpus
-  does not exercise. The inline rows print as C expressions,
+  does not exercise. The inline declarations print as C expressions,
   `pkt.len` as the subtraction of the context fields. The templates
-  state the same convention the call table's implementation column
-  holds since entry 38; reading the column instead of the templates
+  state the same convention the interface's calls's implementation clause
+  holds since entry 38; reading the clause instead of the templates
   is a cleanup owed, and the differential runs would catch a
   divergence in the meantime.
 - Arithmetic goes through the shim `tests/emit/koit.h`: every `+ -
@@ -572,8 +572,8 @@ printer and not of any pass:
 |---|---|---|
 | the machine's stuck-state list, `bir.md` 5.3 | that it is the verifier's list and the kernel's behavior | differential runs, instruction replay, and the verifier's verdicts (`bir.md` 9) |
 | the machine's builtins and the return convention | the kernel's map, ring, and lock semantics | the same |
-| the call table's effect, `own`, `T?`, region, and failure-signal columns | `KernelOk` and argument fitting | already trusted for the corollary of section 20.2 |
-| the context table and the call table's implementation column, helper numbers, kfunc names, and argument layouts | context access and the kernel's calling convention | generated from the kernel in session 8; until then transcribed from the uapi header |
+| the interface's calls's effect, `own`, `T?`, region, and failure-signal clauses | `KernelOk` and argument fitting | already trusted for the corollary of section 20.2 |
+| the kind's context declaration and the interface's calls's implementation clause, helper numbers, kfunc names, and argument layouts | context access and the kernel's calling convention | generated from the kernel in session 8; until then transcribed from the uapi header |
 | the encoder, the BTF encoder, the loaders | producing the object the kernel receives | `encode_decode`, and loading |
 | T1 and T2 | the source's safety and the existence of the run | stated; proofs in progress |
 | Lean and its kernel | everything | as for every mechanization |
@@ -646,7 +646,7 @@ host with the kernel, and never builds Lean there.
 2. Preservation is equality of the unique behavior per kernel, on the
    precondition that the checker accepted the unit.
 3. `Agree` is equality of the shared state, one structure with no
-   location of any level in it, the held stack as rows and objects
+   location of any level in it, the held stack as declarations and objects
    and traced memory arguments as bytes; per-pass relations add only
    locals, registers, and each level's private regions (entry 30).
 4. Pass B lowers impure expressions to administrative normal form in
@@ -664,9 +664,9 @@ host with the kernel, and never builds Lean there.
    (entry 29).
 7. Pass D is the naive allocation, proved as a plus simulation; a
    validated allocator later.
-7a. Pass D lays a kernel call's registers out by the call table's
-   implementation column and expands the inline rows into the
-   kernel's sequences under a lemma per row; the encoder produces
+7a. Pass D lays a kernel call's registers out by the interface's calls's
+   implementation clause and expands the inline declarations into the
+   kernel's sequences under a lemma per declaration; the encoder produces
    the object, words with relocations and notes, and `encode_decode`
    is stated on it (entry 38).
 7b. `printk` formats are frame objects the flattening fills at the

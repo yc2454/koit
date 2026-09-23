@@ -1,0 +1,15 @@
+// expect: the index demands `M < M`
+// selftest: progs/verifier_array_access.c an_array_with_a_constant_2 (T0886 T0887, rule 05.12, master fe2ec83)
+// A store one element past a map value's array, at a constant index:
+// the kernel's "invalid access to map value" at a constant offset.
+// The value is typed, so the only constant past its end is an array
+// index, and the demand `i < n` fails on the constant itself. T0887
+// puts the same constant in a register first; the facts make no
+// difference between the two. Socket kind, written as xdp.
+const M = 12
+map tab : array[1] of { v: u32[M] }
+
+program p : xdp {
+  tab[0].v[M] = 1
+  pass
+}

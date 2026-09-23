@@ -2,19 +2,19 @@ import Koit.Syntax.AST
 import Koit.Syntax.Print
 import Koit.Core.Syntax
 import Koit.Core.Print
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 
 /-!
 Desugaring, surface to Core: the syntactic rewrite of each surface
 construct into its Core form. It is a total
-function over the unit's declarations and the interface tables, and it
+function over the unit's declarations and the kernel interface, and it
 uses no types: what needs a type stays in Core (functions, constant
 conditionals, `for`, and a binding whose right side is a place).
 
 What it does: markers and `else` tails become `try` with an explicit
 `raise` of the operation's kind; `check P` is the
 coercion `P as {b: bool | b}`; `if let` is a `try` whose `else` need not
-exit; `hold` takes its resource from the resource table and its tail
+exit; `hold` takes its resource from the interface's resources and its tail
 becomes the `else` of the acquisition; `for x in it bounded N` is the
 `hold` plus `loop` plus `try next` of (ForIter); verdict statements
 are `return` of the kind's verdict constant; `fail` is `raise` with the
@@ -33,7 +33,7 @@ checker reports the error at the source line. Fresh names contain
 namespace Koit.Core
 
 open Koit (Span)
-open Koit.Interface (KindRow)
+open Koit.Interface (KindDecl)
 
 namespace Desugar
 
@@ -48,8 +48,8 @@ structure Info where
 /-- The syntactic context of a statement. -/
 structure Ctx where
   info : Info
-  /-- The program kind's row, inside a program body or handler. -/
-  kind : Option KindRow := none
+  /-- The program kind's declaration, inside a program body or handler. -/
+  kind : Option KindDecl := none
   /-- The kind of the enclosing `else` block, for `fail`. -/
   elseKind : Option Kind := none
   /-- Names bound by enclosing statements; a local shadows a map or a
@@ -70,16 +70,16 @@ def Ctx.nested (c : Ctx) : Ctx := { c with tailIsResult := false }
 
 def Ctx.isLocal (c : Ctx) (x : String) : Bool := c.locals.contains x
 
-/-- The enumeration a type name names, if it names one: a row of the
-interface's table, or `verdict`, which is the enclosing kind's. A
+/-- The enumeration a type name names, if it names one: one the
+interface declares, or `verdict`, which is the enclosing kind's. A
 coercion to one is fallible, since the value tested comes in as an
 integer. -/
 def Ctx.enumNamed? (c : Ctx) : Syntax.Ty → Option String
   | .named _ n =>
     if c.isLocal n then none
     else if n == "verdict" then
-      c.kind.bind fun row =>
-        match row.verdictTy with
+      c.kind.bind fun decl =>
+        match decl.verdictTy with
         | .named _ e => (c.info.interface.enum? e).map (·.name)
         | .enum _ e => some e
         | _ => none
@@ -151,12 +151,12 @@ def isValueField (c : Ctx) : Syntax.Expr → Bool
   | .field _ (.var _ t) "size" => c.isType t || (primTy? default t).isSome
   | _ => false
 
-/-- The failure kind of a fallible operation, from the resource table
+/-- The failure kind of a fallible operation, from the resource's declaration
 for an acquisition. -/
 def kindOf (c : Ctx) : Fallible → Kind
   | .acquire _ r .. =>
     match c.info.interface.resource? r with
-    | some row => row.fails.getD .failed_call
+    | some decl => decl.fails.getD .failed_call
     | none => .failed_call
   | f => f.kind?.getD .failed_call
 
@@ -212,10 +212,10 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
     match c.enumNamed? t with
     | none => return none
     | some n =>
-      -- `e as E?` is the coercion whose predicate the row states: one
+      -- `e as E?` is the coercion whose predicate the declaration states: one
       -- of its constants, and no other value.
-      let row := c.info.interface.enum? n
-      let atoms := (row.map (·.constants)).getD [] |>.map fun (k, _) =>
+      let decl := c.info.interface.enum? n
+      let atoms := (decl.map (·.constants)).getD [] |>.map fun (k, _) =>
         Expr.cmp s .eq (.var s "v") (.var s k)
       let pred := match atoms with
         | [] => Expr.invalid s s!"the enumeration `{n}` has no constants"
@@ -235,10 +235,10 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
     | some (.hash ..) => return some (.op (.lookup s m (← dPlace c k)))
     | _ => return none
   | .tcall s (.var _ m) "reserve" ty [] => do
-    -- the ring-buffer record's resource, from its row
+    -- the ring-buffer record's resource, from its declaration
     match c.map? m, c.info.interface.acquirer? "reserve" with
-    | some _, some row =>
-      return some (.op (.acquire s row.res "reserve" (some (← dTy c ty))
+    | some _, some decl =>
+      return some (.op (.acquire s decl.res "reserve" (some (← dTy c ty))
         [.map s m]))
     | _, _ => return none
   | .call s (.var _ f) args => do
@@ -247,14 +247,14 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
       | some (.ty (.opt ..)) =>
         return some (.op (.callopt s f (← args.mapM (dArg c))))
       | _ => return none
-    if let some row := c.info.interface.call? f then
-      if let some r := row.acquires then
+    if let some decl := c.info.interface.call? f then
+      if let some r := decl.acquires then
         return some (.op (.acquire s r f none (← args.mapM (dArg c))))
-      if row.fails.isSome then
+      if decl.fails.isSome then
         return some (.op (.call s f (← args.mapM (dArg c))))
       return none
-    if let some row := c.info.interface.acquirer? f then
-      return some (.op (.acquire s row.res f none (← args.mapM (dArg c))))
+    if let some decl := c.info.interface.acquirer? f then
+      return some (.op (.acquire s decl.res f none (← args.mapM (dArg c))))
     return none
   | .call s (.field _ (.var _ "pkt") n) args => do
     if n == "adjust_head" || n == "adjust_tail" then
@@ -271,7 +271,7 @@ partial def fallible? (c : Ctx) (marked : Bool) : Syntax.Expr → M (Option Op)
   | .var s f => do
     -- a scope-only resource, `hold rcu { }`
     match c.info.interface.acquirer? f with
-    | some row => return some (.op (.acquire s row.res f none []))
+    | some decl => return some (.op (.acquire s decl.res f none []))
     | none => return none
   | _ => return none
 
@@ -462,11 +462,11 @@ partial def dVerdict (c : Ctx) (span : Span) (v : Syntax.Verdict) : Stmt :=
   match c.kind with
   | none => .ret span (some (.invalid span s!"`{word}` is a verdict \
       statement, which belongs in a program body"))
-  | some row =>
-    match row.sugar.lookup word with
+  | some decl =>
+    match decl.sugar.lookup word with
     | some name => .ret span (some (.var span name))
     | none => .ret span (some (.invalid span s!"`{word}` is not a verdict \
-        statement of a `{row.name}` program"))
+        statement of a `{decl.name}` program"))
 
 /-- The acquisition of a `hold`, with its resource. -/
 partial def acquisition (c : Ctx) (acq : Syntax.Expr) :
@@ -557,13 +557,13 @@ partial def dStmts (c : Ctx) : List Syntax.Stmt → M (List Stmt)
         let msg := match pre.missing? head with
           | some why => s!"`{head}` is not on kernel {pre.kernel}: {why}"
           | none =>
-            let rows := pre.resources.flatMap fun r => r.acquirers.map fun a =>
+            let decls := pre.resources.flatMap fun r => r.acquirers.map fun a =>
               match r.arg with
               | .place _ => s!"`{a}(p)`"
               | .scope => s!"`{a}`"
               | .call => if a == "reserve" then "`rb.reserve<T>()`" else s!"`{a}(t)`"
             s!"`{acq.print}` is not a resource acquisition on kernel {pre.kernel}: \
-              the rows of the resource table are {", ".intercalate rows}"
+              the resources the interface declares are {", ".intercalate decls}"
         let s' : Stmt := .invalid acq.span msg
         return s' :: (← dStmts c rest)
     | .check span cond tail =>
@@ -705,7 +705,7 @@ def meetVerdicts : Option (List (Span × String)) →
 
 /-- A program's total handler table, and the problems
 found while building it, as `invalid` statements for the body. -/
-def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
+def dHandlers (c : Ctx) (p : Syntax.Program) (decl : KindDecl) :
     M (List Handler × List Stmt × List (Span × Kind)) := do
   let hc : Ctx := { c with locals := ["reason"], elseKind := none }
   let mut problems : List Stmt := []
@@ -733,7 +733,7 @@ def dHandlers (c : Ctx) (p : Syntax.Program) (row : KindRow) :
         pure (h.span, b)
       | none =>
           let s := p.span
-          let d : Expr := match row.defaultExit with
+          let d : Expr := match decl.defaultExit with
             | .verdict n => .var s n
             | .value v =>
               if v < 0 then .arith s .sub (lit0 s) (.lit s v.natAbs
@@ -759,7 +759,7 @@ def dProgram (info : Info) (p : Syntax.Program) : M Program := do
       pure (meetVerdicts verdicts kv, preserved ++ kp)
     | none => pure (verdicts, preserved)
   let (handlers, problems, named) ← match c.kind with
-    | some row => dHandlers c p row
+    | some decl => dHandlers c p decl
     | none =>
       -- an unknown kind: an empty table; the checker rejects the kind
       pure ([], [], [])

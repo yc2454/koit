@@ -18,7 +18,7 @@ handler of its kind; a map read by direct value access is looked up
 once at entry with a null test that returns the kind's failure
 verdict, since C has no direct value access for a declared map; a
 frame is an aligned object and a pointer to it; a kernel function is
-called by its row's correspondence, the layout of the kernel's
+called by its declaration's correspondence, the layout of the kernel's
 arguments in terms of koit's, and declared at its number with the C
 prototype the kernel side transcribed, as are the context structs,
 each field pinned to its transcribed offset by a static assertion,
@@ -28,7 +28,7 @@ so that the shim `koit.h` declares nothing the kernel states.
 namespace Koit.Compile
 
 open Koit.Core (Kind)
-open Koit.Interface (AbiArg CallRow)
+open Koit.Interface (AbiArg CallDecl)
 open Koit.Interface.Kernel (CtxStruct CtxField Helper Kfunc)
 
 namespace C
@@ -181,15 +181,15 @@ pointer is `void *`, since the emitted C never dereferences one. -/
 def kernelCTy (t : String) : String :=
   if (t.splitOn "*").length > 1 then "void *" else t
 
-/-- The C call of a kernel function row, from its correspondence in
+/-- The C call of a kernel function declaration, from its correspondence in
 the kind: the kernel's arguments laid out from koit's, the context,
 the constants the source does not name, and the size of a place
-argument as `sizeof` of its C type. An inline row prints its C form. -/
-def kernelCall (pre : Interface) (types : List Core.TypeDecl) (kind : String) (row : CallRow)
+argument as `sizeof` of its C type. An inline declaration prints its C form. -/
+def kernelCall (pre : Interface) (types : List Core.TypeDecl) (kind : String) (decl : CallDecl)
     (args : List String) : String :=
   let a (i : Nat) := (args[i]?).getD "0"
   let byLayout (name : String) (abi : List AbiArg) : String :=
-    let params := match row.sig with
+    let params := match decl.sig with
       | .fn ps _ => ps
       | .builtin => []
     let one : AbiArg → String
@@ -206,14 +206,14 @@ def kernelCall (pre : Interface) (types : List Core.TypeDecl) (kind : String) (r
           s!"sizeof({(cdecl types pointee "").trimAsciiEnd})"
         | none => "0"
     s!"{name}({", ".intercalate (abi.map one)})"
-  match row.implIn kind with
+  match decl.implIn kind with
   | .helper id abi =>
     match pre.side.helpers.find? (·.id == id) with
     | some h => byLayout s!"bpf_{h.name}" abi
     | none => s!"/* no helper {id} on {pre.kernel} */ 0"
   | .kfunc name abi => byLayout name abi
   | .inline =>
-    match row.name with
+    match decl.name with
     | "pkt.len" => "((u64)((long)ctx->data_end - (long)ctx->data))"
     | "csum_add" => s!"koit_csum_add({a 0}, {a 1})"
     | "csum_fold" => s!"koit_csum_fold({a 0})"
@@ -237,7 +237,7 @@ structure PCtx where
   types  : List Core.TypeDecl
   fns    : List LIR.Fn
   /-- The program's kind, or empty in a function, whose calls take
-  each row's default correspondence. -/
+  each declaration's default correspondence. -/
   kind   : String
   /-- Inside a function using the status protocol. -/
   status : Bool
@@ -402,13 +402,13 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
       if fetch then return res (.int s w) call
       else return (line s!"(void){call};", c)
   | .kernel _ x h args =>
-    let some row := c.pre.call? h
+    let some decl := c.pre.call? h
       | return (line s!"/* unknown kernel function {h} */", c)
-    let call := kernelCall c.pre c.types c.kind row (args.map (cexpr (!c.program)))
+    let call := kernelCall c.pre c.types c.kind decl (args.map (cexpr (!c.program)))
     match x with
     | some x =>
-      -- a row yielding a reference or an owned object yields a pointer
-      let t := match row.sig with
+      -- a declaration yielding a reference or an owned object yields a pointer
+      let t := match decl.sig with
         | .fn _ (some (.own ..)) | .fn _ (some (.ref ..)) | .fn _ (some (.view ..)) => LIR.Ty.ptr
         | _ => .i64
       if t == .ptr then return (line s!"void *{cname x} = {call};", bind x t)
@@ -485,15 +485,15 @@ def cfn (pre : Interface) (types : List Core.TypeDecl) (fns : List LIR.Fn) (boun
     "\n".intercalate body ++ "\n}\n"
 
 def cprogram (pre : Interface) (u : LIR.CompUnit) (p : LIR.Program) : PM String := do
-  let row := pre.kind? p.kind
-  let hasPkt := (row.map (·.hasPkt)).getD false
-  let vt := match row.map (·.verdictTy) with
+  let decl := pre.kind? p.kind
+  let hasPkt := (decl.map (·.hasPkt)).getD false
+  let vt := match decl.map (·.verdictTy) with
     | some (.int _ s w) => LIR.Ty.int s w
     | _ => .u32
-  let dflt : Nat := match row with
-    | some row =>
-      match row.defaultExit with
-      | .verdict name => (row.verdicts.lookup name).getD 0
+  let dflt : Nat := match decl with
+    | some decl =>
+      match decl.defaultExit with
+      | .verdict name => (decl.verdicts.lookup name).getD 0
       | .value v => Machine.toNatMod v (LIR.Ty.width vt)
     | none => 0
   let dv := clit (LIR.Ty.width vt) dflt
@@ -514,7 +514,7 @@ def cprogram (pre : Interface) (u : LIR.CompUnit) (p : LIR.Program) : PM String 
     (Kind.all.map fun k => s!"    case {kindIndex k}: goto handler_{k.spelling};") ++
     ["    }", s!"    return {dv};"]
   let _ := hasPkt
-  return s!"SEC(\"{(row.map (·.section_)).getD p.kind}\")\n" ++
+  return s!"SEC(\"{(decl.map (·.section_)).getD p.kind}\")\n" ++
     s!"int {cname p.name}({ctxTy} *ctx)\n\{\n" ++
     "    u32 reason = 0; int koit_kind = 0; u32 koit_zero = 0;\n" ++
     "    (void)reason; (void)koit_kind; (void)koit_zero;\n" ++

@@ -35,7 +35,7 @@ inductive Kind where
 namespace Kind
 
 /-- Each name is the failure, so that `on K` reads as "when K
-happens"; who is to blame is a column of the table, not part of a
+happens"; who is to blame is stated with the kind, not part of a
 name. `fail` is named after the statement that raises it, as
 `short_packet` is named after the condition that raises it. -/
 def spelling : Kind → String
@@ -54,10 +54,10 @@ instance : ToString Kind := ⟨spelling⟩
 
 end Kind
 
-/-- A resource a `hold` block can hold, named by its row of the
-interface's resource table; the core knows the row's columns and never
-the row's name. `iter`, the resource of the iterator loops `for x in it
-bounded N`, has no row until the extensions add one, so that desugaring
+/-- A resource a `hold` block can hold, named by its declaration of the
+interface's resources; the core knows the declaration's clauses and never
+the declaration's name. `iter`, the resource of the iterator loops `for x in it
+bounded N`, has no declaration until the extensions add one, so that desugaring
 stays total and the checker rejects the form. -/
 structure Resource where
   name : String
@@ -69,7 +69,7 @@ def spelling (r : Resource) : String := r.name
 
 instance : ToString Resource := ⟨spelling⟩
 
-/-- The iterator loops' resource, whose row the extensions add. -/
+/-- The iterator loops' resource, whose declaration the extensions add. -/
 def iter : Resource := ⟨"iter"⟩
 
 end Resource
@@ -128,15 +128,15 @@ inductive Ty where
   | int (span : Span) (signed : Bool) (width : Nat)
   | be (span : Span) (width : Nat)
   | bool (span : Span)
-  /-- A slot type, opaque, from the interface's slot table: a spin lock,
+  /-- A slot type, opaque, from the interface's slots: a spin lock,
   and in the extensions timers, graph roots and nodes, and kernel
   pointer fields. Only a interface type declaration has this body; the
   source names it like any type. -/
   | slot (span : Span) (name : String)
-  /-- An enumeration type, opaque, from the interface's enumeration
-  table: a kind's verdicts, and in the extensions the protocol and
+  /-- An enumeration type, opaque, from the interface's enumerations:
+  a kind's verdicts, and in the extensions the protocol and
   flag enumerations the calls take. A scalar whose values are the
-  row's named constants; unlike a slot it is data. Only an interface
+  declaration's named constants; unlike a slot it is data. Only an interface
   type declaration has this body; the source names it like any type. -/
   | enum (span : Span) (name : String)
   | named (span : Span) (name : String)
@@ -214,7 +214,7 @@ inductive Arg where
 a byte read `short_packet`, a hash lookup or a function returning
 `T?` `missing`, a marked load of a `where` field `invariant`, a
 coercion `bound`, a helper `helper`; `acquire` takes its kind from
-the resource table. -/
+the interface's resources. -/
 inductive Fallible where
   | view (span : Span) (off : Expr) (ty : Ty)
   | lookup (span : Span) (map : String) (key : Place)
@@ -268,7 +268,7 @@ def Fallible.span : Fallible → Span
   | .callopt s .. | .coerce s .. => s
 
 /-- The failure kind of a fallible operation other than `acquire`,
-whose kind is a column of the resource table. -/
+whose kind is a clause of the resource's declaration. -/
 def Fallible.kind? : Fallible → Option Kind
   | .view .. => some .short_packet
   | .lookup .. => some .not_found
@@ -424,7 +424,7 @@ structure Contract where
   preserved : List Region
   deriving Repr, Inhabited
 
-/-- One row of a program's handler table `H`. -/
+/-- One declaration of a program's handler table `H`. -/
 structure Handler where
   span : Span
   kind : Kind

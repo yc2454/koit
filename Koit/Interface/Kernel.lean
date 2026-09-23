@@ -8,7 +8,7 @@ its `bpf_func_proto`, the availability switches per program type as
 the source writes them, the kfunc sets and their flags, the program
 and map types, the context structs with their offsets, and the
 constants the corpus names. The koit side of the interface
-(`Rows.lean`, `KoitSide.lean`) is joined to this by `Join.lean`.
+(`Declarations.lean`, `KoitSide.lean`) is joined to this by `Join.lean`.
 -/
 
 namespace Koit.Interface.Kernel

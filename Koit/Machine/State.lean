@@ -1,5 +1,5 @@
 import Koit.Machine.Bytes
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 
 /-!
 The world every level of the semantics acts on: the part of a run's
@@ -23,7 +23,7 @@ argument is the bytes the kernel received.
 namespace Koit.Machine
 
 open Koit.Core (Ty MapDecl Resource)
-open Koit.Interface (ResourceRow)
+open Koit.Interface (ResourceDecl)
 
 /-! ### Regions and what the kernel sees -/
 
@@ -88,7 +88,7 @@ inductive HeldObj where
 
 /-- A held resource, innermost first in the state. -/
 structure HeldRes where
-  row  : ResourceRow
+  decl  : ResourceDecl
   /-- The ring a record belongs to, for its submission. -/
   ring : Option String := none
   obj  : Option HeldObj := none
@@ -96,7 +96,7 @@ structure HeldRes where
 
 /-- Two held entries are the same resource on the same object. -/
 def HeldRes.same (a b : HeldRes) : Bool :=
-  a.row.res == b.row.res && a.obj == b.obj
+  a.decl.res == b.decl.res && a.obj == b.obj
 
 /-- What the kernel answered a call with, as the trace records it. -/
 inductive CallOut where
@@ -104,11 +104,11 @@ inductive CallOut where
   | failed (errno : Int)
   deriving BEq, DecidableEq, Repr, Inhabited
 
-/-- One event of the trace: a kernel call with its row, its arguments,
+/-- One event of the trace: a kernel call with its declaration, its arguments,
 and its answer, or a `printk` with its format and arguments. What a
 run does outside the model is this list, in order. -/
 inductive Event where
-  | call (row : String) (args : List Val) (out : CallOut)
+  | call (decl : String) (args : List Val) (out : CallOut)
   | print (fmt : String) (args : List Val)
   deriving BEq, DecidableEq, Repr, Inhabited
 

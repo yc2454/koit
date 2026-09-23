@@ -1,0 +1,14 @@
+// selftest: progs/verifier_spin_lock.c bpf_loop_inside_locked_region (T2469, rule 08.22, master fe2ec83)
+// The accepted side: a loop in the region. The test's bpf_loop with a
+// static callback is a static call, which the kernel admits under a
+// lock; a `for` here is a counted loop with no call effect. tc kind,
+// written as xdp.
+map counters : array[1] of { lk: spinlock, n: u64 }
+
+program p : xdp {
+  let c = counters[0]
+  hold lock(c.lk) {
+    for i in 0..4 { c.n += 1 }
+  }
+  pass
+}

@@ -5,7 +5,7 @@
 // used; the verifier reports "R1 type=scalar expected=fp, pkt, ...".
 // Stage 1's interface has no store-bytes helper, so the port uses
 // adjust_tail as the packet-changing helper; what the rule turns on
-// is the resize effect of the row, not the helper's name.
+// is the resize effect of the declaration, not the helper's name.
 type EthHdr  = { dst: u8[6], src: u8[6], proto: be16 }
 type Ipv4Hdr = { vihl: u8, tos: u8, len: be16, id: be16, frag: be16,
                  ttl: u8, protocol: u8, csum: be16,

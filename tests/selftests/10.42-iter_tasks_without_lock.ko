@@ -1,0 +1,11 @@
+// pending: iterators
+// selftest: progs/iters_task_failure.c iter_tasks_without_lock (T0328 T0329 T0340 T0342, rule 10.42; T0023 use_css_iter_sleepable_missing_rcu_lock, rule 11.15; master fe2ec83)
+// A constructor that requires an RCU section, called outside one:
+// bpf_iter_task_new, bpf_iter_css_new, and two testmod kfuncs, all
+// flagged KF_RCU_PROTECTED, in a sleepable program with no
+// bpf_rcu_read_lock around them. The kernel: "kernel func
+// bpf_iter_task_new requires RCU critical section protection".
+// The iterator declarations do not exist yet; the unit is a placeholder for
+// the `requires` clause of entry 50. In C:
+//
+//   bpf_for_each(task, pos, NULL, BPF_TASK_ITER_ALL_PROCS) { }

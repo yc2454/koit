@@ -1,0 +1,14 @@
+// expect: the index demands `i < M`
+// selftest: progs/verifier_array_access.c with_a_invalid_max_check_1 (T0890, rule 05.12, master fe2ec83)
+// An index tested against the wrong bound: the test lets the index
+// be the length itself. The kernel finds the access one element past
+// the value; the checker finds the fact `i <= M` short of the demand
+// `i < M`. Socket kind, written as xdp.
+const M = 12
+map tab : array[1] of { i: u32, v: u32[M] }
+
+program p : xdp {
+  let i = tab[0].i
+  if i <= M { tab[0].v[i] = 1 }
+  pass
+}

@@ -20,7 +20,7 @@ namespace Koit.Core.Sem
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env)
-open Koit.Interface (KindRow CallRow ResourceRow AcqArg Sig)
+open Koit.Interface (KindDecl CallDecl ResourceDecl AcqArg Sig)
 open Koit.Machine (Kernel toNatMod wrap zeros arith compare bswap hexOf)
 
 mutual
@@ -108,7 +108,7 @@ partial def evalExpr (K : Kernel) : Expr → M Val
     match st.local? x with
     | some (.place l) =>
       -- the name is dead, so the scope releases nothing; the sink's
-      -- row pops the held entry when it runs
+      -- declaration pops the held entry when it runs
       set (st.rebind x .moved)
       return .loc l
     | _ => fail s!"`move {x}` of a name that is not owned"
@@ -219,12 +219,12 @@ partial def callAny (K : Kernel) (s : Span) (f : String) (args : List Arg) :
   if let some d := env.fn? f then
     return ← callFn K d args
   match env.interface.call? f with
-  | some row =>
-    match row.sig with
+  | some decl =>
+    match decl.sig with
     | .builtin => builtin K s f args
     | .fn params ret =>
       let vs ← evalArgs K args params
-      match ← kernelCall K row params ret vs with
+      match ← kernelCall K decl params ret vs with
       | some v => return v
       | none => fail s!"`{f}` failed with {(← get).errno} at a call the program did not mark"
   | none => fail s!"unknown function `{f}`"
@@ -359,8 +359,8 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
   | .call _ f args => do
     let env ← getEnv
     match env.interface.call? f with
-    | some row =>
-      match row.sig with
+    | some decl =>
+      match decl.sig with
       | .builtin =>
         try
           let v ← builtin K default f args
@@ -370,7 +370,7 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
           | e => throw e
       | .fn params ret =>
         let vs ← evalArgs K args params
-        match ← kernelCall K row params ret vs with
+        match ← kernelCall K decl params ret vs with
         | some v => return some (v.map bindingOf)
         | none => return none
     | none => fail s!"unknown function `{f}`"
@@ -392,8 +392,8 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
     | _ => fail "a coercion targets a refinement type"
   | .acquire s r f ty args => do
     let env ← getEnv
-    let some row := env.interface.resource? r | fail s!"no row for `{r}`"
-    match row.arg with
+    let some decl := env.interface.resource? r | fail s!"no declaration for `{r}`"
+    match decl.arg with
     | .place _ =>
       let l ← match args with
         | [.place p] =>
@@ -402,17 +402,17 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
           | _ => fail s!"`{f}` takes a place in a map value"
         | _ => fail s!"`{f}` takes one place"
       let some obj := l.heldObj | fail s!"`{f}` takes a place in a map value"
-      op (Machine.lock row obj)
+      op (Machine.lock decl obj)
       return some none
     | .scope =>
-      op (Machine.enter row)
+      op (Machine.enter decl)
       return some none
     | .call =>
       if f == "reserve" then
         match args, ty with
         | [.map _ m], some t =>
           let n ← sizeOf t
-          match ← op (Machine.reserve row m n) with
+          match ← op (Machine.reserve decl m n) with
           | some id => return some (some (.place { region := .kernel id, off := 0, ty := t }))
           | none =>
             -- the ring is full when its records fill its bytes
@@ -627,11 +627,11 @@ def initMaps (env : Env) (u : CompUnit) :
     ms := ms ++ [(d.name, m)]
   return ms
 
-/-- The name of a verdict value in the kind's table, or the number. -/
-def verdictName (row : KindRow) (v : Val) : String :=
+/-- The name of a verdict value in the kind's declaration, or the number. -/
+def verdictName (decl : KindDecl) (v : Val) : String :=
   match v with
   | .int _ _ x _ =>
-    match row.verdicts.find? fun (_, n) => (n : Int) == x with
+    match decl.verdicts.find? fun (_, n) => (n : Int) == x with
     | some (name, _) => name
     | none => toString x
   | v => v.print
@@ -736,11 +736,11 @@ def runUnit (pre : Interface) (u : CompUnit) (packet : ByteArray)
   let mut reports : List Report := []
   for p in u.programs do
     if only.isSome && only != some p.name then continue
-    let some row := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
-    let st := initState env row packet ctx maps fuel
+    let some decl := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
+    let st := initState env decl packet ctx maps fuel
     let h ← runProgram Machine.synthetic st p
     maps := h.state.maps
-    reports := reports ++ [{ program := p.name, verdict := verdictName row h.verdict,
+    reports := reports ++ [{ program := p.name, verdict := verdictName decl h.verdict,
                              log := h.state.log }]
   return (reports, printMaps env maps)
 

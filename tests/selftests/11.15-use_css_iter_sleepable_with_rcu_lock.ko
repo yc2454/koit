@@ -1,0 +1,12 @@
+// pending: iterators
+// selftest: progs/cgroup_read_xattr.c use_css_iter_sleepable_with_rcu_lock (T0024, rule 11.15; T0022 use_css_iter_non_sleepable; master fe2ec83)
+// The accepting side of the `requires` clause, in its two forms: the
+// same constructor inside bpf_rcu_read_lock in a sleepable program
+// (T0024), and with no RCU section at all in a non-sleepable program
+// (T0022), which the kernel counts as RCU-protected throughout, as it
+// does a held spin lock, preempt-off, or IRQ-off section. Placeholder
+// until the iterator declarations exist. In C:
+//
+//   bpf_rcu_read_lock();
+//   bpf_for_each(css, css, &cgrp->self, BPF_CGROUP_ITER_ANCESTORS_UP) ...
+//   bpf_rcu_read_unlock();

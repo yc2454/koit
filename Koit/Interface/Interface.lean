@@ -16,7 +16,7 @@ namespace Koit.Interface
 open Koit.BPF (Builtin)
 
 /-- The machine's own layouts by helper name, checked against every
-kind's availability and prototype like the rows' correspondences. -/
+kind's availability and prototype like the declarations' correspondences. -/
 def builtinLayouts : List (String × List AbiArg) := [
   ("map_lookup_elem", Builtin.lookup.abi),
   ("map_update_elem", Builtin.update.abi),

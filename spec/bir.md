@@ -28,7 +28,7 @@ The machine both run on is the point of this document. Its values are
 scalars or locations, never integers standing for addresses. A load
 or store outside its region, through a stale packet location, or
 from an uninitialized frame slot has no step. An unlock that does not
-match the innermost lock, a call a held row forbids, or an exit while
+match the innermost lock, a call a held declaration forbids, or an exit while
 anything is held has no step. These are the conditions the kernel
 verifier checks, made into the machine's own rules.
 
@@ -59,7 +59,7 @@ v ::= scalar n          a 64-bit pattern, n < 2^64
     | loc(r, off, tok)  a region, a signed offset, the token it was
                         made under
     | handle m          a map, made by `mapref` and accepted only as
-                        the map argument of a builtin or a row
+                        the map argument of a builtin or a call
 ```
 
 A register holds one value. Null is `scalar 0`. A handle is what the
@@ -78,15 +78,15 @@ regions: map slots, the packet, and kernel objects. Each level adds
 its own: Core its numbered struct literals, BIR and bytecode the
 frame and the context. A location over a shared region means the
 same bytes at every level; a location over a level's own region
-exists at that level only (`ISSUES.md`, entry 30). The rows:
+exists at that level only (`ISSUES.md`, entry 30). The declarations:
 
 | region | size | contents | made by |
 |---|---|---|---|
 | `map(m, i)` | the value size of `m` | bytes | `lookup`, `mapval` |
 | `pkt` | the packet's current length | bytes, guarded by the token | `data`, `data_end` |
-| `kernel(id)` | the object's size | bytes | acquiring rows |
+| `kernel(id)` | the object's size | bytes | acquiring declarations |
 | `frame` | 512 bytes as 64 slots of 8 | slots, below | `r10`, `lea` |
-| `ctx` | the kind's field table | abstract fields | `r1` at entry |
+| `ctx` | the kind's context declaration | abstract fields | `r1` at entry |
 
 Bytes are little-endian. A scalar load of `w` bits reads `w / 8`
 bytes and zero-extends; a store writes them.
@@ -106,16 +106,16 @@ each byte initialized or not. The rules are the verifier's:
   none to belong to a spilled slot;
 - the frame starts with every byte uninitialized.
 
-**The context** is a table of fields per kind, from the kernel
+**The context** is a set of fields per kind, declared by the kernel
 interface: for
 each field its name, its type, its offset in bytes, and whether it
-is writable; the width is the type's. Every row is readable, since a
-field the source may not read is not a row, and a load or store at
-an offset and size that is not a row is stuck, which is the
+is writable; the width is the type's. Every declaration is readable, since a
+field the source may not read is not a declaration, and a load or store at
+an offset and size that is not a declaration is stuck, which is the
 verifier's context-access check; the lowering never emits one,
-because context access goes through the kind row. The offset is the
+because context access goes through the kind declaration. The offset is the
 kernel's layout and reaches no developer-facing surface (entry 31).
-Two rows of a packet kind yield locations rather than scalars:
+Two declarations of a packet kind yield locations rather than scalars:
 `data` yields `loc(pkt, 0, tok)` and `data_end` yields
 `loc(pkt, len, tok)` with the current token, which is the kernel's
 conversion of those fields made primitive.
@@ -135,7 +135,7 @@ consult the kernel parameter:
 | `reserve n` | the ring's handle | a fresh kernel object of `n` bytes, held as a record, or null when the ring is full |
 | `submit`, `discard` | the record | pop it; `submit` appends it to the ring |
 | `lock`, `unlock` | the lock field's location in a map value | push, pop |
-| `enter R`, `leave R` | none | push, pop, for the scope rows |
+| `enter R`, `leave R` | none | push, pop, for the scope declarations |
 | `copy n`, `fill n` | locations, a byte | byte moves, expanded by the flattening |
 | `printk fmt n` | `n` scalars; the format is on the instruction, and in bytecode the location and size of a frame object holding its bytes, filled at the call site by the flattening (entry 37) | an event on the trace with the format and the scalars |
 | `atomic op(w)` | a location, one or two scalars | the read-modify-write of section 8.5, at 32 or 64 bits |
@@ -146,50 +146,50 @@ field of the value it lies in, which the map's declaration fixes.
 
 ### 2.4 The kernel parameter
 
-Every other row of the call table is a kernel function or an inline
-row. Its implementation column says which: a helper by its number
-in the uapi header, a kfunc by name, each with the layout of the
-kernel's arguments, or `inline`. A layout is the kernel's argument
-positions, each one of: koit's `i`-th argument, the context, a
-constant, the byte size of koit's `i`-th argument's place, or
-`printk`'s format; `bpf_sk_lookup_tcp`'s is `(ctx, arg 0, size 0,
--1, 0)`, the current netns and no flags. A row whose helper differs
-by kind, the resizes in `xdp` and `tc`, carries an override per
-kind. Stage 1 transcribes the column from the uapi header; session
-8's generator produces it (entry 38).
+Every other declaration of the interface's calls is a kernel function or
+an inline declaration. Its implementation clause says which: a helper by
+its number in the uapi header, a kfunc by name, each with the layout of
+the kernel's arguments, or `inline`. A layout is the kernel's argument
+positions, each one of: koit's `i`-th argument, the context, a constant,
+the byte size of koit's `i`-th argument's place, or `printk`'s format;
+`bpf_sk_lookup_tcp`'s is `(ctx, arg 0, size 0, -1, 0)`, the current
+netns and no flags. A declaration whose helper differs by kind, the
+resizes in `xdp` and `tc`, carries an override per kind. Stage 1
+transcribes the clause from the uapi header; session 8's generator
+produces it (entry 38).
 
 For a kernel function the machine consults the same `Kernel` as
-Core: `K.helper row args st` answers with a value and a state, or a
+Core: `K.helper declaration args st` answers with a value and a state, or a
 failure with its negative return, and `KernelOk` is the same
 contract. The arguments `args` are koit's: in BIR they are the
 call's operands; in bytecode the machine reads `r1` to `r5` by the
-row's layout, koit's arguments from their positions and the context
+declaration's layout, koit's arguments from their positions and the context
 where the layout says, and is stuck when the register at a context
 position is not the context or a constant position does not hold
 its constant. The trace therefore records koit's arguments at every
-level. The machine fits the arguments to the row's parameter kinds
+level. The machine fits the arguments to the declaration's parameter kinds
 before the call: a scalar parameter of width `w` takes a scalar
 reduced to `w`, a memory parameter takes a location whose region is
-one the row's region column admits, and anything else is stuck,
+one the declaration's region clause admits, and anything else is stuck,
 which is the verifier's argument-type check. Afterwards:
 
 | the kernel answers | `r0` |
 |---|---|
 | a value `v` | `v` |
 | no value | `scalar 0` |
-| failure `n`, a row whose result is a scalar | `n` as a 64-bit two's complement pattern |
-| failure, a row whose result is a location | `scalar 0` |
+| failure `n`, a declaration whose result is a scalar | `n` as a 64-bit two's complement pattern |
+| failure, a declaration whose result is a location | `scalar 0` |
 
-This convention is a rule, derived from the row's result type, not a
-column; a row that needs an exception gets a column then. A row that
-acquires pushes its result on the held stack; a row that releases
-pops the entry whose object is its argument and is stuck otherwise.
-A row with the `resize` effect may change the packet and its token,
-as `KernelOk` allows and nothing else may. A call while a held row
-forbids `call` is stuck, except the row's own release. Every call
-appends an event to the trace.
+This convention is a rule, derived from the declaration's result type,
+not a clause; a declaration that needs an exception gets a clause then.
+A declaration that acquires pushes its result on the held stack; a
+declaration that releases pops the entry whose object is its argument
+and is stuck otherwise. A declaration with the `resize` effect may
+change the packet and its token, as `KernelOk` allows and nothing else
+may. A call while a held declaration forbids `call` is stuck, except the
+declaration's own release. Every call appends an event to the trace.
 
-An inline row, `pkt.len`, `csum_add`, `csum_fold`, is what the
+An inline declaration, `pkt.len`, `csum_add`, `csum_fold`, is what the
 kernel computes without a call: the packet's length, the 32-bit add
 with end-around carry, the two folds and the complement. The machine
 computes it as one function of the arguments and the state at every
@@ -201,20 +201,20 @@ of pass D says the sequence computes the function (entry 38).
 
 ### 2.5 Protocol state and the trace
 
-The held stack is a list of entries `(row, object)`, innermost
-first, pushed and popped by the builtins and rows above. The object
+The held stack is a list of entries `(declaration, object)`, innermost
+first, pushed and popped by the builtins and declarations above. The object
 is described without a location of any level: a lock by its map slot
 and offset, a record or a socket by its kernel object. The packet
-token is a counter changed only by rows with `resize`. The trace is
+token is a counter changed only by declarations with `resize`. The trace is
 a list of events:
 
 ```
-ev ::= call row [a_i] (ok v? | failed n) | print fmt [v_i]
+ev ::= call decl [a_i] (ok v? | failed n) | print fmt [v_i]
 a   ::= a scalar | the bytes a memory argument pointed at
 ```
 
 A memory argument is recorded as the bytes the kernel received,
-sized by the row's parameter kind, never as a location, since the
+sized by the declaration's parameter kind, never as a location, since the
 kernel observes bytes and the levels name regions differently. Both
 the stack and the trace are part of the shared state, so Core's run
 and the machine's append the same events in the same order, and the
@@ -271,7 +271,7 @@ lea d obj                 BIR only: the frame object's location
 mapref d m                the map's handle, `handle m`
 mapval d m k              direct value access
 call h                    BIR: call h (s_1 .. s_5) -> d, koit's operands;
-                          bytecode: r1..r5 by the row's layout -> r0
+                          bytecode: r1..r5 by the declaration's layout -> r0
 atomic(op, cls, fetch) [d + off] s     op in {add and or xor xchg cmpxchg}
 exit
 ```
@@ -296,7 +296,7 @@ Meaning, by class of instruction:
   location compares with the immediate zero under `eq` and `ne`;
   anything else is stuck.
 - **`lddw`, `mapref`, `mapval`, `lea`.** Constants and handles.
-  `mapref` yields a value only a builtin or a row with a map
+  `mapref` yields a value only a builtin or a declaration with a map
   parameter accepts.
 - **`call h`.** The builtin or kernel function of section 2.3 or
   2.4, with arguments in `r1` to `r5` and the result in `r0`; `r1` to
@@ -308,12 +308,12 @@ Meaning, by class of instruction:
   kernel does.
 - **`exit`.** Halts as section 2.6 says, or is stuck.
 
-What `call h` encodes to is the row's implementation column of 2.4:
+What `call h` encodes to is the declaration's implementation clause of 2.4:
 a helper's number in the immediate; a kfunc's BTF id, which the
 encoder leaves as a relocation by name for the loader to resolve;
-and for an inline row no call at all but the expansion pass D makes.
-The scope rows' `enter` and `leave` are kfunc calls by the resource
-row's kernel names; no stage-1 program uses one.
+and for an inline declaration no call at all but the expansion pass D makes.
+The scope declarations' `enter` and `leave` are kfunc calls by the resource
+declaration's kernel names; no stage-1 program uses one.
 
 ## 4. Widths in registers
 
@@ -409,14 +409,14 @@ prints the cause (entry 33).
     (pc, R, st) -> (if cmp holds then L else pc + 1, R, st)
 
 (Call-kernel)
-    code[pc] = call h     h a kernel row
-    [v_i] = koit's arguments, read by the row's layout in bytecode
-    the arguments fit the row
-    no held row forbids call, or h releases that row
+    code[pc] = call h     h a kernel declaration
+    [v_i] = koit's arguments, read by the declaration's layout in bytecode
+    the arguments fit the declaration
+    no held resource forbids call, or h releases that resource
     K.helper h [v_i] st = ok v st'
     ---------------------------------------------------------------
     (pc, R, st) -> (pc + 1, R[r0 := r0(v), r1..r5 := uninit],
-                    st'[trace += ev, held pushed or popped per the row])
+                    st'[trace += ev, held pushed or popped per the declaration])
     and with failed n st', r0 := signal(h, n)
 
 (Call-builtin)
@@ -426,7 +426,7 @@ prints the cause (entry 33).
                     st[the builtin's effect])
 
 (Call-inline)
-    code[pc] = call h     h an inline row     inline(h, [v_i], st) = v
+    code[pc] = call h     h an inline declaration     inline(h, [v_i], st) = v
     ---------------------------------------------------------------
     (pc, R, st) -> (pc + 1, R[r0 := v, r1..r5 := uninit], st)
 
@@ -449,10 +449,10 @@ are exactly these, and each is a check the verifier makes:
 5. an ALU operation on a location other than the two of section 3;
 6. a comparison of a location with a scalar other than the immediate
    zero, or of locations of different regions;
-7. a context access that is not a row of the kind's table, or a
-   write to a read-only row;
+7. a context access that is not a field of the kind's context, or a
+   write to a read-only declaration;
 8. a call whose argument does not fit its parameter kind, a handle
-   used other than as a map argument, or a call while a held row
+   used other than as a map argument, or a call while a held declaration
    forbids it;
 9. a release whose argument is not the innermost held object, or a
    lock acquired while a lock is held;
@@ -518,10 +518,10 @@ from clang at low optimization, so it is accepted. A linear-scan
 allocation over `r6` to `r9` comes later as an untrusted pass with a
 verified checker, the way CompCert validates its own.
 
-**Kernel calls.** A call's registers are laid out as the row's
-implementation column says: koit's arguments at their positions,
+**Kernel calls.** A call's registers are laid out as the declaration's
+implementation clause says: koit's arguments at their positions,
 the context from `r6`, constants and sizes as immediates, `printk`'s
-format as the location and size of its frame object. An inline row
+format as the location and size of its frame object. An inline declaration
 becomes the kernel's own sequence: `data_end - data` for `pkt.len`,
 the add with a carry test and increment for `csum_add`, the two
 folds and the complement for `csum_fold` (entry 38).
@@ -563,7 +563,7 @@ available, when the tool is present (entries 29, 35, 38).
 **Loading.** Two loaders serve two purposes. The first is a few
 hundred lines over the `bpf` system call: create the maps, with BTF
 for a value that holds a spin lock, patch the map file descriptors
-into the relocations, load each program with the kind row's program
+into the relocations, load each program with the kind declaration's program
 type, and attach; it is the fast path to acceptance numbers and needs
 no ELF. The second writes the ELF object libbpf expects, with
 `.maps` and `.BTF`, so that a koit object loads through the stock
@@ -576,7 +576,7 @@ find the lock, and the encoder must produce integers, arrays, and
 structs, and the struct named `bpf_spin_lock`. Programs need BTF
 only for kfunc calls and for line information, both later.
 
-**Sections and types.** From the kind row: the section name for
+**Sections and types.** From the kind declaration: the section name for
 ELF, the program type and expected attach type for the system call,
 the license from the unit.
 
@@ -649,13 +649,13 @@ and is not needed for the paper.
 3. The verifier's safety conditions are the stuck states, listed in
    5.3, and the list is the model's trusted content; `Step` names the
    cause it refuses for, one constructor per item (entry 33).
-4. Context fields are abstract, a table of name, type, offset, and
+4. Context fields are abstract, declarations of name, type, offset, and
    writability per kind whose offsets no developer sees; `data` and
    `data_end` yield packet locations; division and shifts are total
    as the kernel patches them (entry 31).
 5. Map operations are builtins with Core's semantics; every other
-   row goes through the kernel parameter, with the return convention
-   of 2.4 derived from the row's result type.
+   declaration goes through the kernel parameter, with the return convention
+   of 2.4 derived from the declaration's result type.
 6. The frame is 64 slots with the verifier's spill rules, and starts
    uninitialized.
 7. The 32-bit normal form of section 4 and its cast table realize
@@ -680,10 +680,10 @@ and is not needed for the paper.
     the direct backend stores its bytes in a frame object at the
     call site until the ELF writer's read-only data exists (entry
     37).
-14. The call table's implementation column carries the kernel's
+14. A call declaration's implementation clause carries the kernel's
     calling convention, a helper number or kfunc name with the
     layout of its arguments relative to koit's; the bytecode
     instance reads koit's arguments back by it, so the trace is the
-    same at every level. The inline rows are one function of the
+    same at every level. The inline declarations are one function of the
     machine at every level, untraced, and pass D expands them; the
     object is words, relocations, and notes (entry 38).

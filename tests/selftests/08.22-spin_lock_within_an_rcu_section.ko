@@ -1,0 +1,14 @@
+// pending: kfunc calls in the emit path, owed since session 8 (the assembler round-trip cannot carry a pseudo kfunc call)
+// selftest: none; the accepting side of rule 08.22 and of the RCU declaration (master fe2ec83): bpf_spin_lock is a helper an RCU section admits
+// The other nesting: a spin lock taken inside an RCU section. The RCU
+// declaration forbids only sleeping, and bpf_spin_lock does not sleep, so the
+// kernel admits it and so does the checker. Written as xdp.
+map c : array[1] of { lk: spinlock, n: u64 }
+
+program p : xdp {
+  let c = c[0]
+  hold rcu {
+    hold lock(c.lk) { c.n += 1 }
+  }
+  pass
+}

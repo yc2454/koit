@@ -31,7 +31,7 @@ namespace Koit.Check
 
 open Koit (Span)
 open Koit.Core
-open Koit.Interface (KindRow CallRow AcqArg Home tU32 tU64)
+open Koit.Interface (KindDecl CallDecl AcqArg Home tU32 tU64)
 open Koit.Facts (Facts Caps Entails)
 open Koit.Effects (Effs)
 
@@ -123,11 +123,11 @@ inductive Synth : Env → Ctx → Expr → Ty → Prop
       (∀ s' t', t ≠ .opt s' t') →
       Synth env K (.call s f args) t
   /-- A interface call with a signature. -/
-  | callInterface {env K s f args row params t} :
-      env.fn? f = none → env.interface.call? f = some row →
-      row.acquires = none →
-      row.fails = none → row.sig = .fn params (some t) →
-      InterfaceOk env K s row → ArgsOk env K f params args →
+  | callInterface {env K s f args decl params t} :
+      env.fn? f = none → env.interface.call? f = some decl →
+      decl.acquires = none →
+      decl.fails = none → decl.sig = .fn params (some t) →
+      InterfaceOk env K s decl → ArgsOk env K f params args →
       Synth env K (.call s f args) t
   /-- `errno` in the `else` of a helper call. -/
   | errno {env K s} : K.errnoOk → Synth env K (.errno s) tU32
@@ -184,9 +184,9 @@ inductive PlaceOf : Env → Ctx → Place → PlaceInfo → Prop
   | ownVar {env K s x l s' t} :
       env.local? x = some l → l.ty = .own s' t →
       PlaceOf env K (.var s x) { ty := t, mutable := true, origin := .kernel }
-  /-- A context field, per the kind's table. -/
-  | ctx {env K s s' f row cf} :
-      env.kind = some row → row.ctx.find? (·.name == f) = some cf →
+  /-- A context field, per the kind's declaration. -/
+  | ctx {env K s s' f decl cf} :
+      env.kind = some decl → decl.ctx.find? (·.name == f) = some cf →
       PlaceOf env K (.field s (.var s' "ctx") f)
         { ty := cf.ty, mutable := cf.writable, origin := .ctx }
   /-- (PField). -/
@@ -274,12 +274,12 @@ inductive ArgsOk : Env → Ctx → String → List Param → List Arg → Prop
       ArgsOk env K f (p :: ps) (.val (.move s x) :: as)
 
 /-- A interface call's availability and license. -/
-inductive InterfaceOk : Env → Ctx → Span → CallRow → Prop
-  | mk {env K s row} :
-      (row.name.startsWith "pkt." → ∃ r, env.kind = some r ∧ r.hasPkt) →
-      (∀ k, env.kind = some k → row.kinds ≠ [] →
-        row.kinds.contains k.name) →
-      (row.gplOnly → env.gplCompatible) → InterfaceOk env K s row
+inductive InterfaceOk : Env → Ctx → Span → CallDecl → Prop
+  | mk {env K s decl} :
+      (decl.name.startsWith "pkt." → ∃ r, env.kind = some r ∧ r.hasPkt) →
+      (∀ k, env.kind = some k → decl.kinds ≠ [] →
+        decl.kinds.contains k.name) →
+      (decl.gplOnly → env.gplCompatible) → InterfaceOk env K s decl
 
 end
 
@@ -287,8 +287,8 @@ end
 inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
   /-- (View): the offset is a `u64`, the type packet-representable,
   and the window lies under the region's maximum offset. -/
-  | view {env K s off t row sz al} :
-      env.kind = some row → row.hasPkt → Check env K off tU64 →
+  | view {env K s off t decl sz al} :
+      env.kind = some decl → decl.hasPkt → Check env K off tU64 →
       env.notRepresentable t false = .ok none → env.layout t = .ok (sz, al) →
       (∀ P, viewOffsetBound env s off sz = some P →
         Entails (scope env K) K.facts P) →
@@ -308,11 +308,11 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
       FallibleOk env K (.loadw s (.field s' q f))
         { ty := some (.refined s f fd.ty pred), origin := .stack }
   /-- A fallible helper. -/
-  | call {env K s f args row params ret} :
-      env.fn? f = none → env.interface.call? f = some row →
-      row.acquires = none →
-      row.fails ≠ none → row.sig = .fn params ret →
-      InterfaceOk env K s row →
+  | call {env K s f args decl params ret} :
+      env.fn? f = none → env.interface.call? f = some decl →
+      decl.acquires = none →
+      decl.fails ≠ none → decl.sig = .fn params ret →
+      InterfaceOk env K s decl →
       ArgsOk env K f params args →
       FallibleOk env K (.call s f args) { ty := ret, origin := .stack }
   /-- A function returning `T?`. -/
@@ -330,40 +330,40 @@ inductive FallibleOk : Env → Ctx → Fallible → Bound → Prop
       FallibleOk env K (.coerce s e (.refined s' v base pred))
         { ty := some (.refined s' v base pred), origin := .stack }
   /-- (CoerceEnum): the value arrives as an unsigned integer of the
-  row's width and leaves as one of the row's constants, which is the
+  declaration's width and leaves as one of the declaration's constants, which is the
   one way an integer becomes a value of an enumeration. -/
-  | coerceEnum {env K s e s' v base pred bn n row} :
+  | coerceEnum {env K s e s' v base pred bn n decl} :
       env.norm base = .ok bn → bn.enumName? = some n →
-      env.interface.enum? n = some row →
-      Check env K e (.int s false row.width) →
+      env.interface.enum? n = some decl →
+      Check env K e (.int s false decl.width) →
       checkPred env
         [{ name := v, ty := base, mutable := false, origin := .stack }]
         pred = .ok () →
       FallibleOk env K (.coerce s e (.refined s' v base pred))
         { ty := some (.refined s' v base pred), origin := .stack }
-  /-- An acquisition whose row takes a place of a slot type, in one of
+  /-- An acquisition whose declaration takes a place of a slot type, in one of
   the slot's homes. -/
-  | acquireSlot {env K s r f t p info s' slot row srow m} :
-      env.interface.resource? r = some row → row.arg = .place slot →
+  | acquireSlot {env K s r f t p info s' slot decl srow m} :
+      env.interface.resource? r = some decl → decl.arg = .place slot →
       PlaceOf env K p info → env.norm info.ty = .ok (.slot s' slot) →
       env.interface.slot? slot = some srow → info.origin = .map m →
       srow.homes.contains .mapValue = true →
       FallibleOk env K (.acquire s r f t [.place p]) { ty := none }
   /-- A scope-only acquisition. -/
-  | acquireScope {env K s r f t row} :
-      env.interface.resource? r = some row → row.arg = .scope →
+  | acquireScope {env K s r f t decl} :
+      env.interface.resource? r = some decl → decl.arg = .scope →
       FallibleOk env K (.acquire s r f t []) { ty := none }
-  /-- An acquisition through a kernel function's row: the result is
+  /-- An acquisition through a kernel function's declaration: the result is
   `own T`, bound by `hold`. -/
-  | acquireCall {env K s r f args row crow params ret} :
-      env.interface.resource? r = some row → row.arg = .call →
+  | acquireCall {env K s r f args decl crow params ret} :
+      env.interface.resource? r = some decl → decl.arg = .call →
       env.interface.call? f = some crow → crow.sig = .fn params ret →
       InterfaceOk env K s crow → ArgsOk env K f params args →
       FallibleOk env K (.acquire s r f none args)
         { ty := ret, origin := .kernel }
   /-- A ring-buffer record, the one acquiring builtin. -/
-  | acquireReserve {env K s r s' m t d n sz row} :
-      env.interface.resource? r = some row → row.arg = .call →
+  | acquireReserve {env K s r s' m t d n sz decl} :
+      env.interface.resource? r = some decl → decl.arg = .call →
       env.map? m = some d → d.kind = .ringbuf n →
       env.notRepresentable t false = .ok none → env.layout t = .ok sz →
       FallibleOk env K (.acquire s r "reserve" (some t) [.map s' m])
@@ -527,27 +527,27 @@ inductive StmtOk :
       StmtOk env K (.«try» s "_" f thn els ex) env (meetK env K Ft Fe) []
         (E.union (Et.union Ee))
   /-- (Hold), scope-only: the body with the resource held, which its
-  row must allow to nest. -/
-  | holdScope {env K s r acq body row Fb E Eb} :
+  declaration must allow to nest. -/
+  | holdScope {env K s r acq body decl Fb E Eb} :
       FallibleOk env K acq { ty := none } →
-      env.interface.resource? r = some row →
-      row.fails = none →
-      checkNesting K s row = .ok () →
-      BlockOk env (holdCtx env K s row none acq) body Fb Eb →
+      env.interface.resource? r = some decl →
+      decl.fails = none →
+      checkNesting K s decl = .ok () →
+      BlockOk env (holdCtx env K s decl none acq) body Fb Eb →
       stmtEffects env K (.hold s r none acq body none) = .ok E →
       checkPreserved env K s E = .ok () →
       checkHeld env K s E = .ok () →
       StmtOk env K (.hold s r none acq body none) env Fb [] (E.union Eb)
   /-- (Hold), value-yielding, with the tail as `else`. -/
-  | holdValue {env K s r x acq body els row b t Fb Fe E Eb Ee} :
+  | holdValue {env K s r x acq body els decl b t Fb Fe E Eb Ee} :
       FallibleOk env K acq b → b.ty = some t →
-      env.interface.resource? r = some row → row.fails ≠ none →
-      checkNesting K s row = .ok () →
+      env.interface.resource? r = some decl → decl.fails ≠ none →
+      checkNesting K s decl = .ok () →
       BlockOk (env.bind { name := x, ty := t, mutable := false,
                           origin := .kernel })
-        (holdCtx env K s row (some x) acq) body Fb Eb →
-      BlockOk env { K with facts := holdEntry env K (row.arg == .call) acq,
-                           errnoOk := row.fails == some .failed_call } els Fe Ee →
+        (holdCtx env K s decl (some x) acq) body Fb Eb →
+      BlockOk env { K with facts := holdEntry env K (decl.arg == .call) acq,
+                           errnoOk := decl.fails == some .failed_call } els Fe Ee →
       exits els →
       joinMoved s (Fb.dropNames [x]) Fe = .ok () →
       stmtEffects env K (.hold s r (some x) acq body (some els)) = .ok E →
@@ -615,26 +615,26 @@ inductive FnOk : Env → Fn → Prop
       checkFn env f = .ok (caps, E) → FnOk env f
 
 /-- The environment of a program body: the kind in scope. -/
-def programEnv (env : Env) (row : KindRow) : Env :=
-  { env with kind := some row }
+def programEnv (env : Env) (decl : KindDecl) : Env :=
+  { env with kind := some decl }
 
 /-- The names of a program's verdict set, if it has one. -/
 def verdictNames (p : Program) : Option (List String) :=
   p.verdicts.map (·.map (·.2))
 
 /-- The environment of a handler: the kind, and `reason`. -/
-def handlerEnv (env : Env) (row : KindRow) : Env :=
-  (programEnv env row).bind
+def handlerEnv (env : Env) (decl : KindDecl) : Env :=
+  (programEnv env decl).bind
     { name := "reason", ty := tU32, mutable := false, origin := .stack }
 
-def handlerCtx (row : KindRow) (vs : Option (List String))
+def handlerCtx (decl : KindDecl) (vs : Option (List String))
     (W : List Region) : Ctx :=
-  { mayFail := false, ret := .handler row.verdictTy, inHandler := true,
+  { mayFail := false, ret := .handler decl.verdictTy, inHandler := true,
     verdictSet := vs, preserved := W }
 
-def programCtx (row : KindRow) (vs : Option (List String))
+def programCtx (decl : KindDecl) (vs : Option (List String))
     (W : List Region) : Ctx :=
-  { mayFail := true, ret := .program row.verdictTy, verdictSet := vs,
+  { mayFail := true, ret := .program decl.verdictTy, verdictSet := vs,
     preserved := W }
 
 /-- (Program) and (Handler): the body and every handler from no
@@ -642,16 +642,16 @@ facts, every `return` within the verdict set, and every statement's
 effects against the preserved regions `W`, which the statement rules
 check where the effects arise. -/
 inductive ProgramOk : Env → Program → Prop
-  | mk {env p row} :
-      env.interface.kind? p.kind = some row →
-      checkClauses env row p.verdicts p.preserved = .ok () →
+  | mk {env p decl} :
+      env.interface.kind? p.kind = some decl →
+      checkClauses env decl p.verdicts p.preserved = .ok () →
       (∀ h ∈ p.handlers, ∃ F E,
-        BlockOk (handlerEnv env row)
-          (handlerCtx row (verdictNames p) p.preserved) h.body F E ∧
+        BlockOk (handlerEnv env decl)
+          (handlerCtx decl (verdictNames p) p.preserved) h.body F E ∧
         exits h.body = true) →
-      (∃ F E, BlockOk (programEnv env row)
-        (programCtx row (verdictNames p) p.preserved) p.body F E) →
-      (row.hasPkt = true → exits p.body = true) →
+      (∃ F E, BlockOk (programEnv env decl)
+        (programCtx decl (verdictNames p) p.preserved) p.body F E) →
+      (decl.hasPkt = true → exits p.body = true) →
       ProgramOk env p
 
 /-- A well-typed unit: declarations well-formed, with every predicate

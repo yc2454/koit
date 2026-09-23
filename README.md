@@ -52,7 +52,7 @@ Core interpreter follows; the C backend and the kernel interface's
 transcriber are the phase after. `tests/run.sh` runs the corpus; `KOIT_STAGE=check`
 runs the checker over it. `tests/demo/` holds four short programs,
 one per mechanism, written to be read rather than to cover cases, and
-held to everything the corpus is held to at every stage. The kernel interface, the tables of section
+held to everything the corpus is held to at every stage. The kernel interface, the declarations of section
 13 for `xdp`, `tc`, and `syscall`, is `Koit/Interface/`: the koit side
 in `KoitSide.lean`, the kernel side per tag under `Kernel/`, written
 by `tools/transcribe/transcribe.py` from a Linux tree and never

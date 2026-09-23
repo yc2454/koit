@@ -24,6 +24,19 @@
 # tests/run/*.ko    a unit with a `// run: OPTIONS` line first, whose
 #                   `koitc run` output must be the rest of that comment
 #                   block, each expected line after `// `
+# tests/selftests/*.ko  the kernel's own selftests written in koit,
+#                   one unit per test, named `<rule>-<kernel test
+#                   name>`, with a `// selftest: ...` line naming the
+#                   test, its crawl id, and its rule. Line 1 picks the
+#                   shape: `// expect: TEXT` is held to what tests/err
+#                   is, `// run: OPTIONS` to what tests/run is, and any
+#                   other first line to what tests/ok is. Two more:
+#                   `// refused: REASON` is a legal program koit cannot
+#                   write; it must fail to check, is counted rather
+#                   than passed, and is reported if it ever checks, so
+#                   that the header is rewritten. `// pending: ENTRY`
+#                   is a unit written before its ISSUES entry landed;
+#                   it is skipped and counted until the line comes off.
 #
 # KOIT_STAGE=lex, parse (the default), check, run, lower, shape, or
 # emit selects how far the run goes; each stage includes the ones before
@@ -83,6 +96,24 @@ trap 'rm -rf "$TMP"' EXIT
 pass=0
 fail=0
 skipped=0
+pending=0
+refused=0
+
+# tests/selftests: line 1 sorts each unit into the shape it is held to
+SELF_OK=""
+SELF_ERR=""
+SELF_RUN=""
+SELF_REFUSED=""
+for f in tests/selftests/*.ko; do
+  [ -e "$f" ] || continue
+  case "$(sed -n 1p "$f")" in
+    "// pending:"*) pending=$((pending + 1)) ;;
+    "// expect:"*) SELF_ERR="$SELF_ERR $f" ;;
+    "// run:"*) SELF_RUN="$SELF_RUN $f" ;;
+    "// refused:"*) SELF_REFUSED="$SELF_REFUSED $f" ;;
+    *) SELF_OK="$SELF_OK $f" ;;
+  esac
+done
 
 failed() {
   echo "FAIL $1 $2"
@@ -98,7 +129,7 @@ later() {
 }
 
 for f in tests/ok/*.ko tests/demo/*.ko tests/err/*.ko tests/parse/*.ko \
-         tests/corpus/*.ko tests/run/*.ko; do
+         tests/corpus/*.ko tests/run/*.ko $SELF_OK $SELF_ERR $SELF_RUN; do
   [ -e "$f" ] || continue
   if ! "$KOITC" lex "$f" >/dev/null 2>"$TMP/out"; then
     failed lex "$f"
@@ -123,7 +154,7 @@ for f in tests/ok/*.ko tests/demo/*.ko tests/err/*.ko tests/parse/*.ko \
 done
 
 if at_least check; then
-  for f in tests/ok/*.ko tests/demo/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko $SELF_OK; do
     if ! "$KOITC" check "$f" >"$TMP/out" 2>&1; then
       failed check "$f"
     elif ! "$KOITC" check --json "$f" 2>/dev/null | grep -qF '"ok": true'; then
@@ -132,7 +163,7 @@ if at_least check; then
       pass=$((pass + 1))
     fi
   done
-  for f in tests/err/*.ko tests/corpus/*.ko; do
+  for f in tests/err/*.ko tests/corpus/*.ko $SELF_ERR; do
     [ -e "$f" ] || continue
     name=$(basename "$f" .ko)
     if later "$name"; then
@@ -152,17 +183,27 @@ if at_least check; then
       pass=$((pass + 1))
     fi
   done
+  # a refused unit is a legal program koit cannot write: it must not
+  # check, and it is counted rather than passed
+  for f in $SELF_REFUSED; do
+    if "$KOITC" check "$f" >"$TMP/out" 2>&1; then
+      echo "    the refusal is lifted; rewrite the header"
+      failed refusal-lifted "$f"
+    else
+      refused=$((refused + 1))
+    fi
+  done
 fi
 
 if at_least run; then
-  for f in tests/ok/*.ko tests/demo/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko $SELF_OK; do
     if "$KOITC" run "$f" >"$TMP/out" 2>&1; then
       pass=$((pass + 1))
     else
       failed run "$f"
     fi
   done
-  for f in tests/run/*.ko; do
+  for f in tests/run/*.ko $SELF_RUN; do
     [ -e "$f" ] || continue
     opts=$(sed -n '1s|^// run: ||p' "$f")
     sed -n '2,/^$/{s|^// ||p;}' "$f" >"$TMP/want"
@@ -181,7 +222,7 @@ fi
 # the lowering: `lower` and `lower --inline` succeed, and the LIR
 # runs print what the Core run prints
 if at_least lower; then
-  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko $SELF_OK $SELF_RUN; do
     [ -e "$f" ] || continue
     opts=$(sed -n '1s|^// run: ||p' "$f")
     if ! "$KOITC" lower "$f" >"$TMP/out" 2>&1; then
@@ -243,7 +284,7 @@ fi
 # the shape of the compiled code: the syntactic part of Lemma L on
 # every program
 if at_least shape; then
-  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko $SELF_OK $SELF_RUN; do
     [ -e "$f" ] || continue
     if "$KOITC" shape "$f" >"$TMP/out" 2>&1; then
       pass=$((pass + 1))
@@ -270,7 +311,7 @@ if at_least emit; then
   # one token per line, for comparing texts and byte streams
   norm() { sed 's/#.*$//; s/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | grep -v '^$'; }
   bytes() { grep -v '^#' | tr ', ' '\n\n' | grep -v '^$'; }
-  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko; do
+  for f in tests/ok/*.ko tests/demo/*.ko tests/run/*.ko $SELF_OK $SELF_RUN; do
     [ -e "$f" ] || continue
     if ! "$KOITC" emit "$f" >"$TMP/unit.c" 2>"$TMP/out"; then
       failed emit "$f"; continue
@@ -344,7 +385,7 @@ if at_least kernel; then
   else
     ssh "$HOST" "mkdir -p $RDIR/logs" && scp -q tools/koitobj.py tools/load.py "$HOST:$RDIR/" ||
       { echo "cannot reach $HOST"; fail=$((fail + 1)); }
-    for f in tests/run/*.ko; do
+    for f in tests/run/*.ko $SELF_RUN; do
       [ -e "$f" ] || continue
       opts=$(sed -n '1s|^// run: ||p' "$f")
       mark=$(sed -n 's|^// kernel: ||p' "$f" | head -1)
@@ -393,5 +434,5 @@ if at_least kernel; then
   fi
 fi
 
-echo "$pass passed, $fail failed, $skipped skipped"
+echo "$pass passed, $fail failed, $skipped skipped, $pending pending, $refused refused"
 [ "$fail" -eq 0 ]

@@ -22,7 +22,7 @@ a map lookup or a kernel call is one definition at every level.
 namespace Koit.BPF
 
 open Koit.Machine (toNatMod wrap leBytes ofLe bswap Kernel HeldObj)
-open Koit.Interface (CallRow ResourceRow KindRow)
+open Koit.Interface (CallDecl ResourceDecl KindDecl)
 
 variable {ρ τ : Type} [DecidableEq ρ]
 
@@ -130,8 +130,8 @@ def ctxWidth : Core.Ty → Nat
   | .int _ _ w => w
   | _ => 0
 
-/-- A load of `w` bits from the context at `eff`: a field's row
-yields its value, a packet-bound row yields the packet's location
+/-- A load of `w` bits from the context at `eff`: a field's declaration
+yields its value, a packet-bound declaration yields the packet's location
 with the current token; anything else is refused. -/
 def ctxLoad (X : Env ρ τ) (m : State ρ) (eff : Int) (w : Nat) : StepM Val := do
   if eff < 0 then throw (.ctxAccess eff (w / 8) false)
@@ -160,7 +160,7 @@ def loadAt (X : Env ρ τ) (m : State ρ) (base : Val) (off : Int) (w : Nat) : S
 
 /-- A store of `v` as `w` bits through `base + off`: a location or a
 handle only into an aligned frame slot, a scalar into any writable
-row or region. -/
+declaration or region. -/
 def storeAt (X : Env ρ τ) (m : State ρ) (base : Val) (off : Int) (w : Nat) (v : Val) :
     StepM (State ρ) := do
   let n := w / 8
@@ -276,10 +276,10 @@ def keySize (ms : Machine.MapState) : Nat :=
   | .hash .. => ms.keySize
   | _ => 4
 
-/-- Whether a row's result is a location, so that its failure signal
+/-- Whether a declaration's result is a location, so that its failure signal
 is null rather than a negative return. -/
-def yieldsLocation (row : CallRow) : Bool :=
-  match row.sig with
+def yieldsLocation (decl : CallDecl) : Bool :=
+  match decl.sig with
   | .fn _ (some (.own ..)) | .fn _ (some (.ref ..)) => true
   | _ => false
 
@@ -294,8 +294,8 @@ def scalarType : Core.Ty → Bool × Nat
 def innermost (m : State ρ) (res : Core.Resource) (obj : Option HeldObj) : StepM Unit := do
   match m.machine.held with
   | h :: _ =>
-    unless h.row.res == res && h.obj == obj do
-      throw (.badRelease s!"{h.row.describe} is the innermost held")
+    unless h.decl.res == res && h.obj == obj do
+      throw (.badRelease s!"{h.decl.describe} is the innermost held")
   | [] => throw (.badRelease "nothing is held")
 
 /-- A machine operation run on the shared state; its error is one the
@@ -305,21 +305,21 @@ def machineOp (st : Machine.State) (f : Machine.Op α) : StepM (α × Machine.St
   | .ok r => pure r
   | .error e => throw (.malformed e)
 
-def resourceRow (X : Env ρ τ) (r : Core.Resource) : StepM ResourceRow :=
+def resourceDecl (X : Env ρ τ) (r : Core.Resource) : StepM ResourceDecl :=
   match X.pre.resource? r with
-  | some row => pure row
-  | none => throw (.malformed s!"no row for `{r}`")
+  | some decl => pure decl
+  | none => throw (.malformed s!"no declaration for `{r}`")
 
 /-- A builtin: the map and ring operations with the kernel's answers,
 the protocol operations on the held stack, `printk` on the trace. A
-builtin that is a helper call is refused under a held row that
-forbids calls, unless it is that row's own release. -/
+builtin that is a helper call is refused under a held declaration that
+forbids calls, unless it is that declaration's own release. -/
 def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     StepM (Option Val × Machine.State) := do
   let st := m.machine
   let tok := st.layout
   let name := b.print
-  let releases : List ResourceRow := match b with
+  let releases : List ResourceDecl := match b with
     | .submit | .discard => X.pre.resources.filter (·.res == ⟨"ringbuf"⟩)
     | .unlock => X.pre.resources.filter (·.res == ⟨"spinlock"⟩)
     | .leave r => X.pre.resources.filter (·.res == r)
@@ -350,8 +350,8 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     let (rc, st') ← machineOp st (Machine.delete mn kb)
     return (some (.scalar (toNatMod rc 64)), st')
   | .reserve n, [.handle mn] =>
-    let row ← resourceRow X ⟨"ringbuf"⟩
-    let (r, st') ← machineOp st (Machine.reserve row mn n)
+    let decl ← resourceDecl X ⟨"ringbuf"⟩
+    let (r, st') ← machineOp st (Machine.reserve decl mn n)
     return (some (match r with
       | some id => .loc (.kernel id) 0 tok
       | none => .scalar 0), st')
@@ -367,9 +367,9 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     return (none, st')
   | .lock, [v] =>
     let obj ← objOf v
-    let row ← resourceRow X ⟨"spinlock"⟩
-    if st.held.any (·.row.res == row.res) then throw (.lockHeld row.describe)
-    let ((), st') ← machineOp st (Machine.lock row obj)
+    let decl ← resourceDecl X ⟨"spinlock"⟩
+    if st.held.any (·.decl.res == decl.res) then throw (.lockHeld decl.describe)
+    let ((), st') ← machineOp st (Machine.lock decl obj)
     return (none, st')
   | .unlock, [v] =>
     let obj ← objOf v
@@ -377,9 +377,9 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     let ((), st') ← machineOp st (Machine.unlock obj)
     return (none, st')
   | .enter r, [] =>
-    let row ← resourceRow X r
-    if row.nesting == .no && st.held.any (·.row.res == r) then throw (.lockHeld row.describe)
-    let ((), st') ← machineOp st (Machine.enter row)
+    let decl ← resourceDecl X r
+    if decl.nesting == .no && st.held.any (·.decl.res == r) then throw (.lockHeld decl.describe)
+    let ((), st') ← machineOp st (Machine.enter decl)
     return (none, st')
   | .leave r, [] =>
     innermost m r none
@@ -396,17 +396,17 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     return (none, st')
   | _, _ => throw (.badArgument name "the wrong operands")
 
-/-- A kernel function: the arguments fitted to the row's parameter
+/-- A kernel function: the arguments fitted to the declaration's parameter
 kinds, a scalar reduced to its width, a `ref` or `view` parameter's
 bytes read, an owned parameter's object; the call through the
 machine, which appends the trace event and pushes or pops the held
-stack per the row; and the answer as `r0`, a location for an object
+stack per the declaration; and the answer as `r0`, a location for an object
 handed out, the 64-bit pattern otherwise, the failure signal by the
-row's result type. -/
+declaration's result type. -/
 def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args : List Val) :
     StepM (Option Val × Machine.State) := do
-  let some row := X.pre.call? name | throw (.malformed s!"unknown kernel function `{name}`")
-  let .fn params ret := row.sig | throw (.malformed s!"`{name}` is a builtin")
+  let some decl := X.pre.call? name | throw (.malformed s!"unknown kernel function `{name}`")
+  let .fn params ret := decl.sig | throw (.malformed s!"`{name}` is a builtin")
   unless args.length == params.length do
     throw (.malformed s!"`{name}` takes {params.length} arguments")
   let st := m.machine
@@ -426,14 +426,14 @@ def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args
         let (s, w) := scalarType t
         vs := vs ++ [.scalar (wrap s w x)]
       | _ => throw (.badArgument name s!"`{p.name}` takes a scalar, not {v.print}")
-  let releases := Machine.releasesOf X.pre row
+  let releases := Machine.releasesOf X.pre decl
   if let some h := Machine.forbidsCall st releases then
     throw (.forbiddenCall name h.describe)
   if let some rrow := releases.head? then
     innermost m rrow.res (vs.findSome? fun
       | .object id => some (HeldObj.object id)
       | _ => none)
-  let (out, st') ← machineOp st (Machine.call X.pre K X.kind row vs)
+  let (out, st') ← machineOp st (Machine.call X.pre K X.kind decl vs)
   let _ := ret
   match out with
   | .ok v =>
@@ -444,7 +444,7 @@ def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args
       | some (.bytes _) => throw (.malformed s!"`{name}` answers with bytes")
     return (some r0, st')
   | .failed n =>
-    return (some (if yieldsLocation row then .scalar 0 else .scalar (toNatMod n 64)), st')
+    return (some (if yieldsLocation decl then .scalar 0 else .scalar (toNatMod n 64)), st')
 
 /-- How many operands a callee takes on the instruction, under the
 explicit convention. -/
@@ -456,14 +456,14 @@ def arity (X : Env ρ τ) : Callee → StepM Nat
     | _ => throw (.malformed s!"unknown kernel function `{name}`")
 
 /-- The kernel's argument layout of a callee, which the fixed
-convention reads: a builtin's own, a kernel row's in the kind, and
-for an inline row koit's arguments in order. -/
+convention reads: a builtin's own, a kernel declaration's in the kind, and
+for an inline declaration koit's arguments in order. -/
 def layout (X : Env ρ τ) : Callee → StepM (List Interface.AbiArg)
   | .builtin b => pure b.abi
   | .kernel name =>
     match X.pre.call? name with
-    | some row =>
-      match row.implIn X.kind.name, row.sig with
+    | some decl =>
+      match decl.implIn X.kind.name, decl.sig with
       | .inline, .fn params _ => pure ((List.range params.length).map .arg)
       | impl, _ => pure impl.abi
     | none => throw (.malformed s!"unknown kernel function `{name}`")
@@ -511,7 +511,7 @@ def call (X : Env ρ τ) (K : Kernel) (m : State ρ) (h : Callee) (args : List �
   match dstReg, res with
   | some d, some v => return m.set d v
   | some d, none =>
-    -- the kernel sets `r0` even for a row without a result
+    -- the kernel sets `r0` even for a declaration without a result
     if X.conv.fixedCall.isSome then return m.set d (.scalar 0)
     else throw (.malformed s!"`{h.print}` yields nothing to bind")
   | none, _ => return m
@@ -550,7 +550,7 @@ def atomic (X : Env ρ τ) (m : State ρ) (op : Core.AtomicOp) (cls : Cls) (fetc
 /-! ### Halting and the step -/
 
 /-- The width of the kind's verdict. -/
-def verdictWidth (kind : KindRow) : Nat :=
+def verdictWidth (kind : KindDecl) : Nat :=
   match kind.verdictTy with
   | .int _ _ w => w
   | _ => 32

@@ -1,5 +1,5 @@
 // expect: is not on kernel v6.8: v6.8 has no bpf_preempt_disable
-// A resource row the target kernel lacks: the diagnostic names the
+// A resource declaration the target kernel lacks: the diagnostic names the
 // kernel and the kernel function it is missing, from the join of
 // the koit side with the transcribed kernel side.
 program p : syscall {

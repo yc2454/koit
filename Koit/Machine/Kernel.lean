@@ -1,7 +1,7 @@
 import Koit.Machine.State
 
 /-!
-The kernel parameter: what each kernel function of the call table
+The kernel parameter: what each kernel function the interface declares
 does on its evaluated arguments, one of the relations the contracts
 allow. Every semantics is stated for every kernel within its
 contracts, `KernelOk`; the evaluators run the synthetic one below,
@@ -18,7 +18,7 @@ its own clock, and never a level's private state.
 namespace Koit.Machine
 
 open Koit.Core (Effect)
-open Koit.Interface (KindRow CallRow)
+open Koit.Interface (KindDecl CallDecl)
 
 /-- What a kernel function does when called. -/
 inductive HelperOut where
@@ -31,14 +31,14 @@ inductive HelperOut where
 the program kind that calls it, since a helper's answer can depend on
 the kind, as `redirect`'s verdict does. -/
 structure Kernel where
-  helper : KindRow → CallRow → List Val → State → HelperOut
+  helper : KindDecl → CallDecl → List Val → State → HelperOut
 
-/-- The rows the kernel computes inline, with no call: `pkt.len` is
+/-- The declarations the kernel computes inline, with no call: `pkt.len` is
 the packet's length, `csum_add` the 32-bit add with end-around
 carry, `csum_fold` the two folds and the complement, as
 include/net/checksum.h has them. They are one function at every
 level, with no trace event, since the kernel makes no call. -/
-def inlineRow (name : String) (args : List Val) (st : State) : Option Val :=
+def inlineDecl (name : String) (args : List Val) (st : State) : Option Val :=
   match name, args.map Val.toInt with
   | "pkt.len", _ => some (.scalar st.packet.size)
   | "csum_add", [c, a] =>
@@ -52,7 +52,7 @@ def inlineRow (name : String) (args : List Val) (st : State) : Option Val :=
     some (.scalar (65535 - (s % 65536)))
   | _, _ => none
 
-/-- Whether a row's effect list has the flag `f`; the write effects
+/-- Whether a declaration's effect list has the flag `f`; the write effects
 are not flags. -/
 def hasFlag (es : List Effect) (f : Effect) : Bool :=
   es.any fun e =>
@@ -61,29 +61,29 @@ def hasFlag (es : List Effect) (f : Effect) : Bool :=
     | _, _ => false
 
 /-- A kernel within its contracts: a helper never errs, changes the
-packet or its token only when its row has the `resize` effect,
+packet or its token only when its declaration has the `resize` effect,
 yields a value exactly when its signature has a result, and fails
-only when the row is fallible. -/
+only when the declaration is fallible. -/
 def KernelOk (K : Kernel) : Prop :=
-  ∀ kind row args st,
-    (∀ m, K.helper kind row args st ≠ .err m) ∧
-    (∀ v st', K.helper kind row args st = .ok v st' →
-      (v.isSome ↔ ∃ params ret, row.sig = .fn params (some ret)) ∧
-      (hasFlag row.effects .resize = false →
+  ∀ kind decl args st,
+    (∀ m, K.helper kind decl args st ≠ .err m) ∧
+    (∀ v st', K.helper kind decl args st = .ok v st' →
+      (v.isSome ↔ ∃ params ret, decl.sig = .fn params (some ret)) ∧
+      (hasFlag decl.effects .resize = false →
         st'.packet = st.packet ∧ st'.layout = st.layout)) ∧
-    (∀ errno st', K.helper kind row args st = .failed errno st' → row.fails.isSome)
+    (∀ errno st', K.helper kind decl args st = .failed errno st' → decl.fails.isSome)
 
 /-! ### The synthetic kernel -/
 
-/-- One behavior each helper of the stage-1 table may have: a redirect
+/-- One behavior each helper of the stage-1 interface may have: a redirect
 succeeds with the kind's `REDIRECT`; the resizes grow with zero bytes
 and fail past the packet's end; a socket lookup finds a socket; the
-clock advances a microsecond per call. The inline rows never reach a
+clock advances a microsecond per call. The inline declarations never reach a
 kernel. -/
 def synthetic : Kernel where
-  helper kind row args st :=
+  helper kind decl args st :=
     let ints := args.map Val.toInt
-    match row.name, ints with
+    match decl.name, ints with
     | "redirect", _ =>
       .ok (some (.scalar ((kind.verdicts.lookup "REDIRECT").getD 0))) st
     | "pkt.adjust_head", [delta] =>

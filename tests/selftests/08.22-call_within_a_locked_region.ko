@@ -1,0 +1,16 @@
+// expect: call effect is forbidden while a spin lock is held
+// selftest: progs/verifier_spin_lock.c call_within_a_locked_region (T2460, rule 08.22, master fe2ec83)
+// A helper called while a spin lock is held: bpf_get_prandom_u32 in
+// the test, `ktime` here, since there is no random declaration. The kernel
+// admits only lock-safe calls in the region; the lock declaration forbids
+// the call effect. cgroup_skb kind, written as xdp.
+map counters : array[1] of { lk: spinlock, n: u64 }
+
+program p : xdp {
+  let c = counters[0]
+  hold lock(c.lk) {
+    let t = ktime()
+    c.n = t
+  }
+  pass
+}

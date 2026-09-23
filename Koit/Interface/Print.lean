@@ -1,4 +1,4 @@
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 import Koit.Core.Print
 
 /-!
@@ -31,7 +31,7 @@ def Home.doc : Home → String
   | .mapValue => "map values" | .global => "global data" | .object => "allocated objects"
 
 /-- Phrases joined by a separator into lines of at most eighty
-columns, each indented by `n`. -/
+clauses, each indented by `n`. -/
 def wrap (n : Nat) (phrases : List String) (sep : String := ", ") : List String :=
   let pad := String.ofList (List.replicate n ' ')
   phrases.foldl (fun (ls : List String) t =>
@@ -41,7 +41,7 @@ def wrap (n : Nat) (phrases : List String) (sep : String := ", ") : List String 
     | none => [pad ++ t]) []
 
 /-- A head line and its clauses, on one line when they fit in eighty
-columns, else the clauses on a continuation line, and a trailing
+clauses, else the clauses on a continuation line, and a trailing
 note likewise. -/
 def withClauses (head : String) (clauses : List String) (note : String := "") : String :=
   let c := if clauses.isEmpty then "" else "  " ++ " ".intercalate clauses
@@ -52,7 +52,7 @@ def withClauses (head : String) (clauses : List String) (note : String := "") : 
     if last.length + note.length + 2 ≤ 80 then line ++ "  " ++ note
     else line ++ "\n    " ++ note
 
-def KindRow.doc (k : KindRow) : String :=
+def KindDecl.doc (k : KindDecl) : String :=
   let pkt := if !k.hasPkt then "none" else if k.pktWritable then "rw" else "ro"
   let verdicts := match k.verdicts with
     | [] => s!"result {k.verdictTy.print}"
@@ -72,7 +72,7 @@ def KindRow.doc (k : KindRow) : String :=
         (if f.writable then "  writable" else "")
   "\n".intercalate ([head] ++ wrap 4 tail ++ ctx)
 
-def CallRow.doc (c : CallRow) : String :=
+def CallDecl.doc (c : CallDecl) : String :=
   let head := match c.sig with
     | .fn params ret =>
       s!"fn {c.name}({", ".intercalate (params.map Param.print)})" ++
@@ -90,7 +90,7 @@ def CallRow.doc (c : CallRow) : String :=
     | _, _ => ""
   withClauses head clauses note
 
-def ResourceRow.doc (r : ResourceRow) : String :=
+def ResourceDecl.doc (r : ResourceDecl) : String :=
   let acq := match r.arg with
     | .place slot => s!"{", ".intercalate (r.acquirers.map (· ++ "(p)"))}, p a {slot}"
     | .scope => ", ".intercalate r.acquirers
@@ -105,7 +105,7 @@ def ResourceRow.doc (r : ResourceRow) : String :=
     [release, forbids, r.nesting.doc] ++ guards
   "\n".intercalate ([s!"resource {r.res.name} :"] ++ wrap 4 cols "; ")
 
-def RegionRow.doc (r : RegionRow) : String :=
+def RegionDecl.doc (r : RegionDecl) : String :=
   let cols := [if r.dynamic then "dynamic" else "static",
                if r.writable then "writable" else "read-only",
                if r.initialized then "initialized" else "uninitialized"] ++
@@ -115,12 +115,12 @@ def RegionRow.doc (r : RegionRow) : String :=
   let head := s!"region {r.name} : " ++ (lines.head?.getD "").trimAsciiStart
   withClauses ("\n".intercalate (head :: lines.drop 1)) [] (if r.note == "" then "" else s!"// {r.note}")
 
-def SlotRow.doc (s : SlotRow) : String :=
+def SlotDecl.doc (s : SlotDecl) : String :=
   "\n".intercalate ([s!"slot {s.name} :"] ++ wrap 4 ([s!"size {s.size}", s!"align {s.align}"] ++
     (if s.unique then ["one per value"] else []) ++
     [s!"in {", ".intercalate (s.homes.map Home.doc)}", s!"named by {s.namedBy}"]))
 
-def EnumRow.doc (e : EnumRow) : String :=
+def EnumDecl.doc (e : EnumDecl) : String :=
   "\n".intercalate ([s!"enum {e.name} : u{e.width}  // {e.kernel}"] ++
     wrap 4 (e.constants.map fun (n, v) => s!"{n} = {v}"))
 
@@ -138,15 +138,15 @@ def doc (i : Interface) (kind? : Option String := none) : String :=
   let calls := match kind? with
     | some k => i.calls.filter fun c => c.kinds.isEmpty || c.kinds.contains k
     | none => i.calls
-  -- a resource the kind can acquire: by a scope or place row, or by a
+  -- a resource the kind can acquire: by a scope or place declaration, or by a
   -- call it sees
   let resources := match kind? with
     | some _ => i.resources.filter fun r => match r.arg with
       | .call => r.acquirers.any fun a => calls.any (·.name == a)
       | _ => true
     | none => i.resources
-  let section_ (title : String) (rows : List String) : List String :=
-    if rows.isEmpty then [] else [s!"// {title}"] ++ rows ++ [""]
+  let section_ (title : String) (decls : List String) : List String :=
+    if decls.isEmpty then [] else [s!"// {title}"] ++ decls ++ [""]
   -- one line per reason: a dropped resource is recorded under its
   -- acquirers as well
   let missing := (i.missing.foldl (fun (acc : List (String × String)) (n, why) =>
@@ -154,13 +154,13 @@ def doc (i : Interface) (kind? : Option String := none) : String :=
     fun (n, why) => s!"// {n}: {why}"
   "\n".intercalate (
     [s!"kernel {i.kernel}", ""] ++
-    section_ "kinds" [("\n\n".intercalate ((sortByName (·.name) kinds).map KindRow.doc))] ++
-    section_ "calls" ((sortByName (·.name) calls).map CallRow.doc) ++
-    section_ "resources" [("\n\n".intercalate ((sortByName (·.res.name) resources).map ResourceRow.doc))] ++
-    section_ "regions" ((sortByName (·.name) i.regions).map RegionRow.doc) ++
-    section_ "slots" ((sortByName (·.name) i.slots).map SlotRow.doc) ++
+    section_ "kinds" [("\n\n".intercalate ((sortByName (·.name) kinds).map KindDecl.doc))] ++
+    section_ "calls" ((sortByName (·.name) calls).map CallDecl.doc) ++
+    section_ "resources" [("\n\n".intercalate ((sortByName (·.res.name) resources).map ResourceDecl.doc))] ++
+    section_ "regions" ((sortByName (·.name) i.regions).map RegionDecl.doc) ++
+    section_ "slots" ((sortByName (·.name) i.slots).map SlotDecl.doc) ++
     section_ "enumerations"
-      [("\n\n".intercalate ((sortByName (·.name) i.enums).map EnumRow.doc))] ++
+      [("\n\n".intercalate ((sortByName (·.name) i.enums).map EnumDecl.doc))] ++
     section_ "constants" ((sortByName (·.name) i.consts).map ConstDecl.doc) ++
     section_ "types" ((sortByName (·.name) i.types).map TypeDecl.print) ++
     section_ s!"absent on {i.kernel}" missing) ++ "\n"

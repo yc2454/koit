@@ -27,7 +27,7 @@ namespace Koit.Core.Sem
 open Koit (Span)
 open Koit.Core
 open Koit.Check (Env)
-open Koit.Interface (KindRow CallRow ResourceRow AcqArg Sig)
+open Koit.Interface (KindDecl CallDecl ResourceDecl AcqArg Sig)
 open Koit.Machine (toNatMod wrap leBytes ofLe slice blit zeros bswap Kernel HeldObj)
 
 /-! ### Locations and values -/
@@ -197,7 +197,7 @@ inductive Binding where
 
 structure State where
   env        : Env
-  kind       : KindRow
+  kind       : KindDecl
   /-- The shared state: what every level of the lowering acts on. -/
   machine    : Machine.State := {}
   ctx        : List (String × Val) := []
@@ -299,13 +299,13 @@ inductive FallOut where
 
 /-- The initial state of a program: the packet, the context fields at
 their given values or zero, and the maps as they are. -/
-def initState (env : Env) (row : KindRow) (packet : ByteArray)
+def initState (env : Env) (decl : KindDecl) (packet : ByteArray)
     (ctx : List (String × Nat)) (maps : List (String × Machine.MapState)) (fuel : Nat) :
     State :=
   -- the kind is on the environment too, so that `verdict` resolves
-  { env := { env with kind := some row }, kind := row, fuel,
+  { env := { env with kind := some decl }, kind := decl, fuel,
     machine := { maps, packet },
-    ctx := row.ctx.map fun f =>
+    ctx := decl.ctx.map fun f =>
       (f.name, Val.mkInt false 32 ((ctx.lookup f.name).getD 0)) }
 
 /-! ### The evaluation monad and its primitives -/
@@ -489,7 +489,7 @@ def kernelArg (p : Param) (v : Val) : M Machine.Val := do
     | .loc _ => fail s!"`{p.name}` takes a scalar"
     | v' => return v'.observe
 
-/-- The kernel's answer at the row's result type: an integer at the
+/-- The kernel's answer at the declaration's result type: an integer at the
 type, or the location of the object handed out. -/
 def kernelResult (ret : Option Ty) (v : Machine.Val) : M Val := do
   match ret, v with
@@ -511,13 +511,13 @@ def kernelResult (ret : Option Ty) (v : Machine.Val) : M Val := do
 
 /-- A kernel function through the shared machine: the arguments as
 the kernel sees them, the call with its trace event and its effect
-on the held stack, and the result at the row's type; `none` on a
+on the held stack, and the result at the declaration's type; `none` on a
 failure, with `errno` set to its negative return. -/
-def kernelCall (K : Kernel) (row : CallRow) (params : List Param) (ret : Option Ty)
+def kernelCall (K : Kernel) (decl : CallDecl) (params : List Param) (ret : Option Ty)
     (args : List Val) : M (Option (Option Val)) := do
   let st ← get
   let vs ← (params.zip args).mapM fun (p, v) => kernelArg p v
-  match ← op (Machine.call st.env.interface K st.kind row vs) with
+  match ← op (Machine.call st.env.interface K st.kind decl vs) with
   | .ok v =>
     match v with
     | some v => return some (some (← kernelResult ret v))
@@ -527,7 +527,7 @@ def kernelCall (K : Kernel) (row : CallRow) (params : List Param) (ret : Option 
     return none
 
 /-- The release at the exit of a `hold`, normally or abnormally, as
-the innermost entry's row says; nothing when `move` handed the
+the innermost entry's declaration says; nothing when `move` handed the
 resource away. -/
 def release (K : Kernel) (normal : Bool) (moved : Bool) : M Unit := do
   if moved then return

@@ -1,0 +1,15 @@
+// expect: a spin lock cannot be held inside another
+// selftest: progs/verifier_spin_lock.c spin_lock_test8_double_lock (T2463, rule 08.22, master fe2ec83)
+// The lock taken twice. The kernel rejects the second bpf_spin_lock
+// as a call inside the region; the checker rejects the nesting
+// itself, since a spin lock cannot be held inside another.
+// cgroup_skb kind, written as xdp.
+map counters : array[1] of { lk: spinlock, n: u64 }
+
+program p : xdp {
+  let c = counters[0]
+  hold lock(c.lk) {
+    hold lock(c.lk) { c.n += 1 }
+  }
+  pass
+}

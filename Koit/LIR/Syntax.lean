@@ -1,5 +1,5 @@
 import Koit.Core.Print
-import Koit.Interface.Rows
+import Koit.Interface.Decls
 
 /-!
 LIR, the explicit intermediate language: Core after the checker, with
@@ -96,7 +96,7 @@ structure Cond where
   deriving Repr, Inhabited
 
 /-- The builtins: the map operations, the protocol operations of the
-resource rows whose kernel function is fixed, byte moves, `printk`,
+resource declarations whose kernel function is fixed, byte moves, `printk`,
 and the atomic updates. -/
 inductive Builtin where
   | lookup (m : String)
@@ -138,7 +138,7 @@ inductive Stmt where
   | call (span : Span) (x : Option String) (f : String) (args : List Expr)
       (unwind : Option (List Stmt)) (absent : Option (List Stmt))
   | builtin (span : Span) (x : Option String) (b : Builtin) (args : List Expr)
-  /-- A kernel function, by the name of its row. -/
+  /-- A kernel function, by the name of its declaration. -/
   | kernel (span : Span) (x : Option String) (h : String) (args : List Expr)
   deriving Repr, Inhabited
 

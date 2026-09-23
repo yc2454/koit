@@ -34,7 +34,7 @@ stock toolchain (section 8). The flattening pass turns LIR into BIR,
 which is the way to bytecode and the path the theorems follow.
 
 LIR keeps structured control, local names, functions, maps, and the
-builtins and kernel functions of the call table. It drops refinement
+builtins and kernel functions of the interface's calls. It drops refinement
 types for widths, fallible operations for tests, `hold` for acquire
 and release statements, `move`, which emits nothing, `for` for a
 tested loop, and every constant of sections 8.4 and 15 for its value.
@@ -129,8 +129,8 @@ Reading notes.
 - `load(w) a` reads `w` bits at the address; `store(w) a e` writes
   them. There is no load or store of an aggregate; `copy n` and
   `fill n` move `n` bytes.
-- `ctx f` reads the context field `f` at the width of its row, and
-  `ctx f <- e` stores to a field the row marks writable, `mark` in a
+- `ctx f` reads the context field `f` at the width of its declaration, and
+  `ctx f <- e` stores to a field the declaration marks writable, `mark` in a
   `tc` program. `pkt_data` and `pkt_end` are the packet's bounds as
   locations, read from the context each time they are mentioned; they
   exist in packet kinds, and in a function only for the element test
@@ -154,14 +154,14 @@ Reading notes.
   continues outward; it holds the releases the call site owes.
   `absent s` runs when a `-> T ?` function returns without a value;
   its outcome is the call's.
-- A builtin or kernel function is called by the name of its row. A
-  fallible kernel function answers with the value the row's
+- A builtin or kernel function is called by the name of its declaration. A
+  fallible kernel function answers with the value the declaration's
   convention gives on failure, a negative number or the scalar zero
   (`bir.md`, section 2.5), and the lowering tests it. The result of a
-  kernel function is bound at `int(i,64)` when the row yields a
+  kernel function is bound at `int(i,64)` when the declaration yields a
   scalar or nothing, and at `ptr` when it yields a location; the
-  lowering casts a scalar result to the row's type after the test. A
-  row with no effects, `pkt.len`, is a kernel function all the same,
+  lowering casts a scalar result to the declaration's type after the test. A
+  declaration with no effects, `pkt.len`, is a kernel function all the same,
   so that the trace lists it at every level.
 - `atomic op(s,w)` carries the signedness of the place, which the
   previous value it yields has.
@@ -194,7 +194,7 @@ flattening assumes.
   never in a handler; `e : int(u,32)`.
 - A call matches the callee's signature; `unwind` is present exactly
   when the callee is `fails`; `absent` exactly when it is `-> T ?`.
-  An `unwind` body contains only release builtins and release rows.
+  An `unwind` body contains only release builtins and release declarations.
 - A function neither acquires nor releases across its boundary: the
   held stack at its return is the one at its entry, which the
   semantics checks.
@@ -311,9 +311,9 @@ outcome the theorems make unreachable, as in Core.
     o = br n           =>  err (excluded by well-formedness)
 
 (Kernel)
-    h is a row of the call table with a `.fn` signature
-    K |- <arg_i, st> => v_i, fitted to the row's parameter kinds
-    no held row forbids `call`, or h is that row's release
+    h is a call the interface declares with a `.fn` signature
+    K |- <arg_i, st> => v_i, fitted to the declaration's parameter kinds
+    no held resource forbids `call`, or h is that resource's release
     ------------------------------------------------------------
     K.helper h [v_i] st = ok v st'
         =>  K |- <x = h(...), st> => normal,
@@ -358,8 +358,8 @@ outcome the theorems make unreachable, as in Core.
 ```
 
 The held stack in LIR is protocol state, as in the target machine:
-`lock`, `enter`, `reserve`, and an acquiring row push; `unlock`,
-`leave`, `submit`, `discard`, and a releasing row pop and check. Core
+`lock`, `enter`, `reserve`, and an acquiring declaration push; `unlock`,
+`leave`, `submit`, `discard`, and a releasing declaration pop and check. Core
 tracks the same stack through its `hold` rule; LIR has no `hold`, so
 the stack is what makes a missing or misplaced release an error
 rather than a silent divergence from Core. The theorem of pass B,
@@ -368,15 +368,16 @@ also the statement that the lowering's releases are right.
 
 ### 5.3 What is shared with Core, and what is not
 
-Shared verbatim: the maps, the packet and its token, the kernel
-objects, the ring buffers, the trace, whose `printk` events carry
-their untyped arguments settled to `u64`, and the held stack's rows
-and objects, a spin lock's object being the lock's place. Related, not shared: Core's frame binds names to values or
-places with a token, LIR's binds names to values that may be
-locations with a token; the pass-B relation maps one to the other.
-Dropped: Core's `errno`, which LIR keeps in an ordinary local written
-at the failing call; the names Core attaches to held entries, which
-LIR does not need because releases are statements.
+Shared verbatim: the maps, the packet and its token, the kernel objects,
+the ring buffers, the trace, whose `printk` events carry their untyped
+arguments settled to `u64`, and the held stack's declarations and
+objects, a spin lock's object being the lock's place. Related, not
+shared: Core's frame binds names to values or places with a token, LIR's
+binds names to values that may be locations with a token; the pass-B
+relation maps one to the other. Dropped: Core's `errno`, which LIR keeps
+in an ordinary local written at the failing call; the names Core
+attaches to held entries, which LIR does not need because releases are
+statements.
 
 ## 6. What each Core construct becomes
 
@@ -430,7 +431,7 @@ Lemma L stated at the LIR level.
 |---|---|
 | `raise k e` | the releases owed at this point, innermost first, then `raise k e` |
 | `hold lock(p) then body` | `lock (a); block { body' }; unlock (a)`, with `unlock (a)` before every `br`, `return`, and `raise` that leaves the body, and in the `unwind` of every `fails` call in it |
-| `hold rcu then body`, and the other scope rows | `enter R; block { body' }; leave R`, releases placed as above |
+| `hold rcu then body`, and the other scope declarations | `enter R; block { body' }; leave R`, releases placed as above |
 | `hold x = reserve<T>() then body else els` | `x = reserve m size(T); if x == 0 { els' } else { block { body' }; submit x }`, with `discard x` before every abnormal exit |
 | `hold x = sk_lookup_tcp(t) then body else els` | `x = sk_lookup_tcp(t); if x == 0 { els' } else { block { body' }; sk_release x }`, likewise |
 | `move x` | nothing; the sink call is the release, and the scope emits none on that path |
@@ -456,15 +457,15 @@ r = lookup m (key); if r == 0 { return ABORTED_OF_KIND }; ...
 
 The dead branch returns the kind's own failure verdict, so that a
 violation of the model, should the kernel ever answer null, is
-observable through the kernel's exception tracepoint rather than
-silent; inside a function, which has no kind, it is an early return
-of zero, or a bare `return` for a function without a result or with
-`T ?`. Per-CPU arrays are reached this way whatever their capacity,
-since the kernel's direct value access exists for plain array maps
-only. The key of such a lookup is a 4-byte frame holding the index
-cast to `u32`, the width the kernel's array maps take. The pass-B theorem does not see this branch: the source's
-derivation takes the in-range path, the machine's `lookup` answers
-with a location, and the branch is not taken. Principle P2 is
+observable through the kernel's exception tracepoint rather than silent;
+inside a function, which has no kind, it is an early return of zero, or
+a bare `return` for a function without a result or with `T ?`. Per-CPU
+arrays are reached this way whatever their capacity, since the kernel's
+direct value access exists for plain array maps only. The key of such a
+lookup is a 4-byte frame holding the index cast to `u32`, the width the
+kernel's array maps take. The pass-B theorem does not see this branch:
+the source's derivation takes the in-range path, the machine's `lookup`
+answers with a location, and the branch is not taken. Principle P2 is
 amended to allow it (`ISSUES.md`, entry 22). Kernels that mark array
 lookups with a constant in-range key as non-null make the branch
 unnecessary for acceptance as well; the lowering may then omit it.
@@ -546,10 +547,10 @@ artifact a reader compares with the source.
 | `raise k e` | `reason = e; goto handler_k;` |
 | `call f` | a call of the `static __always_inline` function; `unwind` and `absent` as the error-code protocol of the portable failure lowering, tested after the call |
 | `lookup m`, `update m`, `delete m`, `reserve`, `submit`, `discard`, `lock`, `unlock` | the uapi helper names |
-| `h(...)` | the row's kernel name |
+| `h(...)` | the declaration's kernel name |
 | `printk "fmt"` | `bpf_printk` with `{}` rewritten to the format of each argument's width |
 | maps | BTF-defined maps in `SEC(".maps")`, with `struct bpf_spin_lock` for the slot field |
-| programs | `SEC("...")` from the kind row, the handlers as labeled tails ending in `return` |
+| programs | `SEC("...")` from the kind declaration, the handlers as labeled tails ending in `return` |
 
 The printer may add acceptance idioms the semantics does not know,
 such as `barrier_var` after a coercion's test, when measurement

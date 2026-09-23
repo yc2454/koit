@@ -1,6 +1,6 @@
-// expect: not in this draft's resource table
+// expect: not among this draft's resources
 // From spec/ISSUES.md 12: section 9 allows `for x in it bounded N`
-// over a map, but the resource table of 11.2 has no iterator row yet.
+// over a map, but the resources of 11.2 include no iterator yet.
 type Flow = { saddr: be32, daddr: be32 }
 map tab : hash[64] of Flow -> { v: u32 }
 

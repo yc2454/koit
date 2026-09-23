@@ -16,12 +16,12 @@ namespace Koit.LIR.Sem
 
 open Koit.Core.Sem (Val Loc Region Abort)
 open Koit.Check (Env)
-open Koit.Interface (KindRow)
+open Koit.Interface (KindDecl)
 open Koit.Machine (slice blit)
 
 structure State where
   env       : Env
-  kind      : KindRow
+  kind      : KindDecl
   /-- The shared state: what every level of the lowering acts on. -/
   machine   : Machine.State := {}
   ctx       : List (String × Val) := []
@@ -81,12 +81,12 @@ end State
 
 /-- The initial state of a program: the packet, the context fields at
 their given values or zero, and the maps as they are. -/
-def initState (env : Env) (row : KindRow) (packet : ByteArray)
+def initState (env : Env) (decl : KindDecl) (packet : ByteArray)
     (ctx : List (String × Nat)) (maps : List (String × Machine.MapState)) (fuel : Nat) :
     State :=
-  { env, kind := row, fuel,
+  { env, kind := decl, fuel,
     machine := { maps, packet },
-    ctx := row.ctx.map fun f =>
+    ctx := decl.ctx.map fun f =>
       (f.name, Val.mkInt false 32 ((ctx.lookup f.name).getD 0)) }
 
 /-- The LIR state a Core state lowers to: the same shared state,

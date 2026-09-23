@@ -15,9 +15,9 @@ lowering theorems are stated on. `Interp.lean` is the executable
 form of those relations, and the runner compares it with Core's.
 
 The held stack is protocol state: `lock`, `enter`, `reserve`, and an
-acquiring row push; `unlock`, `leave`, `submit`, `discard`, and a
-releasing row pop and check. A release that does not match the
-innermost entry, a call a held row forbids, and a program that ends
+acquiring declaration push; `unlock`, `leave`, `submit`, `discard`, and a
+releasing declaration pop and check. A release that does not match the
+innermost entry, a call a held declaration forbids, and a program that ends
 holding anything are errors, which is what makes a missing or
 misplaced release a divergence the pass-B theorem sees.
 -/
@@ -28,7 +28,7 @@ open Koit (Span)
 open Koit.Core (ArithOp CmpOp AtomicOp Kind Resource)
 open Koit.Core.Sem (Val Loc Region Abort)
 open Koit.Machine (Kernel toNatMod wrap zeros leBytes ofLe bswap HeldObj)
-open Koit.Interface (CallRow ResourceRow)
+open Koit.Interface (CallDecl ResourceDecl)
 
 /-- How a statement ends. -/
 inductive Outcome where
@@ -176,11 +176,11 @@ def sizeOf (t : Core.Ty) : M Nat := do
   | .ok (n, _) => pure n
   | .error d => fail s!"{d}"
 
-/-- The row of a resource, by its name. -/
-def resourceRow (r : Resource) : M ResourceRow := do
+/-- The declaration of a resource, by its name. -/
+def resourceDecl (r : Resource) : M ResourceDecl := do
   match (← get).env.interface.resource? r with
-  | some row => pure row
-  | none => fail s!"no row for `{r}`"
+  | some decl => pure decl
+  | none => fail s!"no declaration for `{r}`"
 
 /-- What a builtin does, through the machine: the map operations have
 the kernel's answers, the protocol operations push and pop the held
@@ -207,8 +207,8 @@ def execBuiltin (b : Builtin) (args : List Val) : M (Option Val) := do
     let kb ← argBytes (← locOf k "`delete`") ms.keySize
     return some (Val.mkInt true 64 (← op (Machine.delete m kb)))
   | .reserve m n, [] =>
-    let row ← resourceRow ⟨"ringbuf"⟩
-    match ← op (Machine.reserve row m n) with
+    let decl ← resourceDecl ⟨"ringbuf"⟩
+    match ← op (Machine.reserve decl m n) with
     | some id => return some (.loc { region := .kernel id, off := 0, ty := anyTy })
     | none => return some (Val.mkInt false 64 0)
   | .submit, [r] =>
@@ -218,14 +218,14 @@ def execBuiltin (b : Builtin) (args : List Val) : M (Option Val) := do
     op (Machine.discard (← heldObjOf (← locOf r "`discard`") "`discard`"))
     return none
   | .lock, [a] =>
-    let row ← resourceRow ⟨"spinlock"⟩
-    op (Machine.lock row (← heldObjOf (← locOf a "`lock`") "`lock`"))
+    let decl ← resourceDecl ⟨"spinlock"⟩
+    op (Machine.lock decl (← heldObjOf (← locOf a "`lock`") "`lock`"))
     return none
   | .unlock, [a] =>
     op (Machine.unlock (← heldObjOf (← locOf a "`unlock`") "`unlock`"))
     return none
   | .enter r, [] =>
-    op (Machine.enter (← resourceRow r))
+    op (Machine.enter (← resourceDecl r))
     return none
   | .leave r, [] =>
     op (Machine.leave r)
@@ -275,20 +275,20 @@ def fitArgs (params : List Core.Param) (args : List Val) : M (List Machine.Val) 
   return out
 
 /-- What a kernel function does: the arguments fitted, the call
-through the machine, which consults the held rows, appends the trace
-event, and pushes or pops the held stack per the row, and the answer
-as `r0` by the row's convention: a location for an owned or
+through the machine, which consults the held declarations, appends the trace
+event, and pushes or pops the held stack per the declaration, and the answer
+as `r0` by the declaration's convention: a location for an owned or
 referenced result, the 64-bit signed return otherwise, which carries
-the failure signal of a scalar-result row. -/
+the failure signal of a scalar-result declaration. -/
 def execKernel (K : Kernel) (h : String) (args : List Val) : M Val := do
   let st ← get
-  let some row := st.env.interface.call? h | fail s!"unknown kernel function `{h}`"
-  let params ← match row.sig with
+  let some decl := st.env.interface.call? h | fail s!"unknown kernel function `{h}`"
+  let params ← match decl.sig with
     | .fn params _ => pure params
     | .builtin => fail s!"`{h}` is a builtin"
   unless args.length == params.length do fail s!"`{h}` takes {params.length} arguments"
   let vs ← fitArgs params args
-  match ← op (Machine.call st.env.interface K st.kind row vs) with
+  match ← op (Machine.call st.env.interface K st.kind decl vs) with
   | .ok v =>
     match v with
     | some (.scalar x) => return Val.mkInt true 64 x
@@ -296,7 +296,7 @@ def execKernel (K : Kernel) (h : String) (args : List Val) : M Val := do
     | some (.bytes _) => fail s!"`{h}` answers with bytes"
     | none => return Val.mkInt true 64 0
   | .failed n =>
-    return match rowResult row with
+    return match rowResult decl with
       | .ptr => Val.mkInt false 64 0
       | _ => Val.mkInt true 64 n
 
@@ -484,7 +484,7 @@ inductive ExecStmt (K : Kernel) (fns : Fns) : State → Stmt → Outcome → Sta
   | builtinErr {st sp x b args vs m} :
       EvalArgs st args (.ok vs) → prim (execBuiltin b vs) st = .error (.err m) →
       ExecStmt K fns st (.builtin sp x b args) (.err m) st
-  /-- (Kernel): the row's kernel function through `K`. -/
+  /-- (Kernel): the declaration's kernel function through `K`. -/
   | kernel {st sp x h args vs v st'} :
       EvalArgs st args (.ok vs) → prim (execKernel K h vs) st = .ok (v, st') →
       ExecStmt K fns st (.kernel sp x h args) .normal

@@ -38,7 +38,7 @@ namespace Koit.Compile
 
 open Koit.Core (CmpOp)
 open Koit.BPF (Instr Src Cls AluOp Cmp VReg Label RegClass Cpu BIR Bytecode)
-open Koit.Interface (KindRow)
+open Koit.Interface (KindDecl)
 
 /-! ### L1, the tests -/
 
@@ -354,7 +354,7 @@ def LState.resized (st : LState) : LState :=
 /-- The analysis of one program. -/
 structure L3 where
   pre  : Interface
-  kind : KindRow
+  kind : KindDecl
   B    : BIR
 
 /-- One instruction's effect: the successors with their states, the
@@ -370,13 +370,13 @@ structure Step where
 def freshSc (i : Nat) (bounded : Bool := false) : Val := .sc bounded (some i)
 
 /-- What a call leaves in its result register: a location for the
-builtins and rows that yield one, else a scalar of unknown bound. -/
+builtins and declarations that yield one, else a scalar of unknown bound. -/
 def L3.result (X : L3) (h : BPF.Callee) (i : Nat) : Val :=
   match h with
   | .builtin .lookup | .builtin (.reserve _) => .other
   | .builtin _ => freshSc i
-  | .kernel row =>
-    match X.pre.call? row with
+  | .kernel decl =>
+    match X.pre.call? decl with
     | some r => if LIR.rowResult r == .ptr then .other else freshSc i
     | none => .lost
 
@@ -537,8 +537,8 @@ def L3.step (X : L3) (i : Nat) (st : LState) : Step :=
     | .lea d _ | .mapref d _ | .mapval d _ _ => next (st.set d .other)
     | .call h _ dst =>
       let resize := match h with
-        | .kernel row =>
-          match X.pre.call? row with
+        | .kernel decl =>
+          match X.pre.call? decl with
           | some r => Machine.hasFlag r.effects .resize
           | none => false
         | .builtin _ => false

@@ -1,5 +1,5 @@
 // expect: is not writable
-// From spec/language.md 13: the context table says which fields are
+// From spec/language.md 13: the kind's context declaration says which fields are
 // writable; for `xdp`, none.
 program p : xdp {
   ctx.ingress_ifindex = 1
