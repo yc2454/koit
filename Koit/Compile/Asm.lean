@@ -90,7 +90,7 @@ def asmInstr (pre : Interface) (kind : String) (ins : Instr Reg Int) : Except St
   | .call h _ _ =>
     match ← calleeTarget pre kind h with
     | .inl id => return s!"call {id}"
-    | .inr _ => return "call 0"
+    | .inr name => return s!"call {name}"
   | .atomic op cls fetch d off s =>
     let bits := cls.bits
     let name : String := match op with

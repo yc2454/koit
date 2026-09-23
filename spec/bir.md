@@ -310,7 +310,9 @@ Meaning, by class of instruction:
 
 What `call h` encodes to is the declaration's implementation clause of 2.4:
 a helper's number in the immediate; a kfunc's BTF id, which the
-encoder leaves as a relocation by name for the loader to resolve;
+encoder leaves as a relocation by name in the form clang leaves in an
+object, a pseudo call with an immediate of -1, for the loader to
+resolve as libbpf does;
 and for an inline declaration no call at all but the expansion pass D makes.
 The scope declarations' `enter` and `leave` are kfunc calls by the resource
 declaration's kernel names; no stage-1 program uses one.

@@ -117,12 +117,19 @@ def mapJson (pre : Interface) (env : Check.Env) (direct : List String) (d : MapD
       | some o => toJson o
       | none => Json.null)]
 
-def relocJson (r : Reloc) : Json :=
+/-- A relocation; a kfunc's carries the prototype the kernel side
+transcribed, so that the ELF writer can declare the extern in BTF. -/
+def relocJson (pre : Interface) (r : Reloc) : Json :=
   match r.kind with
   | .mapFd m => Json.mkObj [("index", toJson r.index), ("kind", "map_fd"), ("map", m)]
   | .mapValue m off =>
     Json.mkObj [("index", toJson r.index), ("kind", "map_value"), ("map", m), ("offset", toJson off)]
-  | .kfunc n => Json.mkObj [("index", toJson r.index), ("kind", "kfunc"), ("name", n)]
+  | .kfunc n =>
+    let proto := match pre.side.kfunc? n with
+      | some kf => [("ret", Json.str kf.ret),
+                    ("args", Json.arr (kf.args.map fun (t, a) => Json.arr #[Json.str t, Json.str a]).toArray)]
+      | none => []
+    Json.mkObj ([("index", toJson r.index), ("kind", "kfunc"), ("name", n)] ++ proto)
 
 def objectJson (pre : Interface) (o : Object) : Except String Json := do
   let some decl := pre.kind? o.kind | throw s!"unknown kind `{o.kind}`"
@@ -136,7 +143,7 @@ def objectJson (pre : Interface) (o : Object) : Except String Json := do
     ("section", o.section_), ("result", result),
     ("verdicts", Json.mkObj (decl.verdicts.map fun (n, v) => (n, toJson v))),
     ("words", Json.arr (o.words.map fun w => Json.str (hex16 w))),
-    ("relocs", Json.arr (o.relocs.map relocJson).toArray),
+    ("relocs", Json.arr (o.relocs.map (relocJson pre)).toArray),
     ("notes", Json.arr (o.notes.map fun n =>
       Json.mkObj [("index", toJson n.index), ("callee", n.callee.print)]).toArray)]
 

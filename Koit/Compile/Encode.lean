@@ -6,7 +6,10 @@ per instruction, `opcode:8 dst:4 src:4 off:16 imm:32`, two for
 `lddw`, with the opcode tables of the kernel's instruction-set
 document; a map reference is `lddw` with the pseudo source register
 the loader recognizes and a relocation naming the map; a call is the
-helper's number, or a kfunc by name through a relocation. The object
+helper's number, or a kfunc by name through a relocation, in the form
+clang leaves in an object, a pseudo call with an immediate of -1,
+which the loader rewrites to the kernel's kfunc call with the BTF id
+as libbpf does. The object
 also carries a note per call naming the callee the model sees, since
 the words alone do not say which builtin a helper number stands for
 once its size and flags are in registers; the notes are not loaded.
@@ -173,7 +176,7 @@ def encodeInstr (pre : Interface) (kind : String) (cpu : Cpu) (i : Nat) (ins : I
     match ← calleeTarget pre kind h with
     | .inl id => return ([← word 0x85 0 0 0 id], [], [{ index := i, callee := h }])
     | .inr name =>
-      return ([← word 0x85 0 2 0 0], [{ index := i, kind := .kfunc name }], [{ index := i, callee := h }])
+      return ([← word 0x85 0 1 0 (-1)], [{ index := i, kind := .kfunc name }], [{ index := i, callee := h }])
   | .atomic op cls fetch d off s =>
     let size := match cls with
       | .w64 => 0x18

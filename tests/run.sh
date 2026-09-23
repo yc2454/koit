@@ -81,6 +81,7 @@ STAGE=${KOIT_STAGE:-parse}
 CLANG=${KOIT_CLANG:-/opt/homebrew/opt/llvm/bin/clang}
 LLVM_MC=${KOIT_LLVM_MC:-/opt/homebrew/opt/llvm/bin/llvm-mc}
 LLVM_READELF=${KOIT_LLVM_READELF:-/opt/homebrew/opt/llvm/bin/llvm-readelf}
+LLVM_OBJCOPY=${KOIT_LLVM_OBJCOPY:-/opt/homebrew/opt/llvm/bin/llvm-objcopy}
 # the stages in order, so that a stage includes the ones before it
 rank() {
   case "$1" in
@@ -325,9 +326,7 @@ if at_least emit; then
     if command -v python3 >/dev/null 2>&1; then
       # the object file libbpf loads, from the document; readelf,
       # when present, must read it back
-      if grep -q '"kind": "kfunc"' "$TMP/unit.json"; then
-        :
-      elif ! python3 tools/elf.py "$TMP/unit.json" -o "$TMP/unit.elf" >"$TMP/out" 2>&1; then
+      if ! python3 tools/elf.py "$TMP/unit.json" -o "$TMP/unit.elf" >"$TMP/out" 2>&1; then
         failed elf "$f"; continue
       elif [ -x "$LLVM_READELF" ] && ! "$LLVM_READELF" -S -s -r "$TMP/unit.elf" >"$TMP/out" 2>&1; then
         failed readelf "$f"; continue
@@ -346,15 +345,21 @@ if at_least emit; then
           ok=""; break
         fi
         "$KOITC" emit --asm --cpu $cpu "$f" >"$TMP/asm" 2>"$TMP/out" || { ok=""; break; }
-        # our words through LLVM's disassembler read as our text
+        # our words through LLVM's disassembler read as our text; the
+        # disassembler knows no symbol, so a kfunc call reads as the
+        # pseudo call it is, `call -1`
         "$LLVM_MC" --disassemble --triple=bpf -mcpu=$cpu <"$TMP/words" 2>"$TMP/out" | norm >"$TMP/dis"
-        norm <"$TMP/asm" >"$TMP/ours"
+        norm <"$TMP/asm" | sed 's/^call [A-Za-z_][A-Za-z_0-9]*$/call -1/' >"$TMP/ours"
         if ! cmp -s "$TMP/dis" "$TMP/ours"; then
           diff "$TMP/ours" "$TMP/dis" | head -20 >>"$TMP/out"; ok=""; break
         fi
-        # our text through LLVM's assembler encodes as our words
-        "$LLVM_MC" --triple=bpf -mcpu=$cpu -show-encoding <"$TMP/asm" 2>"$TMP/out" |
-          sed -n 's/.*encoding: \[\(.*\)\].*/\1/p' | bytes >"$TMP/enc"
+        # our text through LLVM's assembler encodes as our words: the
+        # text section of the object it writes, since a call to a
+        # symbol has no encoding before the object is laid out
+        "$LLVM_MC" --triple=bpf -mcpu=$cpu -filetype=obj -o "$TMP/mc.o" <"$TMP/asm" 2>"$TMP/out" &&
+          "$LLVM_OBJCOPY" -O binary --only-section=.text "$TMP/mc.o" "$TMP/mc.bin" 2>>"$TMP/out" ||
+          { ok=""; break; }
+        od -An -v -tx1 "$TMP/mc.bin" | tr -s ' ' '\n' | grep -v '^$' | sed 's/^/0x/' >"$TMP/enc"
         bytes <"$TMP/words" >"$TMP/want"
         if ! cmp -s "$TMP/enc" "$TMP/want"; then
           diff "$TMP/want" "$TMP/enc" | head -20 >>"$TMP/out"; ok=""; break

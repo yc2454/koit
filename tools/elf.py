@@ -27,7 +27,7 @@ instruction. The kernel then executes the same instruction the
 loader over the system call gives it, with one map for all such
 variables instead of one per name.
 
-A kfunc call needs an extern function in `.BTF` and a call relocation
+A kfunc call is an extern function in `.BTF` and a call relocation
 against it; no declaration of the interface calls one yet, so a document with
 a kfunc relocation is refused here, saying so.
 """
@@ -58,6 +58,8 @@ STT_OBJECT = 1
 STT_FUNC = 2
 STT_SECTION = 3
 R_BPF_64_64 = 1
+R_BPF_64_32 = 10
+BTF_FUNC_EXTERN = 2
 BPF_PSEUDO_MAP_FD = 1
 
 
@@ -172,13 +174,30 @@ def map_definition(btf, types, m):
 
 
 def write(unit):
-    for p in unit.programs:
-        for r in p["relocs"]:
-            if r["kind"] == "kfunc":
-                raise SystemExit(f"elf: {unit.name}: program {p['name']} calls kfunc {r['name']}; "
-                                 "an extern in BTF and its relocation are not written yet")
     elf = Elf()
     btf = koitobj.Btf()
+
+    # the kfuncs called: an extern function each in BTF, listed in the
+    # `.ksyms` data section, and an undefined symbol the calls relocate
+    # against; libbpf resolves the name in the kernel's BTF and matches
+    # the prototype by kind
+    kfuncs = {}
+    for p in unit.programs:
+        for r in p["relocs"]:
+            if r["kind"] == "kfunc" and r["name"] not in kfuncs:
+                if "ret" not in r:
+                    raise SystemExit(f"elf: {unit.name}: kfunc {r['name']} has no prototype in the document")
+                kfuncs[r["name"]] = r
+    kfunc_symbol = {}
+    ksyms = []
+    for name, r in kfuncs.items():
+        try:
+            proto = btf.func_proto(btf.ctype(r["ret"]), [(a, btf.ctype(t)) for t, a in r["args"]])
+        except ValueError as e:
+            raise SystemExit(f"elf: {unit.name}: kfunc {name}: {e}")
+        ksyms.append(btf.func(name, proto, BTF_FUNC_EXTERN))
+    if ksyms:
+        btf.datasec(".ksyms", 0, [(f, 0, 0) for f in ksyms])
 
     # .maps: the declared maps, and .bss: the direct ones
     declared = [m for m in unit.maps if not m["direct"]]
@@ -227,6 +246,14 @@ def write(unit):
             for r in p["relocs"]:
                 i = r["index"]
                 w = words[i]
+                if r["kind"] == "kfunc":
+                    # the words already hold clang's form, a pseudo call
+                    # with an immediate of -1; the relocation names the
+                    # extern, and libbpf rewrites the instruction
+                    if r["name"] not in kfunc_symbol:
+                        kfunc_symbol[r["name"]] = elf.symbol(r["name"], 0, 0, STB_GLOBAL, STT_NOTYPE, 0)
+                    rels += struct.pack("<QQ", base + i * 8, (kfunc_symbol[r["name"]] << 32) | R_BPF_64_32)
+                    continue
                 if r["kind"] == "map_fd":
                     # libbpf sets the pseudo register and the descriptor
                     words[i] = w & 0xFFFFFFFF & ~(0xF << 12) | (BPF_PSEUDO_MAP_FD << 12)

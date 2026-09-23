@@ -541,7 +541,7 @@ printer and not of any pass:
   `bpf_skb_change_head`'s headroom from the delta, which the corpus
   does not exercise. The inline declarations print as C expressions,
   `pkt.len` as the subtraction of the context fields. The templates
-  state the same convention the interface's calls's implementation clause
+  state the same convention the call declarations' implementation clause
   holds since entry 38; reading the clause instead of the templates
   is a cleanup owed, and the differential runs would catch a
   divergence in the meantime.
@@ -573,7 +573,7 @@ printer and not of any pass:
 | the machine's stuck-state list, `bir.md` 5.3 | that it is the verifier's list and the kernel's behavior | differential runs, instruction replay, and the verifier's verdicts (`bir.md` 9) |
 | the machine's builtins and the return convention | the kernel's map, ring, and lock semantics | the same |
 | the interface's calls's effect, `own`, `T?`, region, and failure-signal clauses | `KernelOk` and argument fitting | already trusted for the corollary of section 20.2 |
-| the kind's context declaration and the interface's calls's implementation clause, helper numbers, kfunc names, and argument layouts | context access and the kernel's calling convention | generated from the kernel in session 8; until then transcribed from the uapi header |
+| the kind's context declaration and the call declarations' implementation clause, helper numbers, kfunc names, and argument layouts | context access and the kernel's calling convention | generated from the kernel in session 8; until then transcribed from the uapi header |
 | the encoder, the BTF encoder, the loaders | producing the object the kernel receives | `encode_decode`, and loading |
 | T1 and T2 | the source's safety and the existence of the run | stated; proofs in progress |
 | Lean and its kernel | everything | as for every mechanization |

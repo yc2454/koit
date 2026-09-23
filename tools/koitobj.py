@@ -118,7 +118,9 @@ BTF_KIND_INT = 1
 BTF_KIND_PTR = 2
 BTF_KIND_ARRAY = 3
 BTF_KIND_STRUCT = 4
+BTF_KIND_FWD = 7
 BTF_KIND_FUNC = 12
+BTF_KIND_FUNC_PROTO = 13
 BTF_KIND_VAR = 14
 BTF_KIND_DATASEC = 15
 BTF_INT_SIGNED = 1 << 24
@@ -169,6 +171,57 @@ class Btf:
 
     def ptr(self, t):
         return self.add("", BTF_KIND_PTR, 0, t)
+
+    def fwd(self, name, union=False):
+        key = ("fwd", name)
+        if key not in self.by_key:
+            self.by_key[key] = self.add(name, BTF_KIND_FWD, 0, 0, kind_flag=1 if union else 0)
+        return self.by_key[key]
+
+    def func_proto(self, ret, params):
+        """params: (name, type id)."""
+        extra = b"".join(struct.pack("<II", self.string(n), t) for n, t in params)
+        return self.add("", BTF_KIND_FUNC_PROTO, len(params), ret, extra)
+
+    def func(self, name, proto, linkage=0):
+        """A function; the linkage, static, global, or extern, is where
+        a struct member count would be."""
+        return self.add(name, BTF_KIND_FUNC, linkage, proto)
+
+    def ctype(self, s):
+        """The BTF id of a C type as the kernel side spells it: a
+        scalar, `void`, or a pointer to one of those or to a struct or
+        union named by a forward declaration. libbpf compares a kfunc
+        extern's prototype with the kernel's by kind and pointee, so
+        this much is what the match needs."""
+        s = s.strip()
+        stars = 0
+        while s.endswith("*"):
+            stars += 1
+            s = s[:-1].strip()
+        words = [w for w in s.split() if w not in ("const", "volatile", "__restrict", "restrict")]
+        s = " ".join(words)
+        if s == "void":
+            t = 0
+        elif s.startswith("struct ") or s.startswith("union "):
+            t = self.fwd(s.split(None, 1)[1], union=s.startswith("union "))
+        elif s.startswith("enum "):
+            t = self.int("int", 4, signed=True)
+        elif s in ("bool", "_Bool"):
+            t = self.int("bool", 1, boolean=True)
+        else:
+            sizes = {"char": 1, "short": 2, "int": 4, "long": 8, "long long": 8, "size_t": 8,
+                     "u8": 1, "u16": 2, "u32": 4, "u64": 8, "s8": 1, "s16": 2, "s32": 4, "s64": 8,
+                     "__u8": 1, "__u16": 2, "__u32": 4, "__u64": 8, "__s8": 1, "__s16": 2, "__s32": 4, "__s64": 8,
+                     "unsigned char": 1, "unsigned short": 2, "unsigned int": 4, "unsigned long": 8,
+                     "unsigned long long": 8, "unsigned": 4, "uintptr_t": 8, "intptr_t": 8, "ssize_t": 8}
+            if s not in sizes:
+                raise ValueError(f"no BTF for the C type `{s}`")
+            signed = not (s.startswith("u") or s.startswith("__u") or s.startswith("unsigned") or s == "size_t")
+            t = self.int(s.replace(" ", "_"), sizes[s], signed)
+        for _ in range(stars):
+            t = self.ptr(t)
+        return t
 
     def var(self, name, t, linkage=1):
         return self.add(name, BTF_KIND_VAR, 0, t, struct.pack("<I", linkage))
