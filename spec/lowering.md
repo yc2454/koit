@@ -6,7 +6,8 @@ entries 28 to 35 at the start of session 7. `lir.md` defines the first
 intermediate language and `bir.md` the second together with the target
 machine. This one defines the passes between Core and bytecode, states
 what each preserves and how the statements compose into the compiler's
-correctness theorem, restates Lemma L on the code the passes emit, fixes
+correctness theorem, states the obligations on the emitted code that
+hypothesis H2 of `proof-structure.md` relies on, fixes
 the trusted base, and orders the proofs. Decisions 47 to 50 of
 `language.md` are assumed. The decisions this draft embeds are listed in
 section 12.
@@ -49,6 +50,11 @@ for the `.ok` result.
 
 ## 2. What is preserved
 
+Revised 2026-09-24 to the naming of `proof-structure.md`:
+`compile_correct` is T4, `bytecode_safe` and `bytecode_unique` are T5,
+`encode_decode` with `BPF.Wf` is T7, and the trusted base of section
+10 is the hypotheses H1 and H3.
+
 ### 2.1 Behaviors
 
 A behavior of a program from an initial state, for a kernel `K`, is
@@ -82,6 +88,8 @@ locals.
 
 ### 2.3 The theorem
 
+T4:
+
 ```
 theorem compile_correct (pre u obj K) :
     KernelOk K → UnitOk pre u → compile pre u = .ok obj →
@@ -93,26 +101,27 @@ theorem compile_correct (pre u obj K) :
 
 The existence of the Core derivation is T1's; the theorem adds the
 run. From it and two properties of the machine, that `Step K` is a
-function and that a stuck state has no successor, follow:
+function and that a stuck state has no successor, follows T5:
 
 ```
-corollary bytecode_safe (pre u obj K) :
+theorem bytecode_safe (pre u obj K) :
     KernelOk K → UnitOk pre u → compile pre u = .ok obj →
     ∀ p ∈ u.programs, ∀ st, Initial pre u p st →
       ∀ m, Star (Step K) (load obj p st) m → ¬ Stuck m
-corollary bytecode_unique : the run of 2.3 is the only run, and its
+theorem bytecode_unique : the run of 2.3 is the only run, and its
     verdict, final maps, packet, and trace are the source's
 ```
 
-`Stuck` is the list of `bir.md`, 5.3, which is the verifier's list.
-So the corollary of `language.md` 20.2 reads, with its compiler
-condition discharged: a well-typed program's bytecode never performs
+`Stuck` is the list of `bir.md`, 5.3, which hypothesis H1 says is
+the verifier's list. So the consequence of `proof-structure.md`
+section 3 reads: a well-typed program's bytecode never performs
 an access outside its region, through a stale packet pointer, or on
 an uninitialized slot, never leaks a pointer, never calls under a
 lock, never exits holding a resource, and never trips a context or
 argument rule, whatever the kernel verifier believes about it. What
-remains assumed is the machine's faithfulness to the kernel,
-validated as `bir.md` section 9 says.
+remains assumed is H1, the machine's faithfulness to the kernel,
+measured as `bir.md` section 9 and the `stuck` column of
+`verifier-rules.csv` say.
 
 ### 2.4 Composition
 
@@ -435,13 +444,16 @@ untrusted function checked by a verified validator, and the theorem
 becomes one about the validator, the way CompCert treats register
 allocation.
 
-## 8. Lemma L on the emitted code
+## 8. The shape obligations on the emitted code
 
-Lemma L of `language.md` section 20 is the acceptance half of the
-design, and no theorem here proves acceptance, since the verifier is
-not modeled. What the passes give is the syntactic part of L, as
-properties of the BIR the pipeline emits, each checkable on the
-output:
+No theorem here proves acceptance, since the verifier is not modeled;
+acceptance is Claim A of `proof-structure.md`, under the hypothesis
+H2 that the verifier re-derives the checker's facts from the emitted
+code. What the passes give is the shape of that code, three
+obligations checkable on the output, each of which H2 presupposes.
+They are the executable fragment of the future Lemma A, koit's own
+analysis of its bytecode (`proof-structure.md`, section 6), and
+`koitc shape` below is its prototype:
 
 - **L1, every fact is a branch on the path.** Pass B emits an `if`
   wherever Core has a `try`, a `for` bound, or a coercion, and
@@ -451,7 +463,7 @@ output:
   constants are immediates by pass A. Provable as a property of the
   translations: every marker of the source has a `jcond` in the
   output whose condition is the marker's test. Whether the verifier's
-  domain re-derives the fact from that branch is P9's conjecture,
+  domain re-derives the fact from that branch is hypothesis H2,
   measured by E6.
 - **L2, every cast is a tracked instruction.** By the cast table of
   `bir.md` section 4, which pass C implements; a property of the
@@ -570,13 +582,15 @@ printer and not of any pass:
 
 ## 10. The trusted base
 
+The hypotheses H1 and H3 of `proof-structure.md`, by row:
+
 | trusted | for | how it is checked |
 |---|---|---|
-| the machine's stuck-state list, `bir.md` 5.3 | that it is the verifier's list and the kernel's behavior | differential runs, instruction replay, and the verifier's verdicts (`bir.md` 9) |
-| the machine's builtins and the return convention | the kernel's map, ring, and lock semantics | the same |
-| the interface's calls's effect, `own`, `T?`, region, and failure-signal clauses | `KernelOk` and argument fitting | already trusted for the corollary of section 20.2 |
+| H1(a): the machine's stuck-state list, `bir.md` 5.3 | that it is the verifier's list and the kernel's behavior | differential runs, instruction replay, and the verifier's verdicts (`bir.md` 9) |
+| H1(b): the machine's builtins and the return convention | the kernel's map, ring, and lock semantics | the same |
+| H3: the interface's calls's effect, `own`, `T?`, region, and failure-signal clauses | `KernelOk` and argument fitting | the build's check of the `resize` clause; otherwise assumed, as `language.md` 20.2 says |
 | the kind's context declaration and the call declarations' implementation clause, helper numbers, kfunc names, and argument layouts | context access and the kernel's calling convention | generated from the kernel in session 8; until then transcribed from the uapi header |
-| the encoder, the BTF encoder, the loaders | producing the object the kernel receives | `encode_decode`, and loading |
+| the encoder, the BTF encoder, the loaders | producing the object the kernel receives | T7 (`encode_decode`, `BPF.Wf`), and loading |
 | T1 and T2 | the source's safety and the existence of the run | stated; proofs in progress |
 | Lean and its kernel | everything | as for every mechanization |
 
@@ -613,7 +627,8 @@ commit, then the proofs by fragment and by least dependence:
 | loader and BTF encoder, Python | 500 |
 
 The proofs are a separate budget, on the order of the definitions
-several times over, and Lemma L's semantic part is never proved.
+several times over, and T6, the facts as bytecode invariants, comes
+last.
 
 ## 12. Validation at every boundary
 
@@ -673,8 +688,9 @@ host with the kernel, and never builds Lean there.
    is stated on it (entry 38).
 7b. `printk` formats live in the unit's read-only data map, one
    `mapval` per call (entries 37 and 52).
-8. Lemma L's syntactic part is a property of the translations and a
-   runner check; its semantic part stays P9's conjecture.
+8. The obligations of section 8 on the emitted code are properties of
+   the translations and a runner check; whether the verifier
+   re-derives the facts from that code is hypothesis H2, measured.
 9. Every level has an interpreter and the runner compares adjacent
    levels on the whole corpus; the comparison against the kernel
    under `BPF_PROG_TEST_RUN` waits for the ELF writer and CloudLab

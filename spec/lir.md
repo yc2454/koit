@@ -422,8 +422,8 @@ the order of effects is Core's.
 | `try x = callopt f(...) then s1 else s2` | `block { x = call f(...) absent { s2'; br 0 } ; s1' }` |
 
 Every test above is the marker the source wrote, and it tests the
-value the following code uses, which is the second obligation of
-Lemma L stated at the LIR level.
+value the following code uses, which is the shape obligation L3 of
+`lowering.md` section 8 stated at the LIR level.
 
 ### 6.3 Failure and resources
 
@@ -513,16 +513,15 @@ the pass and its theorem.
 
 ## 7. What is not in LIR
 
-No registers, no frame layout, no instruction selection, no
-calling convention: the flattening pass and the allocation pass of
-`bir.md` decide those. No facts, no refinements, no effects: the
-checker spent them. No loop caps: the cap of a `for` loop is the
-checker's output to the lowering, decision 43, and it selects the
-bytecode form of the loop without entering the semantics; a `for`
-loop runs until its bound, as Core's does, and the verifier converges
-because the bound is a constant or a value whose fact is on the path
-(Lemma L). No `hold`, no `try`, no `move`, no `for`, no optionals,
-no polymorphic literals, no `errno`.
+No registers, no frame layout, no instruction selection, no calling convention:
+the flattening pass and the allocation pass of `bir.md` decide those. No facts,
+no refinements, no effects: the checker spent them. No loop caps: the cap of a
+`for` loop is the checker's output to the lowering, decision 43, and it selects
+the bytecode form of the loop without entering the semantics; a `for` loop runs
+until its bound, as Core's does, and the verifier converges because the bound
+is a constant or a value whose fact is on the path (shape obligation L1,
+`lowering.md` 8). No `hold`, no `try`, no `move`, no `for`, no optionals, no
+polymorphic literals, no `errno`.
 
 ## 8. Printing to C
 

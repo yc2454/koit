@@ -347,9 +347,9 @@ narrow values compare as 32-bit unsigned, signed narrow values as
   yet written, so under `--cpu v3` the compiler reports them as a
   construct the target lacks (entry 32).
 
-The casts of section 8.1 are the table below, which is the first
-obligation of Lemma L made concrete: every cast is one of the
-instructions the verifier tracks exactly.
+The casts of section 8.1 are the table below, which is the shape
+obligation L2 of `lowering.md` section 8 made concrete: every cast is
+one of the instructions the verifier tracks exactly.
 
 | from | to | instructions |
 |---|---|---|
@@ -584,7 +584,10 @@ the license from the unit.
 
 ## 8. What the verifier must re-derive
 
-Acceptance is not part of the machine, and Lemma L is where the two
+Acceptance is not part of the machine; it is Claim A of
+`proof-structure.md`, under the hypothesis H2 that the verifier
+re-derives the checker's facts, and the shape obligations of
+`lowering.md` section 8 are where the machine and that hypothesis
 meet. Stated on the templates of sections 3 and 4:
 
 - Every fact the checker used is a comparison on the path, because
@@ -629,7 +632,8 @@ of them a proof:
    memory rules on the instructions the templates emit.
 3. **The verifier's own answer.** A program the machine runs without
    a stuck state should load; a rejection names either a re-derivation
-   the templates failed to make visible, which is Lemma L's business,
+   the templates failed to make visible, a shape obligation's
+   business (`lowering.md` 8) or a failure of H2,
    or a rule of the verifier the list of 5.3 lacks, which is a bug in
    the model and is added to the list.
 
@@ -661,7 +665,7 @@ and is not needed for the paper.
 6. The frame is 64 slots with the verifier's spill rules, and starts
    uninitialized.
 7. The 32-bit normal form of section 4 and its cast table realize
-   Lemma L's first obligation.
+   the shape obligation L2 (`lowering.md` 8).
 8. cpu v3 is the default, `--cpu v4` selects v4's `movsx`, `sdiv`,
    `smod`, `bswap`, and long jump; signed division below v4 is
    rejected until its sequence is written (entry 32).

@@ -45,12 +45,17 @@ re-derived the mechanisms against the kernel's own state
     8.3, 11).
 15. The callback-loop rules recorded with the deferral of iterator
     and map loops (section 22).
-16. Lemma L's two lowering obligations (section 20).
+16. Lemma L's two lowering obligations (section 20); superseded on
+    2026-09-24 by item 18.
 17. Terminology of the refinement half aligned with the standard
     refinement-types vocabulary (2026-09-23, `terminology.md`,
     decision 69): obligation for demand, join for the merge of facts,
     termination metric, synthesis versus inference, branch
     strengthening, selfification, hybrid cast.
+18. Section 20 revised to `proof-structure.md` (2026-09-24): T4 to T7
+    named, the corollary restated as a consequence under hypotheses
+    H1 to H3, Lemma L withdrawn in favor of the acceptance claim and
+    the future Lemma A.
 
 Changes from draft 1 to draft 2, for the record:
 
@@ -237,8 +242,8 @@ validated empirically; it is outside this definition.
   exists only after this program has tested it.
 - **P9, elide only what the verifier will see.** The checker discharges
   an obligation silently only when the verifier will re-establish the same
-  fact from the emitted code. Every fact the checker uses lowers to a
-  branch in the bytecode (Lemma L, section 20), and the entailment
+  fact from the emitted code. Every fact the checker uses is true of
+  the bytecode (T6, section 20) and lowers to a branch, and the entailment
   fragment decides only what the verifier's domain re-derives from
   such branches (section 18.5). A stronger fragment would elide tests
   the verifier cannot see and produce safe programs that do not load.
@@ -1960,7 +1965,11 @@ domain re-derives from the branches the lowering emits, so a fact it
 proves can be elided without loss of acceptance, and a fact it cannot
 prove is discharged by the coercion of section 10.4, which the verifier
 then reads as a branch. A stronger procedure would elide tests the
-verifier cannot see. The solver appears in two places only, neither of
+verifier cannot see. This is the design behind hypothesis H2 of
+`proof-structure.md`: the fragment is confined so that the verifier
+can be expected to re-derive what the checker used, and that
+expectation is what is measured. The solver appears in two places
+only, neither of
 them the type system: the testing cross-check below, and the compiler's
 elimination of redundant coercions when it targets a kernel with a proof
 checker, where the kernel re-checks each elision from the path
@@ -2143,6 +2152,11 @@ allows; the old packet is gone, which is why typing kills views.
 
 ## 20. Properties and theorems
 
+Revised 2026-09-24 to the naming of `proof-structure.md`, which is
+the reference for the theorems, the hypotheses, and what follows from
+them; this section states the source theorems in full and the rest
+by name.
+
 ### 20.1 The properties
 
 Each declaration names a property of every execution of a well-typed Core
@@ -2186,23 +2200,55 @@ exactly when its desugaring is; every handler table is total after
 defaults. Its content is that desugaring needs no typing information,
 which the three forms kept in Core (18.1) arrange.
 
-**Corollary, independence from the verifier.** Let the compiler be
-correct in the sense that every execution of the bytecode it produces
-refines an execution of the Core program under the mechanized in-kernel
-ISA semantics (`yuan:ebpf-isa:oopsla:2026`). Then the bytecode has the
-properties of 20.1 as well, whatever the kernel verifier believes about
-it. In particular a well-typed program cannot perform the out-of-bounds
-access, the arithmetic on a possibly null pointer, or the division by
-zero that a verifier soundness bug would fail to catch. The condition on
-the compiler is assumed here and validated per program outside this
-definition; the kernel's own verification is retained as an independent
-check, not replaced.
+**T4, compiler correctness** (`compile_correct`, `lowering.md` 2.3).
+For a unit the checker accepts, the bytecode the compiler produces
+has, from every initial state, a run that halts with the Core run's
+verdict and agrees with it on the final maps, the packet, and the
+trace of kernel calls. A forward simulation per pass, composed. The
+checker's acceptance is a hypothesis of T4, used where an elided
+test is justified by the premise of a Core rule; it is the analogue
+of CompCert's precondition that the source has no undefined behavior.
 
-**Trusted, for the corollary.** Besides the compiler and the ISA
-semantics, the corollary trusts three clauses of the interface's call
-declarations, all on their koit side: a call's effect set, its `own` and `T?`
-annotations, and the region kinds of its parameters and result. A
-helper marked as not resizing the packet when it does would let a view
+**T5, bytecode safety** (`bytecode_safe`, `bytecode_unique`). For a
+unit the checker accepts, no reachable state of the target machine
+is stuck, for the causes `bir.md` 5.3 lists, and the run of T4 is
+the only run. From T2 and T4 with the machine's determinism.
+
+**T6, facts are invariants of the bytecode.** For a unit the checker
+accepts, the checker's facts at each source point, translated through
+the simulation relation, hold of the machine state at the
+corresponding instruction on every run. A corollary of the proofs of
+T1 and T4, not of their statements: T1's invariant carries the facts,
+T4's relation carries the points.
+
+**T7, well-formedness of the object** (`BPF.Wf`, `encode_decode`).
+Only defined opcodes, jumps inside their function, and decoding
+inverts encoding.
+
+**Consequence, safety independent of the verifier.** From T1 to T5
+under H1 below: a checked unit's bytecode never performs an access
+outside its region, through a stale packet pointer, or on an
+uninitialized slot, never leaks a pointer, never calls under a lock,
+never exits holding a resource, and never trips a context or argument
+rule, whatever the kernel verifier believes about it. In particular
+it cannot perform the out-of-bounds access, the arithmetic on a
+possibly null pointer, or the division by zero that a verifier
+soundness bug would fail to catch. The kernel's own verification is
+retained as an independent check, not replaced.
+
+**The hypotheses.** Three statements about artifacts koit does not
+control, each with the measurement that tests it; none is provable.
+H1, the machine is the kernel: the stuck list of `bir.md` 5.3 is the
+kernel's list of behavioral refusals, measured by the `stuck` column
+of `verifier-rules.csv`, and the machine's step relation and builtins
+are the kernel's, measured by differential runs. H1 is what gives T5
+its meaning. H2, the verifier derives the checker's facts: at every
+instruction, the verifier's abstract state entails the facts of T6;
+measured by loading the ported corpus and classifying every
+rejection. H3, the interface's trusted clauses: a call's effect set,
+its `own` and `T?` annotations, and the region kinds of its
+parameters and result are as the kernel implements them; a helper
+marked as not resizing the packet when it does would let a view
 outlive its region; the build's check of the `resize` clause against
 the kernel side catches the transcribable half of that error, not the
 semantic half. The availability, context, slot-layout, and
@@ -2210,27 +2256,21 @@ verdict-range clauses, and the whole kernel side, affect acceptance
 only: an error there makes a program fail to load or rejects one that
 would have loaded, and never makes a safe program unsafe.
 
-**Lemma L, path facts.** Every fact in `F` that the checker uses to
-discharge an obligation is implied by the branch conditions on the
-corresponding path of the lowered code. The four fact sources, a
-branch, a declared loop bound, a marked load of a `where` field, and
-the coercion, all lower to a comparison; configuration constants fold
-to immediates. Two further obligations on the lowering are part of L:
-every `as` between widths is emitted as the instruction the verifier
-tracks exactly, a 32-bit move or a shift pair, never a masked 64-bit
-arithmetic; and the register the compiled code indexes with is the one
-the emitted comparison tested, never a copy. L is a property of the
-lowering, stated here because
-two consequences of the design rest on it: an elided test is safe for
-acceptance exactly when the verifier's domain re-derives the fact from
-those branches, which P9 arranges; and any goal a proof-carrying kernel
-formulates at an instruction its domain cannot pass is entailed by the
-path condition, so it is provable by the existing bytecode-level
-machinery without any proof construct in the source.
-
-**Outside the theorems.** Whether the kernel verifier accepts the
-compiled bytecode is a property of the compiler, tested empirically;
-Lemma L is the part of that property the language can state.
+**Acceptance.** Whether the verifier accepts a checked unit's
+bytecode is not a theorem and cannot be one without a model of the
+verifier. It is Claim A of `proof-structure.md`: under H1 and H2, the
+verifier's behavioral checks accept every checked unit, since each
+check's premise is an obligation the checker discharged from facts
+the verifier has. Budgets, encoding, and per-kind availability are
+outside the claim. The design on koit's side is P9 (18.5): the
+entailment fragment is confined to the verifier's own domain so that
+H2 has a chance of holding, and every fact source, a branch, a loop
+bound, a marked load, a coercion, lowers to a comparison. The
+statement formerly here as Lemma L, that those comparisons let a
+forward analysis re-derive the checker's facts on the register the
+access uses and at exact width, is what a bytecode-level analysis of
+koit's own would prove (`proof-structure.md`, section 6, Lemma A); it
+is not stated as a lemma, because stating it needs that analysis.
 
 ## 21. Decisions and open questions
 
