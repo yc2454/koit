@@ -1,0 +1,8 @@
+// expect: is not a verdict of a `cgroup_recvmsg4` program
+// selftest: progs/verifier_sock_addr.c recvmsg4_bad_return_code (T2353; T2355 recvmsg6, T2368 T2370 getpeername4/6, T2374 T2376 getsockname4/6; rule 04.32, master fe2ec83)
+// A recvmsg hook runs after the operation and cannot reject it: the
+// kernel requires exactly 1. The kind's verdict type has the one
+// constant ALLOW, so REJECT is not a name of the program.
+program p : cgroup_recvmsg4 {
+  return REJECT
+}

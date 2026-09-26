@@ -630,9 +630,11 @@ def kernelDecls (pre : Interface) (u : LIR.CompUnit) (body : String) : String :=
   let ctxDecl (s : CtxStruct) : String :=
     let field (f : CtxField) (i : Nat) : String :=
       let name := if f.name == "" then s!"koit_pad_{i}" else f.name
+      -- the wider fields of the context structs are IPv6 addresses
+      -- and `cb`, arrays of `__u32`
       let decl := match f.size with
         | 1 => s!"u8 {name}" | 2 => s!"u16 {name}" | 4 => s!"u32 {name}" | 8 => s!"u64 {name}"
-        | n => s!"u8 {name}[{n}]"
+        | n => if n % 4 == 0 && f.name != "" then s!"u32 {name}[{n / 4}]" else s!"u8 {name}[{n}]"
       s!"\t{decl};\n"
     let asserts := s.fields.filter (·.name != "") |>.map fun f =>
       s!"_Static_assert(__builtin_offsetof({s.name}, {f.name}) == {f.offset}, \"{s.name}.{f.name}\");\n"

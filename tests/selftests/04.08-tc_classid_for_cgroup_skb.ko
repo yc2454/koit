@@ -1,0 +1,8 @@
+// expect: has no field `tc_classid`
+// selftest: progs/verifier_cgroup_skb.c tc_classid_for_cgroup_skb (T1176; T1177 data_meta, T1178 flow_keys; rule 04.08, master fe2ec83)
+// `tc_classid`, `data_meta`, and `flow_keys` are hidden from a cgroup
+// skb program: not fields of the kind's context.
+program p : cgroup_skb_ingress {
+  let c = ctx.tc_classid
+  pass
+}

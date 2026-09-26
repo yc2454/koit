@@ -1,4 +1,5 @@
 import Koit.Interface.Decls
+import Koit.Interface.Verifier
 import Koit.Core.Print
 
 /-!
@@ -126,9 +127,19 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
     match k.progType? ks.progType with
     | none => problems := problems ++ problem s!"kind `{ks.name}`: {k.tag} has no {ks.progType}"
     | some pt =>
-      unless pt.sections.contains ks.section_ do
+      unless pt.hasSection ks.section_ do
         problems := problems ++ problem
-          s!"kind `{ks.name}`: section \"{ks.section_}\" is not one libbpf maps to {pt.name}, which has {pt.sections}"
+          s!"kind `{ks.name}`: section \"{ks.section_}\" is not one libbpf maps to {pt.name}, which has {pt.sections.map (·.1)}"
+      -- the attach type the section fixes, when the type has one
+      let attach : Option (String × Nat) ← match pt.attachOf ks.section_ with
+        | none => pure none
+        | some a =>
+          match k.value? a with
+          | some v => pure (some (a, v.toNat))
+          | none =>
+            problems := problems ++ problem s!"kind `{ks.name}`: {k.tag} has no value for the attach type {a}"
+            pure none
+      let rules := Verifier.rules? ks.progType (attach.map (·.1))
       let cs? := pt.ctx.bind k.ctx?
       let mut fields : List CtxField := []
       for f in ks.ctx do
@@ -138,34 +149,73 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
           match cs.fields.find? (·.name == f.name) with
           | none => problems := problems ++ problem s!"kind `{ks.name}`: {cs.name} has no field `{f.name}`"
           | some kf =>
-            unless ctxBytes f.ty == some kf.size do
-              problems := problems ++ problem
-                s!"kind `{ks.name}`: `ctx.{f.name}` is {kf.size} bytes in {cs.name}, typed `{f.ty.print}`"
-            fields := fields ++ [{ name := f.name, ty := f.ty, offset := kf.offset, writable := f.writable }]
+            -- what the verifier admits for the hook
+            if let some rs := rules then
+              let hook := (attach.map (·.1)).getD pt.name
+              match rs.fields.find? (·.1 == f.name) with
+              | none =>
+                problems := problems ++ [s!"kind `{ks.name}`: the verifier admits no access to `ctx.{f.name}` under {hook}"]
+              | some (_, _, w) =>
+                if f.writable && !w then
+                  problems := problems ++ [s!"kind `{ks.name}`: the verifier admits no store to `ctx.{f.name}` under {hook}"]
+            match f.ty with
+            | .array _ elem (.lit _ n _) =>
+              -- one field per element, at the element's stride
+              match ctxBytes elem with
+              | some eb =>
+                unless eb * n == kf.size do
+                  problems := problems ++ problem
+                    s!"kind `{ks.name}`: `ctx.{f.name}` is {kf.size} bytes in {cs.name}, typed `{f.ty.print}`"
+                for i in [0:n] do
+                  fields := fields ++ [{ name := s!"{f.name}[{i}]", ty := elem,
+                                         offset := kf.offset + i * eb, writable := f.writable }]
+              | none =>
+                problems := problems ++ [s!"kind `{ks.name}`: `ctx.{f.name}` is an array of `{elem.print}`, which is not an integer"]
+            | _ =>
+              unless ctxBytes f.ty == some kf.size do
+                problems := problems ++ problem
+                  s!"kind `{ks.name}`: `ctx.{f.name}` is {kf.size} bytes in {cs.name}, typed `{f.ty.print}`"
+              fields := fields ++ [{ name := f.name, ty := f.ty, offset := kf.offset, writable := f.writable }]
       let mut bounds : List CtxBound := []
       for (b, isEnd) in ks.ctxBounds do
         match cs?.bind fun cs => cs.fields.find? (·.name == b) with
         | none => problems := problems ++ problem s!"kind `{ks.name}`: no context field `{b}` for the packet bound"
         | some kf => bounds := bounds ++ [{ name := b, offset := kf.offset, isEnd }]
       let mut verdicts : List (String × Nat) := []
-      for (v, kv) in ks.verdicts do
-        match k.value? kv with
-        | none => problems := problems ++ problem s!"kind `{ks.name}`: {k.tag} has no value {kv} for verdict `{v}`"
-        | some n => verdicts := verdicts ++ [(v, valueU32 n)]
+      for (v, ref) in ks.verdicts do
+        let n? : Option Int := match ref with
+          | .kernel kv => k.value? kv
+          | .value n => some n
+        match n? with
+        | none => problems := problems ++ problem s!"kind `{ks.name}`: {k.tag} has no value for verdict `{v}`"
+        | some n =>
+          -- inside the range the verifier enforces at exit
+          if let some rs := rules then
+            unless rs.range.1 ≤ n && n ≤ rs.range.2 do
+              problems := problems ++ problem
+                s!"kind `{ks.name}`: the verdict `{v}` = {n} is outside the range [{rs.range.1}, {rs.range.2}] the verifier enforces under {(attach.map (·.1)).getD pt.name}"
+          verdicts := verdicts ++ [(v, valueU32 n)]
       match ks.defaultExit with
       | .verdict v =>
         unless verdicts.any (·.1 == v) do
           problems := problems ++ problem s!"kind `{ks.name}`: the default exit `{v}` is not a verdict"
       | .value _ => pure ()
       kinds := kinds ++ [{ name := ks.name, progType := ks.progType, section_ := ks.section_,
-                           hasPkt := ks.hasPkt,
+                           attach, hasPkt := ks.hasPkt,
                            verdictTy := ks.verdictTy, verdicts, sugar := ks.sugar,
                            defaultExit := ks.defaultExit, pktWritable := ks.pktWritable,
                            sleep := ks.sleep, ctx := fields, ctxBounds := bounds }]
-      -- the kind's enumeration, its constants the verdicts just joined
+      -- the kind's enumeration, its constants the verdicts just joined;
+      -- kinds sharing one enumeration must agree on it
       if let some es := ks.verdictEnum then
-        enums := enums ++ [{ name := es.name, kernel := es.kernel,
-                             width := es.width, constants := verdicts }]
+        match enums.find? (·.name == es.name) with
+        | some e =>
+          unless e.constants == verdicts do
+            problems := problems ++ problem
+              s!"kind `{ks.name}`: its verdicts differ from those `{es.name}` already has"
+        | none =>
+          enums := enums ++ [{ name := es.name, kernel := es.kernel,
+                               width := es.width, constants := verdicts }]
 
   -- calls
   let allKinds := spec.kinds.map (·.name)

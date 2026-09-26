@@ -151,6 +151,9 @@ partial def evalPlace (K : Kernel) : Place → M PlaceRef
       | _ =>
         let _ := s
         fail s!"`{p.print}` has no fields"
+  | .index _ (.field _ (.var _ "ctx") f) (.lit _ k _) =>
+    -- an element of an array context field is the field `f[k]`
+    return .ctx s!"{f}[{k}]"
   | .index _ p i => do
     let r ← evalPlace K p
     let iv ← evalExpr K i

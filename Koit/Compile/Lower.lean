@@ -449,6 +449,11 @@ partial def lowerPlace (c : LCtx) (sp : Span) (p : Place) : LM (List LIR.Stmt ×
     match c.kind.bind fun decl => decl.ctx.find? (·.name == f) with
     | some cf => return ([], .ctx f cf.ty)
     | none => lerr s!"the context has no field `{f}`"
+  -- an element of an array context field is the declaration `f[k]`
+  | .index _ (.field _ (.var _ "ctx") f) (.lit _ k _) =>
+    match c.kind.bind fun decl => decl.ctx.find? (·.name == s!"{f}[{k}]") with
+    | some cf => return ([], .ctx cf.name cf.ty)
+    | none => lerr s!"the context has no field `{f}[{k}]`"
   | .field _ q f =>
     let (pre, r) ← lowerPlace c sp q
     match r with

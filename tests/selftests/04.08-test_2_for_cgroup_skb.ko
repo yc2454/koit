@@ -1,0 +1,15 @@
+// selftest: progs/verifier_cgroup_skb.c test_2_for_cgroup_skb (T1173; T1174 test_3, T1175 test_4, T1181 read_tstamp; rule 04.08, master fe2ec83)
+// The accepting side: the socket's fields a cgroup skb program reads,
+// and the two it writes. Egress here, whose verdict carries the
+// congestion bit.
+map seen : array[1] of { n: u64 }
+
+program p : cgroup_skb_egress {
+  if ctx.family == 2 && ctx.remote_port == 0x5000 {
+    seen[0].n += ctx.len as u64
+    ctx.mark = ctx.local_port
+    ctx.priority = 1
+    return PASS_CN
+  }
+  pass
+}

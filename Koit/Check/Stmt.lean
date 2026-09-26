@@ -876,6 +876,7 @@ def writesOf (env : Env) (K : Ctx) (p : Place) : M Effs := do
   | .ctx =>
     match p with
     | .field _ _ f => return Effs.ofList [.ctx f]
+    | .index _ (.field _ _ f) (.lit _ k _) => return Effs.ofList [.ctx s!"{f}[{k}]"]
     | _ => return {}
   | .param =>
     match ← placeOffset env K (K.facts.resolve p) with
@@ -1119,9 +1120,17 @@ partial def checkStmtBody (env : Env) (K : Ctx) (s : Stmt) :
     -- predicate or the local's refinement demanded, the store
     -- recorded
     let info ← placeTyUse env K p
+    -- (StoreView): the kind's `pkt` clause says whether views may be
+    -- written; inside a function the store is an effect of the view
+    -- parameter, refused where the program is checked
+    if info.origin == .pkt then
+      if let some decl := env.kind then
+        unless decl.pktWritable do
+          err span s!"a store into the packet in {article decl.name} \
+            `{decl.name}` program, whose packet may only be read"
     unless info.mutable do
       match p, info.origin with
-      | .field _ _ f, .ctx =>
+      | .field _ _ f, .ctx | .index _ (.field _ _ f) _, .ctx =>
         let decl := env.kind.get!
         let writable := (decl.ctx.filter (·.writable)).map (·.name)
         err span s!"the context field `{f}` is not writable in \

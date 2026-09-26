@@ -1,0 +1,10 @@
+// selftest: progs/verifier_sock_addr.c bind4_good_return_code_3 (T2382; T2379 T2380 T2381 bind4_good_return_code_0/1/2, T2384 to T2387 bind6; rule 04.32, master fe2ec83)
+// A bind hook returns in [0, 3]; bit 1 asks the kernel to skip the
+// CAP_NET_BIND_SERVICE check. The kind names 3 ALLOW_PRIVILEGED_PORT;
+// 2, a rejection with the flag, is legal and meaningless, so unnamed.
+program p : cgroup_bind4 {
+  if ctx.user_port == 0x5000 {
+    return ALLOW_PRIVILEGED_PORT
+  }
+  return ALLOW
+}

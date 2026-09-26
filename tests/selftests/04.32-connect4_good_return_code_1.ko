@@ -1,0 +1,15 @@
+// selftest: progs/verifier_sock_addr.c connect4_good_return_code_1 (T2390; T2389 connect4_good_return_code_0, T2358 T2359 T2361 T2362 sendmsg4/6; rule 04.32, master fe2ec83)
+// The accepting side, in the shape of a socket load balancer: the
+// destination the process asked for is rewritten to a backend and the
+// connect allowed, or refused when the port is closed.
+map backend : array[1] of { ip: be32, port: u32 }
+
+program p : cgroup_connect4 {
+  let b = backend[0]
+  if ctx.user_port == 0 {
+    return REJECT
+  }
+  ctx.user_ip4 = b.ip
+  ctx.user_port = b.port
+  return ALLOW
+}

@@ -1,0 +1,9 @@
+// expect: has no field `mark`
+// selftest: progs/verifier_sock.c post_bind4_read_mark (T2343, rule 08.14, master fe2ec83)
+// `mark` is readable and writable in a cgroup/sock program only at
+// socket creation and release; after bind4 it is not a field of the
+// kind's context.
+program p : cgroup_post_bind4 {
+  let m = ctx.mark
+  return ALLOW
+}

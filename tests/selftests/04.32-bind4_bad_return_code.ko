@@ -1,0 +1,6 @@
+// expect: expected `BindVerdict`, found `u64`
+// selftest: progs/verifier_sock_addr.c bind4_bad_return_code (T2383; T2388 bind6; rule 04.32, master fe2ec83)
+// `return 4` from a bind hook, past its range of [0, 3].
+program p : cgroup_bind4 {
+  return 4
+}

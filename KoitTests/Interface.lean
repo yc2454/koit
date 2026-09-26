@@ -27,6 +27,29 @@ private def hasLine (s : Option String) (frag : String) : Bool :=
 private def withCall (c : CallSpec) : Spec :=
   { koitSide with calls := koitSide.calls ++ [c] }
 
+-- the verifier's tables per attach type: a verdict outside the hook's
+-- range, a store the hook forbids, a field the hook hides
+#guard hasLine (verdict { koitSide with kinds := koitSide.kinds.map (fun k =>
+  if k.name == "cgroup_connect4" then { k with verdicts := k.verdicts ++ [("BOTH", .value 3)] }
+  else k) }) "outside the range [0, 1]"
+#guard hasLine (verdict { koitSide with kinds := koitSide.kinds.map (fun k =>
+  if k.name == "cgroup_post_bind4" then
+    { k with ctx := k.ctx.map fun f => if f.name == "src_ip4" then { f with writable := true } else f }
+  else k) }) "admits no store to `ctx.src_ip4`"
+#guard hasLine (verdict { koitSide with kinds := koitSide.kinds.map (fun k =>
+  if k.name == "cgroup_sock_create" then
+    { k with ctx := k.ctx ++ [{ name := "src_port", ty := tU32, writable := false }] }
+  else k) }) "admits no access to `ctx.src_port`"
+-- an array field must fill the kernel's; kinds sharing an enumeration agree
+#guard hasLine (verdict { koitSide with kinds := koitSide.kinds.map (fun k =>
+  if k.name == "cgroup_connect6" then
+    { k with ctx := k.ctx.map fun f =>
+        if f.name == "user_ip6" then { f with ty := .array noSpan tBe32 (.lit noSpan 2 "2") } else f }
+  else k) }) "is 16 bytes in struct bpf_sock_addr"
+#guard hasLine (verdict { koitSide with kinds := koitSide.kinds.map (fun k =>
+  if k.name == "cgroup_connect6" then { k with verdicts := [("REJECT", .value 0)] }
+  else k) }) "differ from those `CgroupVerdict` already has"
+
 -- the hand-written side fits both tags
 #guard verdict koitSide == none
 #guard (join koitSide Kernel.v7_0_rc1 builtinLayouts).toOption.isSome

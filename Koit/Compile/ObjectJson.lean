@@ -170,7 +170,10 @@ def objectJson (pre : Interface) (o : Object) : Except String Json := do
     | t => t.print
   pure <| Json.mkObj [
     ("name", o.name), ("kind", o.kind), ("prog_type", pt.name), ("prog_type_id", toJson pt.id),
-    ("section", o.section_), ("result", result),
+    ("section", o.section_),
+    ("attach", match decl.attach with | some (a, _) => Json.str a | none => Json.null),
+    ("attach_id", match decl.attach with | some (_, v) => toJson v | none => toJson 0),
+    ("result", result),
     ("verdicts", Json.mkObj (decl.verdicts.map fun (n, v) => (n, toJson v))),
     ("words", Json.arr (o.words.map fun w => Json.str (hex16 w))),
     ("relocs", Json.arr (o.relocs.map (relocJson pre)).toArray),

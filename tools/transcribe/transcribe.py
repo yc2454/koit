@@ -259,10 +259,15 @@ def parse_verifier_ops(tree):
 
 
 def parse_sections(tree):
+    """Program type -> [(section name, expected attach type or None)],
+    from libbpf's SEC_DEF table, whose third argument is the attach
+    type the loader passes for the section (0 when the type has
+    none)."""
     src = tree.show("tools/lib/bpf/libbpf.c")
     secs = {}
-    for m in re.finditer(r'SEC_DEF\("([^"]+)",\s*(\w+),', src):
-        secs.setdefault("BPF_PROG_TYPE_" + m.group(2), []).append(m.group(1))
+    for m in re.finditer(r'SEC_DEF\("([^"]+)",\s*(\w+),\s*(\w+),', src):
+        attach = None if m.group(3) == "0" else m.group(3)
+        secs.setdefault("BPF_PROG_TYPE_" + m.group(2), []).append((m.group(1), attach))
     return secs
 
 
@@ -373,6 +378,8 @@ def parse_defines(src, prefix_re):
 def parse_values(tree, bpf_h):
     values = []
     values += parse_enum(bpf_h, "xdp_action")
+    # the attach types, which the sections name and the loader passes
+    values += parse_enum(bpf_h, "bpf_attach_type")
     values += parse_defines(tree.show("include/uapi/linux/pkt_cls.h"), r"TC_ACT_\w+")
     in_h = tree.show("include/uapi/linux/in.h")
     for m in re.finditer(r"^\s*(IPPROTO_\w+)\s*=\s*(\d+)", in_h, re.M):
@@ -465,7 +472,7 @@ def emit(side, name):
            for f in side["protoFns"]]
     out.append(f"def {name}.protoFns : List ProtoFn := {llist(fns, 2)}\n")
     pts = [f"{{ name := {lstr(t['name'])}, id := {t['id']}, protoFn := {lopt(t['protoFn'])}, "
-           f"ctx := {lopt(t['ctx'])},\n    sections := [{', '.join(lstr(s) for s in t['sections'])}], "
+           f"ctx := {lopt(t['ctx'])},\n    sections := [{', '.join(f'({lstr(s)}, {lopt(at)})' for s, at in t['sections'])}], "
            f"kfuncSets := [{', '.join(lstr(s) for s in t['kfuncSets'])}] }}"
            for t in side["progTypes"]]
     out.append(f"def {name}.progTypes : List ProgType := {llist(pts, 2)}\n")

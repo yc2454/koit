@@ -97,6 +97,7 @@ partial def typeOf (K : WfCtx) (Γ : Γ) (expected : Option Ty) : Expr → W Ty
       | some cf =>
         match cf.ty with
         | .int _ s w => return .int s w
+        | .be _ w => return .int false w
         | _ => wfErr s!"the context field `{f}` is not an integer"
       | none => wfErr s!"the context has no field `{f}`"
     | none => wfErr "`ctx` outside a program"
@@ -214,11 +215,15 @@ partial def wfStmt (K : WfCtx) (Γ : Γ) (s : Stmt) : W Koit.LIR.Γ := do
       match decl.ctx.find? (·.name == f) with
       | some cf =>
         unless cf.writable do wfErr s!"the context field `{f}` is read-only"
-        match cf.ty with
-        | .int _ s w =>
+        let w? : Option (Bool × Nat) := match cf.ty with
+          | .int _ s w => some (s, w)
+          | .be _ w => some (false, w)
+          | _ => none
+        match w? with
+        | some (s, w) =>
           let t ← typeOf K Γ (some (.int s w)) e
           unless t == .int s w do wfErr s!"`ctx {f} <- ...` of a `{t.print}`"
-        | _ => wfErr s!"the context field `{f}` is not an integer"
+        | none => wfErr s!"the context field `{f}` is not an integer"
       | none => wfErr s!"the context has no field `{f}`"
     | none => wfErr "`ctx` outside a program"
     return Γ

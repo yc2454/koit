@@ -1,0 +1,9 @@
+// expect: is not writable in a `cgroup_skb_ingress` program
+// selftest: verifier/ctx_skb.c write gso_segs from CGROUP_SKB (T3156; T3160 gso_size, T3165 hwtstamp; rule 04.09, master fe2ec83)
+// A cgroup skb program writes `cb`, `mark`, `priority`, and `tstamp`
+// and nothing else. The tests write fields koit's kind does not
+// declare; `protocol` is declared and read-only.
+program p : cgroup_skb_ingress {
+  ctx.protocol = 8
+  pass
+}

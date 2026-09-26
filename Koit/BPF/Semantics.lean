@@ -127,7 +127,7 @@ def endian (X : Env ρ τ) (m : State ρ) (to : Endian) (w : Nat) (d : ρ) : Ste
 
 /-- The width of a context field's type. -/
 def ctxWidth : Core.Ty → Nat
-  | .int _ _ w => w
+  | .int _ _ w | .be _ w => w
   | _ => 0
 
 /-- A load of `w` bits from the context at `eff`: a field's declaration

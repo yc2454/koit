@@ -232,6 +232,7 @@ def typeOf (e : LIR.Expr) : FM LIR.Ty := do
     match (← get).kind.ctx.find? (·.name == f) with
     | some cf => match cf.ty with
       | .int _ s w => return .int s w
+      | .be _ w => return .int false w
       | _ => ferr s!"the context field `{f}` is not an integer"
     | none => ferr s!"the context has no field `{f}`"
   | .addr _ => return .ptr
@@ -240,7 +241,7 @@ def typeOf (e : LIR.Expr) : FM LIR.Ty := do
 def ctxField (f : String) : FM (Nat × Nat) := do
   match (← get).kind.ctx.find? (·.name == f) with
   | some cf => match cf.ty with
-    | .int _ _ w => return (cf.offset, w)
+    | .int _ _ w | .be _ w => return (cf.offset, w)
     | _ => ferr s!"the context field `{f}` is not an integer"
   | none => ferr s!"the context has no field `{f}`"
 

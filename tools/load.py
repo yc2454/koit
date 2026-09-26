@@ -83,13 +83,15 @@ def attr_map_elem(fd, key_buf, value_buf, flags=0):
     return struct.pack("<IIQQQ", fd, 0, u64_of(key_buf), u64_of(value_buf), flags)
 
 
-def attr_prog_load(prog_type, insns_buf, insn_cnt, license_buf, log_buf, name):
+def attr_prog_load(prog_type, insns_buf, insn_cnt, license_buf, log_buf, name, attach_type=0):
     # struct { __u32 prog_type; __u32 insn_cnt; __u64 insns; __u64 license;
     #          __u32 log_level; __u32 log_size; __u64 log_buf; __u32 kern_version;
     #          __u32 prog_flags; char prog_name[16]; __u32 prog_ifindex;
     #          __u32 expected_attach_type; ... }
+    # the attach type is the one the kind's section fixes, which the
+    # verifier reads for the result's range and the context table
     return struct.pack("<IIQQIIQII16sII", prog_type, insn_cnt, u64_of(insns_buf), u64_of(license_buf),
-                       1, len(log_buf), u64_of(log_buf), 0, 0, name.encode()[:15], 0, 0)
+                       1, len(log_buf), u64_of(log_buf), 0, 0, name.encode()[:15], 0, attach_type)
 
 
 def attr_test_run(prog_fd, data_in, data_out, ctx_in, ctx_out):
@@ -254,7 +256,8 @@ def load_program(unit, p, map_fds, kfunc_ids, log_dir):
     lic = ctypes.create_string_buffer(unit.license.encode() + b"\0")
     log = ctypes.create_string_buffer(1 << 22)
     try:
-        fd, _ = bpf(BPF_PROG_LOAD, attr_prog_load(p["prog_type_id"], ib, len(words), lic, log, p["name"]))
+        fd, _ = bpf(BPF_PROG_LOAD, attr_prog_load(p["prog_type_id"], ib, len(words), lic, log, p["name"],
+                                                  p.get("attach_id", 0)))
         err = None
     except OSError as e:
         fd, err = None, e

@@ -1,0 +1,14 @@
+// selftest: verifier/wide_access.c (T3371, T3372, rule 06.17, master fe2ec83)
+// The kernel admits an 8-byte access to `user_ip6` and `msg_src_ip6`
+// only at an aligned pair inside the array. In koit the arrays are
+// named by element, each a `be32`, so the wide access is unwritable;
+// this is the element access the tests' accepting halves make, with
+// the message source rewritten from the destination in a UDP6
+// sendmsg hook.
+program p : cgroup_sendmsg6 {
+  ctx.msg_src_ip6[0] = ctx.user_ip6[0]
+  ctx.msg_src_ip6[1] = ctx.user_ip6[1]
+  ctx.msg_src_ip6[2] = ctx.user_ip6[2]
+  ctx.msg_src_ip6[3] = ctx.user_ip6[3]
+  return ALLOW
+}

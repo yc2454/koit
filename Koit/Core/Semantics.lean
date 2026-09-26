@@ -211,6 +211,12 @@ inductive EvalPlace (K : Kernel) : State → Place → Res PlaceRef → State �
       EvalPlace K st (.var s x) (.ok (.mem l)) st
   | ctx {st s p f} :
       p = .var s "ctx" → EvalPlace K st (.field s p f) (.ok (.ctx f)) st
+  /-- An element of an array context field at a constant index is the
+  context field of that element, `user_ip6[2]`, which the kind's
+  declaration lists; the index is constant by typing. -/
+  | ctxElem {st s s' s'' p f k txt} :
+      p = .var s'' "ctx" →
+      EvalPlace K st (.index s (.field s' p f) (.lit s k txt)) (.ok (.ctx s!"{f}[{k}]")) st
   | field {st s p f l o ft st1} :
       p ≠ .var s "ctx" → EvalPlace K st p (.ok (.mem l)) st1 →
       prim (fieldOf l.ty f) st1 = .ok ((o, ft), st1) →

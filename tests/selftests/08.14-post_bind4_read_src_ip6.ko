@@ -1,0 +1,8 @@
+// expect: not an array field of the context
+// selftest: progs/verifier_sock.c post_bind4_read_src_ip6 (T2342; T2344 post_bind6_read_src_ip4; rule 08.14, master fe2ec83)
+// The bound address is readable in the family of the hook only: no
+// `src_ip6` after bind4, no `src_ip4` after bind6.
+program p : cgroup_post_bind4 {
+  let a = ctx.src_ip6[0]
+  return ALLOW
+}

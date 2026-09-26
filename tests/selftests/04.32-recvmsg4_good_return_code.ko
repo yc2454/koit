@@ -1,0 +1,13 @@
+// selftest: progs/verifier_sock_addr.c recvmsg4_good_return_code (T2352; T2354 recvmsg6, T2367 T2369 getpeername4/6, T2373 T2375 getsockname4/6; rule 04.32, master fe2ec83)
+// The accepting side: the hook rewrites the address the process will
+// see and allows, its only verdict.
+map real : array[1] of { ip: be32, port: u32 }
+
+program p : cgroup_recvmsg4 {
+  let r = real[0]
+  if ctx.user_port == r.port {
+    ctx.user_ip4 = r.ip
+    ctx.user_port = 0x5000
+  }
+  return ALLOW
+}

@@ -524,8 +524,10 @@ load of a `where` field, with the declaration's constants as the predicate.
 
 Stage 1 has two declarations, `XdpAction` for `enum xdp_action` and
 `TcAction` for the `TC_ACT_` constants, which are the verdict types of
-section 13. The extensions add the protocol and flag enumerations the
-calls take.
+section 13; the cgroup kinds add `SkbVerdict`, `EgressVerdict`,
+`CgroupVerdict`, `BindVerdict`, and `AllowOnly`, whose constants are
+values the kernel never names (decision 70). The extensions add the
+protocol and flag enumerations the calls take.
 
 **Arrays.** `T[n]` for constant `n`. Indexing carries the obligation
 `i < n` on an unsigned index.
@@ -1210,6 +1212,31 @@ and writability are their koit side, offsets their kernel side
 | `xdp` | `rw` | `ingress_ifindex: u32`, `rx_queue_index: u32` | `ABORTED DROP PASS TX REDIRECT` | `abort drop pass tx` | `abort` | no |
 | `tc` | `rw` | `mark: u32` writable, `priority: u32`, `ifindex: u32` | `OK SHOT UNSPEC PIPE REDIRECT` | `pass` = OK, `drop` = SHOT | `drop` | no |
 | `syscall` | none | opaque | `i32` | none | `-1` | yes |
+| `cgroup_skb_ingress`, `cgroup_skb_egress` | `ro` | `len`, `mark` writable, `priority` writable, `protocol`, `ifindex`, `family`, `remote_ip4: be32`, `local_ip4: be32`, `remote_ip6: be32[4]`, `local_ip6: be32[4]`, `remote_port`, `local_port` | `DROP PASS`; egress also `DROP_CN PASS_CN` | `pass drop` | `drop` | no |
+| `cgroup_sock_create`, `cgroup_sock_release` | none | `family`, `type`, `protocol`, `bound_dev_if` writable, `mark` writable, `priority` writable | `REJECT ALLOW` | none | `REJECT` | no |
+| `cgroup_post_bind4`, `cgroup_post_bind6` | none | `family`, `type`, `protocol`, `src_ip4: be32` or `src_ip6: be32[4]`, `src_port` | `REJECT ALLOW` | none | `REJECT` | no |
+| `cgroup_bind4`, `cgroup_bind6` | none | `user_family`, `user_ip4: be32` or `user_ip6: be32[4]` writable, `user_port` writable, `family`, `type`, `protocol` | `REJECT ALLOW ALLOW_PRIVILEGED_PORT` | none | `REJECT` | no |
+| `cgroup_connect4`, `cgroup_connect6`, `cgroup_sendmsg4`, `cgroup_sendmsg6` | none | as `bind`; `sendmsg` also `msg_src_ip4: be32` or `msg_src_ip6: be32[4]` writable | `REJECT ALLOW` | none | `REJECT` | no |
+| `cgroup_recvmsg4`, `cgroup_recvmsg6`, `cgroup_getpeername4`, `cgroup_getpeername6`, `cgroup_getsockname4`, `cgroup_getsockname6` | none | as `bind` | `ALLOW` | none | `ALLOW` | no |
+
+The cgroup kinds are one kind per hook (decision 70). The kernel fixes
+the result's range and the context table by the expected attach type,
+which libbpf derives from the section name and the kind's declaration
+carries as its `attach` clause, so a hook is a kind in the sense this
+section already gives `fentry.s`: a declaration of its own over the
+kernel's shared context struct. Their verdicts are values the kernel
+never names, given as numbers in the declaration and checked by the
+build against the range the verifier enforces for the hook; likewise
+every context field against what the hook admits, read and written. A
+context field may be an array of integers, `user_ip6: be32[4]`, named
+by element with a constant index, `ctx.user_ip6[2]`, since the kernel
+admits no variable offset into the context; the declaration is one
+field per element. The socket kinds have no `pass` or `drop`: nothing
+is dropped there, a rejected `connect` fails with `EPERM`, so they
+write `return ALLOW` and `return REJECT`. The `recvmsg`, `getpeername`,
+and `getsockname` hooks run after the operation and cannot reject it:
+their only verdict is `ALLOW`, and a failure there leaves the address
+as the kernel had it, which is what the C programs do too.
 
 A context field's declaration carries, besides its name, type, and
 writability, its offset in the kernel's layout, which the lowering and
@@ -1253,10 +1280,12 @@ range, and an empty held set; the extensions define those declarations.
 
 Verdict statements and `return` end the program, releasing held resources on
 the way, and a taken `tail` ends it with the callee's verdict (section 10). A
-`syscall` body may also fall off its end, which returns 0; the body of a packet
-kind must end in an exit, as a handler must. The verdict type of a kind is an
+`syscall` body may also fall off its end, which returns 0; the body of a kind
+with named verdicts must end in an exit, as a handler must, since 0 is no
+verdict of the allow-only hooks. The verdict type of a kind is an
 enumeration type (section 7) whose constants are the kind's verdicts:
-`XdpAction` for `xdp`, `TcAction` for `tc`. Inside a program the alias
+`XdpAction` for `xdp`, `TcAction` for `tc`, `SkbVerdict`, `EgressVerdict`,
+`CgroupVerdict`, `BindVerdict`, and `AllowOnly` for the cgroup kinds. Inside a program the alias
 `verdict` names the enclosing kind's type, so in an `xdp` body `verdict` and
 `XdpAction` are one type; a function has no kind and names the declaration. A
 `syscall` program has no such declaration, since its result is `i32` with no
@@ -2612,6 +2641,23 @@ session 8:
     protocol, control, and the verifier relationship keep koit's own
     words. Code identifiers are unchanged (`meet`, `meetK`, `demand`),
     as are diagnostics, since neither cites this document.
+70. Cgroup and socket kinds (2026-09-26). The attach target is the
+    kind: one declaration per hook of `cgroup_skb`, `cgroup/sock`, and
+    `cgroup/sock_addr`, sixteen in all, over the kernel's shared
+    context struct, each with the verdicts, context fields, and
+    writability the verifier enforces for that hook, and an `attach`
+    clause the kernel side transcribes from libbpf's section table. A
+    verdict may be a bare value, since the kernel names none of these;
+    the build checks each against the hook's range and each context
+    field against the hook's access table, both transcribed by hand
+    from the verifier's code. Context fields may be arrays of integers
+    named by element with a constant index. The `pass` and `drop`
+    sugar stays with the packet kinds; the socket kinds write their
+    verdicts by name; the allow-only hooks have `ALLOW` alone, and a
+    body with named verdicts must end in an exit. `sock_ops`, `sk_msg`,
+    and `sk_skb` wait for the sockhash and sockmap kinds; `ctx.sk`,
+    `cb`, `tstamp`, the Unix hooks, and cgroup storage are deferred
+    (ISSUES entry 56).
 
 Open questions, with the default the checker implements until decided:
 

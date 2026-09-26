@@ -1,0 +1,15 @@
+// expect: writes the packet, and the packet of a `cgroup_skb_egress` program may only be read
+// selftest: progs/verifier_lwt.c packet_write_for_lwt_out (T1923; rule 04.24, master fe2ec83)
+// The same store through a function's view parameter: inside the
+// function it is an effect of the parameter, and the program that
+// passes its view is refused where the kind's `pkt ro` clause is
+// known. lwt_out, written as cgroup_skb egress.
+type Eth = { dst: u8[6], src: u8[6], proto: be16 }
+
+fn stamp(h: view Eth) { h.proto = h.proto }
+
+program p : cgroup_skb_egress {
+  let h = pkt.view<Eth>(0)?
+  stamp(h)
+  pass
+}

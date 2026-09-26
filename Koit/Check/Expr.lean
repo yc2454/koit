@@ -460,9 +460,30 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
         if decl.ctx.isEmpty then
           err s s!"the context of {article decl.name} `{decl.name}` program is \
             opaque"
+        -- an array field is one declaration per element
+        if decl.ctx.any (·.name.startsWith s!"{f}[") then
+          err s s!"`ctx.{f}` is an array: name an element with a constant \
+            index, `ctx.{f}[0]`"
         err s s!"the context of {article decl.name} `{decl.name}` program has no \
           field `{f}`; the fields are \
           {", ".intercalate (decl.ctx.map (·.name))}"
+  -- an element of an array context field, `ctx.user_ip6[2]`: the
+  -- declaration `user_ip6[2]`, since the kernel admits no variable
+  -- offset into the context
+  | .index s (.field _ (.var _ "ctx") f) i =>
+    match env.kind with
+    | none => err s "`ctx` is available only in a program body"
+    | some decl =>
+      let elems := decl.ctx.filter (·.name.startsWith s!"{f}[")
+      if elems.isEmpty then
+        err s s!"`ctx.{f}` is not an array field of the context"
+      match i with
+      | .lit _ k _ =>
+        match decl.ctx.find? (·.name == s!"{f}[{k}]") with
+        | some cf => return { ty := cf.ty, mutable := cf.writable, origin := .ctx }
+        | none => err s s!"`ctx.{f}` has {elems.length} elements; {k} is not one"
+      | _ => err s s!"the index into `ctx.{f}` must be a constant: the kernel \
+          admits no variable offset into the context"
   | .field s q f =>
     let info ← placeTy env K q
     match ← env.norm info.ty with
@@ -558,6 +579,8 @@ partial def viewOffsetDemand (env : Env) (K : Ctx) (span : Span) (off : Expr)
 partial def placeDemands (env : Env) (K : Ctx) (p : Place) : M Unit := do
   match p with
   | .field _ q _ => placeDemands env K q
+  -- a context array's index is a constant, checked by its type
+  | .index _ (.field _ (.var _ "ctx") _) _ => pure ()
   | .index s q i =>
     placeDemands env K q
     let info ← placeTy env K q

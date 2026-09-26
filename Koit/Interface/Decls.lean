@@ -83,6 +83,11 @@ structure KindDecl where
   progType : String := ""
   /-- The libbpf section name the lowering emits. -/
   section_ : String
+  /-- The expected attach type the section fixes, by the kernel's name
+  and value, for the kinds whose program type serves several hooks:
+  `("BPF_CGROUP_INET4_CONNECT", 4)`. libbpf derives it from the
+  section; the system-call loader passes it. -/
+  attach : Option (String × Nat) := none
   /-- Whether the packet region exists, so `pkt` is in scope. -/
   hasPkt  : Bool
   /-- The verdict type: `u32` restricted to `verdicts` for packet
@@ -403,17 +408,28 @@ structure EnumSpec where
   width  : Nat
   deriving Repr, Inhabited
 
+/-- Where a verdict's number comes from: a constant of the kernel's,
+`XDP_PASS`, resolved through the kernel side, or a bare value, for
+the hooks whose verdicts the kernel never names (0 rejects and 1
+allows a `connect`). -/
+inductive VerdictRef where
+  | kernel (name : String)
+  | value (v : Int)
+  deriving Repr, Inhabited
+
 /-- A program kind: the kernel's program type it corresponds to, the
 section name chosen among those libbpf maps to that type, and the
-verdicts as pairs of koit's name and the kernel's value name, whose
-numbers the kernel side supplies. -/
+verdicts as pairs of koit's name and where the number comes from.
+A context field may be typed as an array of integers, `be32[4]`; the
+join lays it out as one field per element, `user_ip6[0]` to
+`user_ip6[3]`, which the source names with a constant index. -/
 structure KindSpec where
   name      : String
   progType  : String
   section_  : String
   hasPkt    : Bool
   verdictTy : Ty
-  verdicts  : List (String × String)
+  verdicts  : List (String × VerdictRef)
   /-- The enumeration the verdicts form, when the kind has named
   ones; `syscall`, whose result is a bare `i32`, has none. -/
   verdictEnum : Option EnumSpec := none

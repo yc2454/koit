@@ -1,0 +1,8 @@
+// selftest: progs/verifier_cgroup_inv_retcode.c with_invalid_return_code_test4 (T1168; T1166 test2; rule 06.27, master fe2ec83)
+// The accepting side: a socket-creation hook marks the socket and
+// allows.
+program p : cgroup_sock_create {
+  ctx.mark = 7
+  ctx.priority = 2
+  return ALLOW
+}

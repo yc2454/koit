@@ -1,0 +1,13 @@
+// expect: whose packet may only be read
+// selftest: progs/verifier_lwt.c packet_write_for_lwt_in (T1922; T1923 lwt_out; rule 04.24, master fe2ec83)
+// A store through the packet in a kind whose packet is read-only. The
+// lwt kinds are not in koit; cgroup skb has the same `pkt ro` clause,
+// and the store into a view is a type error there (cause 13 in the
+// machine).
+type Eth = { dst: u8[6], src: u8[6], proto: be16 }
+
+program p : cgroup_skb_ingress {
+  let h = pkt.view<Eth>(0)?
+  h.proto = h.proto
+  pass
+}

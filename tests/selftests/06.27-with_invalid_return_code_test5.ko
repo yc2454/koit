@@ -1,0 +1,8 @@
+// expect: expected `CgroupVerdict`, found `u32`
+// selftest: progs/verifier_cgroup_inv_retcode.c with_invalid_return_code_test5 (T1169; T1171 test7, T1165 test1, T1167 test3; rule 06.27, master fe2ec83)
+// A cgroup/sock program returns in [0, 1]. Test 5 returns 2, tests 1
+// and 3 the context's first word masked to a range wider than [0, 1];
+// in koit a context field is a `u32` and not a verdict.
+program p : cgroup_sock_create {
+  return ctx.family
+}

@@ -53,9 +53,20 @@ structure ProgType where
   id       : Nat
   protoFn  : Option String
   ctx      : Option String
-  sections : List String
+  /-- The section names libbpf maps to the type, each with the
+  expected attach type the loader passes for it, when the type has
+  one: `("cgroup/connect4", some "BPF_CGROUP_INET4_CONNECT")`. -/
+  sections : List (String × Option String)
   kfuncSets : List String
   deriving Repr, BEq, Inhabited
+
+/-- Whether libbpf maps the section to the type. -/
+def ProgType.hasSection (pt : ProgType) (sec : String) : Bool :=
+  pt.sections.any (·.1 == sec)
+
+/-- The attach type libbpf gives the section, when it has one. -/
+def ProgType.attachOf (pt : ProgType) (sec : String) : Option String :=
+  (pt.sections.find? (·.1 == sec)).bind (·.2)
 
 /-- One kfunc of a `BTF_ID_FLAGS` set, with its flags and the C
 prototype of its definition where one was found. -/

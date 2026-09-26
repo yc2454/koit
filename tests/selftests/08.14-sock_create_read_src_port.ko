@@ -1,0 +1,8 @@
+// expect: has no field `src_port`
+// selftest: progs/verifier_sock.c sock_create_read_src_port (T2345, rule 08.14, master fe2ec83)
+// The bound port exists only after bind; at socket creation the kind's
+// context has no such field.
+program p : cgroup_sock_create {
+  let sp = ctx.src_port
+  return ALLOW
+}

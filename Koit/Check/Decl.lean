@@ -540,10 +540,21 @@ def checkProgram (env : Env) (p : Program) : M (Caps × Effs) := do
   let K : Ctx := { mayFail := true, ret := .program decl.verdictTy,
                    verdictSet := vset, preserved := p.preserved }
   let (F, Eb) ← checkStmts env K p.body
-  if decl.hasPkt && !exits p.body then
+  -- a body that falls off its end returns 0, which only a kind with a
+  -- bare integer result admits: a named verdict must be returned
+  if !decl.verdicts.isEmpty && !exits p.body then
     err p.span s!"the body of {article decl.name} `{decl.name}` program must end \
       in an exit"
-  return (caps ++ F.caps, E.union Eb)
+  let all := E.union Eb
+  -- the packet of a kind whose `pkt` clause is `ro` is never written,
+  -- through a function's view parameter or a builtin either
+  if decl.hasPkt && !decl.pktWritable then
+    if all.effs.any (fun e => match e with
+        | .pkt .. | .pktAll | .resize => true
+        | _ => false) then
+      err p.span s!"`{p.name}` writes the packet, and the packet of \
+        {article decl.name} `{decl.name}` program may only be read"
+  return (caps ++ F.caps, all)
 
 /-- Unit-level names: types in one namespace, values in another,
 programs and contracts in a third. -/

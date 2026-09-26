@@ -75,8 +75,15 @@ def KindDecl.doc (k : KindDecl) : String :=
   let sugar := match k.sugar with
     | [] => []
     | ss => [s!"sugar \{ {", ".intercalate (ss.map fun (s, v) => s!"{s} = {v}")} }"]
-  let head := s!"kind {k.name} : section \"{k.section_}\", pkt {pkt}, {verdicts},"
-  let tail := ["default " ++ dflt] ++ (if k.sleep then ["sleepable"] else []) ++ sugar
+  let attach := match k.attach with
+    | some (a, _) => [s!"attach {a}"]
+    | none => []
+  -- the verdicts stay on the head line when it fits in eighty columns
+  let head0 := s!"kind {k.name} : section \"{k.section_}\", pkt {pkt},"
+  let (head, rest) :=
+    if head0.length + verdicts.length + 2 ≤ 80 then (s!"{head0} {verdicts},", [])
+    else (head0, [verdicts])
+  let tail := rest ++ ["default " ++ dflt] ++ attach ++ (if k.sleep then ["sleepable"] else []) ++ sugar
   let ctx := if k.ctx.isEmpty then ["  ctx opaque"] else
     let w := k.ctx.foldl (fun m f => max m f.name.length) 0
     k.ctx.map fun f =>

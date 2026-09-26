@@ -1,4 +1,4 @@
-// pending: cgroup kinds
+// pending: cgroup storage
 // selftest: prog_tests/tailcalls.c tailcall_cgrp_storage (T3716 T3717 T3718, rule 06.25, master fe2ec83)
 // Programs sharing a program array must agree on kind, sleepability,
 // and the cgroup storage they use. In koit the array declares its

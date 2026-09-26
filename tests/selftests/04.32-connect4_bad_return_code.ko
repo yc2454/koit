@@ -1,0 +1,8 @@
+// expect: expected `CgroupVerdict`, found `u64`
+// selftest: progs/verifier_sock_addr.c connect4_bad_return_code (T2391; T2360 T2363 sendmsg4/6; rule 04.32, master fe2ec83)
+// `return 2` from a connect hook, whose range is [0, 1]. A verdict
+// type is an enumeration, so an integer is not one without the
+// coercion, and the coercion tests it against the kind's constants.
+program p : cgroup_connect4 {
+  return 2
+}
