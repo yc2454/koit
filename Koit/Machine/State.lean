@@ -76,6 +76,11 @@ structure MapState where
   nextEntry : Nat := 0
   /-- A program array's entries: the program at each slot. -/
   progs     : List (Nat × String) := []
+  /-- The byte ranges of the value's slot fields, offset and size: a
+  spin lock, and in the extensions timers, graph roots, and kernel
+  pointers. The kernel reaches them only through their operations, so
+  a plain load or store of their bytes is refused. -/
+  slotFields : List (Nat × Nat) := []
   deriving Inhabited
 
 /-! ### The protocol state and the trace -/

@@ -86,7 +86,7 @@ private def bir (code : List (Instr VReg Label)) (labels : List (Nat × Nat) := 
     regs := [(.v 0, .location), (.v 1, .location), (.v 2, .location), (.v 3, .scalar),
              (.v 4, .scalar)] }
 
-private def xdp : Interface.KindRow := (Interface.v6_8.kind? "xdp").get!
+private def xdp : Interface.KindDecl := (Interface.v6_8.kind? "xdp").get!
 
 private def l3 (B : BIR) : List String :=
   (L3.run { pre := Interface.v6_8, kind := xdp, B }).1

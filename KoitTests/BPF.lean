@@ -21,7 +21,10 @@ private instance : BEq (Except String Nat) where
     | .error x, .error y => x == y
     | _, _ => false
 
-private def xdp : Interface.KindRow := (Interface.v6_8.kind? "xdp").get!
+private def xdp : Interface.KindDecl := (Interface.v6_8.kind? "xdp").get!
+
+/-- The same kind with a packet the program may only read. -/
+private def roPkt : Interface.KindDecl := { xdp with pktWritable := false }
 
 /-- A one-slot array map of a 16-byte value, as the runs need one. -/
 private def counters : Machine.MapState :=
@@ -39,8 +42,32 @@ private def table : Machine.MapState :=
   { decl, valueTy := .int Interface.noSpan false 64, valueSize := 8,
     keyTy := some (.int Interface.noSpan false 32), keySize := 4, capacity := 4 }
 
+/-- One-slot arrays of an 8-byte value the program may only read, and
+only write. -/
+private def rodata : Machine.MapState :=
+  let decl : Core.MapDecl :=
+    { span := Interface.noSpan, name := "rodata", access := .ro,
+      kind := .array (.lit Interface.noSpan 1 "1") (.int Interface.noSpan false 64) }
+  { decl, valueTy := .int Interface.noSpan false 64, valueSize := 8, capacity := 1 }
+
+private def wonly : Machine.MapState :=
+  let decl : Core.MapDecl :=
+    { span := Interface.noSpan, name := "wonly", access := .wo,
+      kind := .array (.lit Interface.noSpan 1 "1") (.int Interface.noSpan false 64) }
+  { decl, valueTy := .int Interface.noSpan false 64, valueSize := 8, capacity := 1 }
+
+/-- A one-slot array whose 16-byte value holds a 4-byte spin lock at
+offset 0 and a counter at 8. -/
+private def locked : Machine.MapState :=
+  let decl : Core.MapDecl :=
+    { span := Interface.noSpan, name := "locked",
+      kind := .array (.lit Interface.noSpan 1 "1") (.int Interface.noSpan false 64) }
+  { decl, valueTy := .int Interface.noSpan false 64, valueSize := 16, capacity := 1,
+    slotFields := [(0, 4)] }
+
 private def shared (packet : List UInt8 := []) : Machine.State :=
-  { maps := [("counters", counters), ("table", table)],
+  { maps := [("counters", counters), ("table", table), ("rodata", rodata),
+             ("wonly", wonly), ("locked", locked)],
     packet := ByteArray.mk packet.toArray }
 
 private def sizeOf : Core.Ty → Option Nat
@@ -48,8 +75,8 @@ private def sizeOf : Core.Ty → Option Nat
   | _ => none
 
 private def birEnv (code : List (Instr VReg Label)) (labels : List (Nat × Nat) := [])
-    (objects : List FrameObj := []) : Env VReg Label :=
-  { pre := Interface.v6_8, kind := xdp, conv := birConv, sizeOf,
+    (objects : List FrameObj := []) (kind : Interface.KindDecl := xdp) : Env VReg Label :=
+  { pre := Interface.v6_8, kind, conv := birConv, sizeOf,
     prog := { name := "t", kind := "xdp", code := code.toArray, labels, objects } }
 
 private def bcEnv (code : List (Instr Reg Int)) : Env Reg Int :=
@@ -222,6 +249,70 @@ private def v (n : Nat) : VReg := .v n
    .atomic .add .w64 true (v 0) 0 (v 1), .mov .w64 .ret (.reg (v 1)), .exit]) with
   | .ok (10, st) => st.bytesAt (.map "counters" 0) 0 8 == Machine.leBytes 15 8
   | _ => false
+
+/-! ### Read-only regions, the read-only packet, frames, and slots -/
+
+-- a store into a map the program may only read is refused; a load
+-- is admitted
+#guard match verdictB (birEnv
+  [.mapval (v 0) "rodata" 0, .stx 64 (v 0) 0 (.imm 1), .exit]) with
+  | .error m => m.endsWith "which the program may only read"
+  | .ok _ => false
+#guard verdictB (birEnv [.mapval (v 0) "rodata" 0, .ldx 64 .ret (v 0) 0, .exit]) == .ok 0
+-- a load from a map the program may only write is refused; a store
+-- is admitted
+#guard match verdictB (birEnv
+  [.mapval (v 0) "wonly" 0, .ldx 64 .ret (v 0) 0, .exit]) with
+  | .error m => m.endsWith "which the program may only write"
+  | .ok _ => false
+#guard verdictB (birEnv
+  [.mapval (v 0) "wonly" 0, .stx 64 (v 0) 0 (.imm 1), .mov .w64 .ret (.imm 2), .exit]) == .ok 2
+-- `update` on a map the program may only read is refused
+#guard match verdictB (birEnv
+  [.lea (v 0) "k", .stx 32 (v 0) 0 (.imm 0), .lea (v 3) "val", .stx 64 (v 3) 0 (.imm 9),
+   .mapref (v 1) "rodata", .call (.builtin .update) [v 1, v 0, v 3] (some (v 4)), .exit]
+  [] [{ name := "k", size := 8, base := -8 }, { name := "val", size := 8, base := -16 }]) with
+  | .error m => m.endsWith "which the program may only read"
+  | .ok _ => false
+-- a store through the packet in a kind that may only read it is
+-- refused; the same store in xdp is admitted
+#guard match verdictB (birEnv
+  [.ldx 32 (v 0) .ctx 0, .stx 8 (v 0) 0 (.imm 1), .exit] (kind := roPkt)) (shared [1, 2, 3]) with
+  | .error m => m.endsWith "may only read the packet"
+  | .ok _ => false
+#guard verdictB (birEnv
+  [.ldx 32 (v 0) .ctx 0, .stx 8 (v 0) 0 (.imm 7), .ldx 8 .ret (v 0) 0, .exit])
+  (shared [1, 2, 3]) == .ok 7
+-- a callee writes through the caller's frame location it received,
+-- and the caller reads the byte back after the return
+#guard verdictB (birEnv
+  [.callSub ⟨1⟩ [.fp] (some (v 0)), .ldx 32 .ret .fp (-4), .exit,
+   .arg (v 1) 0, .stx 32 (v 1) (-4) (.imm 5), .mov .w64 .ret (.imm 0), .exit] [(1, 3)]) == .ok 5
+-- the callee's own frame, reached through a location it spilled into
+-- the caller's frame, is refused after the return
+#guard match verdictB (birEnv
+  [.callSub ⟨1⟩ [.fp] (some (v 0)), .ldx 64 (v 2) .fp (-8), .ldx 32 .ret (v 2) (-4), .exit,
+   .arg (v 1) 0, .stx 64 (v 1) (-8) (.reg .fp), .mov .w64 .ret (.imm 0), .exit] [(1, 4)]) with
+  | .error m => (m.splitOn "a frame that has returned").length == 2
+  | .ok _ => false
+-- a load or store whose bytes touch the lock slot is refused, an
+-- access beside it admitted, and the lock's own operations reach it
+#guard match verdictB (birEnv [.mapval (v 0) "locked" 0, .ldx 32 .ret (v 0) 0, .exit]) with
+  | .error m => m.endsWith "overlaps a slot field"
+  | .ok _ => false
+#guard match verdictB (birEnv
+  [.mapval (v 0) "locked" 0, .stx 64 (v 0) 2 (.imm 1), .exit]) with
+  | .error m => m.endsWith "overlaps a slot field"
+  | .ok _ => false
+#guard match verdictB (birEnv
+  [.mapval (v 0) "locked" 0, .lddw (v 1) 1, .atomic .add .w32 false (v 0) 0 (v 1), .exit]) with
+  | .error m => m.endsWith "overlaps a slot field"
+  | .ok _ => false
+#guard verdictB (birEnv
+  [.mapval (v 0) "locked" 0, .stx 64 (v 0) 8 (.imm 6), .ldx 64 .ret (v 0) 8, .exit]) == .ok 6
+#guard verdictB (birEnv
+  [.mapval (v 0) "locked" 0, .call (.builtin .lock) [v 0] none,
+   .call (.builtin .unlock) [v 0] none, .mov .w64 .ret (.imm 3), .exit]) == .ok 3
 
 /-! ### The bytecode convention -/
 

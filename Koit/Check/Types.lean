@@ -119,6 +119,31 @@ partial def Env.layout (env : Env) (t : Ty) (fuel : Nat := 64) :
         expression"
   | t' => err t'.span s!"`{t.print}` has no size: it names a place, not data"
 
+/-- The byte ranges of the slot fields of a data type, offset and
+size, laid out as `layout` lays the type out: what the machine
+refuses a plain load or store of. -/
+partial def Env.slotRanges (env : Env) (t : Ty) (fuel : Nat := 64) :
+    M (List (Nat × Nat)) := do
+  if fuel == 0 then err t.span "type nesting too deep"
+  match ← env.norm t with
+  | .slot _ _ => return [(0, (← env.layout t).1)]
+  | .struct _ fields =>
+    let mut off := 0
+    let mut ranges : List (Nat × Nat) := []
+    for f in fields do
+      let (sz, al) ← env.layout f.ty (fuel - 1)
+      off := (off + al - 1) / al * al
+      ranges := ranges ++ (← env.slotRanges f.ty (fuel - 1)).map fun (o, n) => (off + o, n)
+      off := off + sz
+    return ranges
+  | .array _ elem n =>
+    let inner ← env.slotRanges elem (fuel - 1)
+    if inner.isEmpty then return []
+    let (sz, _) ← env.layout elem (fuel - 1)
+    let k := (env.evalConst n).getD 0
+    return (List.range k.toNat).flatMap fun i => inner.map fun (o, m) => (i * sz + o, m)
+  | _ => return []
+
 end
 
 /-- Why a type is not packet-representable, if it is not: a slot type,

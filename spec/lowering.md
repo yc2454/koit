@@ -117,11 +117,22 @@ the verifier's list. So the consequence of `proof-structure.md`
 section 3 reads: a well-typed program's bytecode never performs
 an access outside its region, through a stale packet pointer, or on
 an uninitialized slot, never leaks a pointer, never calls under a
-lock, never exits holding a resource, and never trips a context or
-argument rule, whatever the kernel verifier believes about it. What
-remains assumed is H1, the machine's faithfulness to the kernel,
-measured as `bir.md` section 9 and the `stuck` column of
+lock, never exits holding a resource, never trips a context or
+argument rule, never writes a read-only map or packet or reads a
+write-only map, never reaches a frame that has returned, and never
+touches the bytes of a slot, whatever the kernel verifier believes
+about it. What remains assumed is H1, the machine's faithfulness to
+the kernel, measured as `bir.md` section 9 and the `stuck` column of
 `verifier-rules.csv` say.
+
+The last four (causes 12 to 15 of `bir.md` 5.3, entry 55) are
+discharged where the others are: 12 and 13 by pass B, since the
+checker refuses the store and the load and B emits no access Core
+does not make; 14 by pass C, since a place never escapes its scope
+in Core and the flattening passes a frame location down a call only
+for the callee's duration; 15 by pass B, since Core never reads or
+writes a slot-typed field, reaching it only through the operations
+of its resource.
 
 ### 2.4 Composition
 

@@ -104,6 +104,20 @@ inductive Cause where
   | exitNotScalar
   /-- 11: a `pc` outside the code, or a jump to one. -/
   | pcOutOfCode (pc : Nat)
+  /-- 12: a store into a map the program may only read, a load from
+  one it may only write, or a builtin that writes such a map. -/
+  | readOnlyRegion (r : Region) (off : Int) (n : Nat)
+  | writeOnlyRegion (r : Region) (off : Int) (n : Nat)
+  | readOnlyMap (m : String) (op : String)
+  /-- 13: a store through the packet in a kind whose packet is
+  read-only. -/
+  | readOnlyPacket (off : Int) (n : Nat)
+  /-- 14: an access through a location into a frame that has been
+  popped. -/
+  | staleFrame (off : Int) (n : Nat)
+  /-- 15: a load or store whose bytes overlap a slot field of a map
+  value, which the kernel reaches only through the slot's operations. -/
+  | slotAccess (r : Region) (off : Int) (n : Nat) (write : Bool)
   /-- A step on a halted state. -/
   | halted
   /-- What well-formedness excludes: an unknown map, declaration, label, or
@@ -131,6 +145,13 @@ def Cause.describe : Cause → String
   | .exitHeld => "an exit while a resource is held"
   | .exitNotScalar => "an exit with a result that is not a scalar"
   | .pcOutOfCode pc => s!"the program counter {pc} is outside the code"
+  | .readOnlyRegion r off n => s!"a store of {n} bytes into {r.print} + {off}, which the program may only read"
+  | .writeOnlyRegion r off n => s!"a load of {n} bytes from {r.print} + {off}, which the program may only write"
+  | .readOnlyMap m op => s!"`{op}` on map {m}, which the program may only read"
+  | .readOnlyPacket off n => s!"a store of {n} bytes at pkt + {off}, and this kind may only read the packet"
+  | .staleFrame off n => s!"an access of {n} bytes at frame + {off} of a frame that has returned"
+  | .slotAccess r off n true => s!"a store of {n} bytes into {r.print} + {off} overlaps a slot field"
+  | .slotAccess r off n false => s!"a load of {n} bytes from {r.print} + {off} overlaps a slot field"
   | .halted => "the program has halted"
   | .malformed what => s!"a malformed program: {what}"
 
@@ -226,11 +247,14 @@ end Frame
 /-! ### The state -/
 
 /-- What a subprogram call saves: where to return, the caller's
-registers and frame, and the register its result goes to. -/
+registers and frame with its identity, and the register its result
+goes to. -/
 structure Saved (ρ : Type) where
   retPc : Nat
   regs  : ρ → Option Val
   frame : Frame
+  /-- The identity of the saved frame, which its locations carry. -/
+  id    : Nat
   dst   : Option ρ
 
 /-- The state of a run: the program counter, the registers, each
@@ -240,6 +264,12 @@ structure State (ρ : Type) where
   pc      : Nat := 0
   regs    : ρ → Option Val
   frame   : Frame := Frame.init
+  /-- The identity of the running frame, and the next one to hand
+  out: a frame location carries the identity of the frame it was
+  made in, as a packet location carries the layout token, so that an
+  access through one whose frame has returned is refused. -/
+  frameId   : Nat := 0
+  nextFrame : Nat := 1
   ctx     : List (String × Nat) := []
   machine : Machine.State := {}
   /-- The subprogram calls in progress, innermost first. -/
@@ -260,6 +290,18 @@ def clear (m : State ρ) (rs : List ρ) : State ρ :=
   { m with regs := fun r' => if rs.contains r' then none else m.regs r' }
 
 def held (m : State ρ) := m.machine.held
+
+/-- The live frame with identity `id`: the running one, or one saved
+by a call in progress, which a callee reaches through a location its
+caller passed; none when that frame has returned. -/
+def frameAt (m : State ρ) (id : Nat) : Option Frame :=
+  if id == m.frameId then some m.frame
+  else (m.frames.find? (·.id == id)).map (·.frame)
+
+/-- The live frame `id` replaced. -/
+def setFrameAt (m : State ρ) (id : Nat) (fr : Frame) : State ρ :=
+  if id == m.frameId then { m with frame := fr }
+  else { m with frames := m.frames.map fun s => if s.id == id then { s with frame := fr } else s }
 
 end State
 
@@ -326,7 +368,7 @@ def load [DecidableEq ρ] (X : Env ρ τ) (st : Machine.State) (ctx : List (Stri
   { pc := 0,
     regs := fun r =>
       if r = X.conv.ctx then some (.loc .ctx 0 st.layout)
-      else if r = X.conv.fp then some (.loc .frame 0 st.layout)
+      else if r = X.conv.fp then some (.loc .frame 0 0)
       else none,
     frame := Frame.init,
     ctx := X.kind.ctx.map fun f => (f.name, (ctx.lookup f.name).getD 0),

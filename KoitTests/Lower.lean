@@ -68,7 +68,9 @@ private def birRun (s : String) (packet : String) (ctx : List (String × Nat)) :
     | .ok c => pure c
   let lir ← Compile.lower Interface.v6_8 (Compile.fold Interface.v6_8 core checked)
   let lir := Compile.inline lir
-  let birs ← Compile.flatten Interface.v6_8 .v4 lir
+  let (birs, fmtMap) ← Compile.flatten Interface.v6_8 .v4 lir
+  -- the formats' map is part of the unit the machine runs
+  let core := Compile.withFormats core fmtMap
   let env : Env := { interface := Interface.v6_8, license := core.license.map (·.2),
                      types := core.types, consts := core.consts, configs := core.configs,
                      maps := core.maps, fns := core.fns, contracts := core.contracts }
@@ -93,7 +95,9 @@ private def bytecodeRun (s : String) (packet : String) (ctx : List (String × Na
     | .ok c => pure c
   let lir ← Compile.lower Interface.v6_8 (Compile.fold Interface.v6_8 core checked)
   let lir := Compile.inline lir
-  let birs ← Compile.flatten Interface.v6_8 .v4 lir
+  let (birs, fmtMap) ← Compile.flatten Interface.v6_8 .v4 lir
+  -- the formats' map is part of the unit the machine runs
+  let core := Compile.withFormats core fmtMap
   let env : Env := { interface := Interface.v6_8, license := core.license.map (·.2),
                      types := core.types, consts := core.consts, configs := core.configs,
                      maps := core.maps, fns := core.fns, contracts := core.contracts }

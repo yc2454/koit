@@ -40,6 +40,18 @@ def wrap (n : Nat) (phrases : List String) (sep : String := ", ") : List String 
                 else ls ++ [pad ++ t]
     | none => [pad ++ t]) []
 
+/-- A type declaration for the printout: as the source prints it when
+that fits in eighty columns, else a structure's fields wrapped, one
+group per line. -/
+def TypeDecl.doc (d : Core.TypeDecl) : String :=
+  let one := Core.TypeDecl.print d
+  match d.ty with
+  | .struct _ fields =>
+    if one.length ≤ 80 then one else
+    "\n".intercalate ([s!"type {d.name} = \{"] ++
+      wrap 4 (fields.map fun f => s!"{f.name}: {f.ty.print}") ++ ["}"])
+  | _ => one
+
 /-- A head line and its clauses, on one line when they fit in eighty
 clauses, else the clauses on a continuation line, and a trailing
 note likewise. -/
@@ -169,7 +181,7 @@ def doc (i : Interface) (kind? : Option String := none) : String :=
     section_ "enumerations"
       [("\n\n".intercalate ((sortByName (·.name) i.enums).map EnumDecl.doc))] ++
     section_ "constants" ((sortByName (·.name) i.consts).map ConstDecl.doc) ++
-    section_ "types" ((sortByName (·.name) i.types).map TypeDecl.print) ++
+    section_ "types" ((sortByName (·.name) i.types).map TypeDecl.doc) ++
     section_ s!"absent on {i.kernel}" missing) ++ "\n"
 
 end Koit.Interface

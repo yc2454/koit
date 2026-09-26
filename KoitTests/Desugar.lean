@@ -183,19 +183,20 @@ private def block (ls : List String) : Option String :=
     "program p : xdp on short_packet { drop } default { pass } { tx }" ==
   some ["short_packet: return DROP", "not_found: return PASS",
         "bad_value: return PASS", "failed_check: return PASS", "failed_call: return PASS",
-        "fail: return PASS"]
+        "fail: return PASS", "no_program: return PASS"]
 #guard handlersOf "program p : tc default { pass } { drop }" ==
   some ["short_packet: return OK", "not_found: return OK",
         "bad_value: return OK", "failed_check: return OK", "failed_call: return OK",
-        "fail: return OK"]
+        "fail: return OK", "no_program: return OK"]
 #guard handlersOf "program p : syscall { return 0 }" ==
   some ["short_packet: return 0 - 1", "not_found: return 0 - 1",
         "bad_value: return 0 - 1", "failed_check: return 0 - 1",
-        "failed_call: return 0 - 1", "fail: return 0 - 1"]
+        "failed_call: return 0 - 1", "fail: return 0 - 1", "no_program: return 0 - 1"]
 #guard handlersOf "program p : xdp { drop }" ==
   some ["short_packet: return ABORTED", "not_found: return ABORTED",
         "bad_value: return ABORTED", "failed_check: return ABORTED",
-        "failed_call: return ABORTED", "fail: return ABORTED"]
+        "failed_call: return ABORTED", "fail: return ABORTED",
+        "no_program: return ABORTED"]
 
 -- functions: the tail expression is the result; a trailing call in a
 -- resultless function is a statement

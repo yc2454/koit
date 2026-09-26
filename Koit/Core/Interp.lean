@@ -631,6 +631,10 @@ def initMaps (env : Env) (u : CompUnit) :
       match env.layout t with
       | .ok (n, _) => .ok n
       | .error e => .error s!"{e}"
+    let slotsOf (t : Ty) : Except String (List (Nat × Nat)) :=
+      match env.slotRanges t with
+      | .ok rs => .ok rs
+      | .error e => .error s!"{e}"
     let cap (e : Expr) : Except String Nat :=
       match env.evalConst e with
       | some v => .ok v.toNat
@@ -647,10 +651,11 @@ def initMaps (env : Env) (u : CompUnit) :
           | none => throw s!"the initializer of `{d.name}` is not constant"
         -- the compiler's bytes fill the one entry of a data map
         if !d.bytes.isEmpty then slots := [(0, ByteArray.mk d.bytes.toArray)]
-        pure { decl := d, valueTy := v, valueSize := size, capacity := ← cap n, slots }
+        pure { decl := d, valueTy := v, valueSize := size, capacity := ← cap n, slots,
+               slotFields := ← slotsOf v }
       | .hash n k v =>
         pure { decl := d, valueTy := v, valueSize := ← lay v, keyTy := some k,
-               keySize := ← lay k, capacity := ← cap n }
+               keySize := ← lay k, capacity := ← cap n, slotFields := ← slotsOf v }
       | .ringbuf n =>
         pure { decl := d, valueTy := .int d.span false 8, valueSize := 1,
                capacity := ← cap n }

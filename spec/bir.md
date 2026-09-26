@@ -68,8 +68,11 @@ scalar and not a location, and any use of it other than as a map
 argument is stuck (entry 29). It exists so that one BIR call is one
 bytecode call. A location's offset
 may leave its region between the arithmetic that moves it and the
-access that uses it; only the access is checked. The token matters
-for the packet region only and is compared at every access.
+access that uses it; only the access is checked. The token is
+compared at every access for two regions: for the packet it is the
+layout token, so that a location made before a resize is dead; for
+the frame it is the identity of the frame the location was made in,
+so that a location into a frame that has returned is dead.
 
 ### 2.2 Memory
 
@@ -85,7 +88,7 @@ exists at that level only (`ISSUES.md`, entry 30). The declarations:
 | `map(m, i)` | the value size of `m` | bytes | `lookup`, `mapval` |
 | `pkt` | the packet's current length | bytes, guarded by the token | `data`, `data_end` |
 | `kernel(id)` | the object's size | bytes | acquiring declarations |
-| `frame` | 512 bytes as 64 slots of 8 | slots, below | `r10`, `lea` |
+| `frame` | 512 bytes as 64 slots of 8, one per subprogram call in progress | slots, below | `r10`, `lea` |
 | `ctx` | the kind's context declaration | abstract fields | `r1` at entry |
 
 Bytes are little-endian. A scalar load of `w` bits reads `w / 8`
@@ -105,6 +108,24 @@ each byte initialized or not. The rules are the verifier's:
 - a load of bytes requires every byte read to be initialized and
   none to belong to a spilled slot;
 - the frame starts with every byte uninitialized.
+
+Each subprogram call in progress has a frame of its own. A `callSub`
+saves the caller's registers and frame, opens a fresh frame with a
+fresh identity, and sets the frame pointer to it; the callee's `exit`
+restores the caller's. A frame location carries the identity of its
+frame in the token position, so a callee reaches the caller's frame
+through a location it was passed, and an access through a location
+into a frame that has returned is stuck (5.3, cause 14).
+
+**Map values** carry two facts of their declaration the access
+checks read. The access word: a store into a map declared
+`readonly`, a load from one declared `writeonly`, and an `update` or
+`delete` on a `readonly` map are stuck (cause 12). The slot fields:
+the byte ranges of the value's slot-typed fields, a spin lock today,
+laid out as the checker lays the value out; a load or store whose
+bytes overlap one is stuck (cause 15), since the kernel reaches a
+slot only through its operations. The packet of a kind whose
+declaration says it may only be read admits no store (cause 13).
 
 **The context** is a set of fields per kind, declared by the kernel
 interface: for
@@ -232,8 +253,9 @@ m ::= (pc, R, st)
 uninitialized, and `st` is the shared state. The loaded state of a
 program `p` from Core's initial state `st` is:
 
-- `r1 = loc(ctx, 0, tok)`, `r10 = loc(frame, 0, tok)`, every other
-  register uninitialized; in BIR the same with `v_ctx` and `v_fp`;
+- `r1 = loc(ctx, 0, tok)`, `r10 = loc(frame, 0, 0)`, the program's
+  frame having identity 0, every other register uninitialized; in BIR
+  the same with `v_ctx` and `v_fp`;
 - the frame uninitialized; the maps, packet, and context as in `st`;
 - the held stack empty, the trace empty, `pc = 0`.
 
@@ -461,12 +483,24 @@ are exactly these, and each is a check the verifier makes:
    lock acquired while a lock is held;
 10. an exit while the held stack is not empty, or with `r0` not a
     scalar;
-11. a `pc` outside the code, or a jump to one.
+11. a `pc` outside the code, or a jump to one;
+12. a store into a map declared `readonly`, a load from one declared
+    `writeonly`, or an `update` or `delete` on a `readonly` map;
+13. a store through the packet in a kind whose declaration says the
+    packet may only be read;
+14. an access through a location into a frame that has returned;
+15. a load or store whose bytes overlap a slot field of a map value,
+    and, when dynptrs and iterators arrive, a byte access to the frame
+    slots that hold them.
 
 Division by zero, overflow, and shifts by any amount are not causes;
 they are total. The list is the model's whole trusted content: it
 says what the kernel refuses, and `lowering.md`'s theorem says the
-lowering never produces a run that reaches any of it.
+lowering never produces a run that reaches any of it. Its
+completeness against the verifier is measured by the `stuck` column
+of `spec/verifier-rules.csv`, which maps each verifier rule to the
+cause its property corresponds to; causes 12 to 15 are the first
+fill's findings (entry 55).
 
 ## 6. BIR
 
@@ -692,3 +726,12 @@ and is not needed for the paper.
     same at every level. The inline declarations are one function of the
     machine at every level, untraced, and pass D expands them; the
     object is words, relocations, and notes (entry 38).
+15. Four causes the verifier refuses on behavioral grounds and the
+    first machine lacked: the read-only region (12), the read-only
+    packet (13), the stale frame (14), and the opaque slot (15). Each
+    is a constructor of `Cause`, a check of the step, an item of 5.3,
+    a machine test from hand-built BIR, and an obligation on passes B
+    and C. Frame locations carry their frame's identity for 14; a
+    map's state carries its access word and its slot fields for 12
+    and 15; the frame-slot half of 15 waits for dynptrs and iterators
+    (entry 55, 2026-09-26).

@@ -69,4 +69,6 @@ private def xdp (body : List String) : String :=
   "a spin lock cannot be held inside another: `hold lock(c.lk)` at line 11 is still held"
 #guard ok (xdp ["  hold rcu { hold rcu { c.n += 1 } }"])
 #guard ok (xdp ["  hold rcu { hold lock(c.lk) { c.n += 1 } }"])
-#guard ok (xdp ["  hold lock(c.lk) { hold rcu { c.n += 1 } }"])
+-- entering an RCU section is a call, which a spin lock forbids
+#guard has (xdp ["  hold lock(c.lk) { hold rcu { c.n += 1 } }"])
+  "the call effect is forbidden while a spin lock is held"

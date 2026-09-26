@@ -142,6 +142,32 @@ def ctxLoad (X : Env ρ τ) (m : State ρ) (eff : Int) (w : Nat) : StepM Val := 
     return .loc .pkt (if b.isEnd then m.machine.packet.size else 0) m.machine.layout
   throw (.ctxAccess eff (w / 8) false)
 
+/-- The checks on a plain load or store into a shared region that
+the region's declaration makes, before the bounds: a map the program
+may only read or only write, the packet of a kind that may only read
+it, and the slot fields of a map value, whose bytes no load or store
+may touch. -/
+def declared (X : Env ρ τ) (m : State ρ) (sr : Machine.Region) (eff : Int) (n : Nat)
+    (write : Bool) : StepM Unit := do
+  let r := Region.shared sr
+  match sr with
+  | .map mn _ =>
+    if let some ms := m.machine.map? mn then
+      if write && ms.decl.access == .ro then throw (.readOnlyRegion r eff n)
+      if !write && ms.decl.access == .wo then throw (.writeOnlyRegion r eff n)
+      if ms.slotFields.any (fun (o, sz) => eff < o + sz && (o : Int) < eff + n) then
+        throw (.slotAccess r eff n write)
+  | .pkt =>
+    if write && !X.kind.pktWritable then throw (.readOnlyPacket eff n)
+  | .kernel _ => pure ()
+
+/-- The live frame a frame location names, or the refusal for a
+frame that has returned. -/
+def frameOf (m : State ρ) (id : Nat) (eff : Int) (n : Nat) : StepM Frame :=
+  match m.frameAt id with
+  | some fr => pure fr
+  | none => throw (.staleFrame eff n)
+
 /-- A load of `w` bits through `base + off`, by the region's rules. -/
 def loadAt (X : Env ρ τ) (m : State ρ) (base : Val) (off : Int) (w : Nat) : StepM Val := do
   let n := w / 8
@@ -152,9 +178,10 @@ def loadAt (X : Env ρ τ) (m : State ρ) (base : Val) (off : Int) (w : Nat) : S
     | .shared sr =>
       if eff < 0 then throw (.outOfRegion r eff n)
       if sr == .pkt && t != m.machine.layout then throw (.staleToken eff)
+      declared X m sr eff n false
       unless m.machine.admits sr eff.toNat n t do throw (.outOfRegion r eff n)
       return .scalar (ofLe (m.machine.bytesAt sr eff.toNat n))
-    | .frame => m.frame.load eff n
+    | .frame => (← frameOf m t eff n).load eff n
     | .ctx => ctxLoad X m eff w
   | v => throw (.noRegion v)
 
@@ -168,11 +195,12 @@ def storeAt (X : Env ρ τ) (m : State ρ) (base : Val) (off : Int) (w : Nat) (v
   | .loc r o t =>
     let eff := o + off
     match r with
-    | .frame => return { m with frame := ← m.frame.store eff n v }
+    | .frame => return m.setFrameAt t (← (← frameOf m t eff n).store eff n v)
     | .shared sr =>
       let .scalar x := v | throw (.pointerLeak r eff)
       if eff < 0 then throw (.outOfRegion r eff n)
       if sr == .pkt && t != m.machine.layout then throw (.staleToken eff)
+      declared X m sr eff n true
       unless m.machine.admits sr eff.toNat n t do throw (.outOfRegion r eff n)
       return { m with machine := m.machine.writeAt sr eff.toNat (leBytes (toNatMod x w) n) }
     | .ctx =>
@@ -196,7 +224,7 @@ def readBytes (X : Env ρ τ) (m : State ρ) (v : Val) (n : Nat) : StepM (List U
     if sr == .pkt && t != m.machine.layout then throw (.staleToken o)
     unless m.machine.admits sr o.toNat n t do throw (.outOfRegion (.shared sr) o n)
     return m.machine.bytesAt sr o.toNat n
-  | .loc .frame o _ => m.frame.readBytes o n
+  | .loc .frame o t => (← frameOf m t o n).readBytes o n
   | .loc .ctx o _ => throw (.outOfRegion .ctx o n)
   | v =>
     let _ := X
@@ -349,12 +377,14 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
       | none => .scalar 0), st')
   | .update, [.handle mn, key, val] =>
     let some ms := st.map? mn | throw (.malformed s!"unknown map `{mn}`")
+    if ms.decl.access == .ro then throw (.readOnlyMap mn name)
     let kb ← readBytes X m key ms.keySize
     let vb ← readBytes X m val ms.valueSize
     let (rc, st') ← machineOp st (Machine.update mn kb vb)
     return (some (.scalar (toNatMod rc 64)), st')
   | .delete, [.handle mn, key] =>
     let some ms := st.map? mn | throw (.malformed s!"unknown map `{mn}`")
+    if ms.decl.access == .ro then throw (.readOnlyMap mn name)
     let kb ← readBytes X m key ms.keySize
     let (rc, st') ← machineOp st (Machine.delete mn kb)
     return (some (.scalar (toNatMod rc 64)), st')
@@ -606,7 +636,7 @@ def step (X : Env ρ τ) (K : Kernel) (m : State ρ) : StepM (State ρ) := do
     unless X.conv.lea do throw (.malformed "`lea` in bytecode")
     let some o := X.prog.objects.find? (·.name == obj)
       | throw (.malformed s!"no frame object `{obj}`")
-    return next (m.set d (.loc .frame o.base m.machine.layout))
+    return next (m.set d (.loc .frame o.base m.frameId))
   | .mapref d mn =>
     unless (m.machine.map? mn).isSome do throw (.malformed s!"unknown map `{mn}`")
     return next (m.set d (.handle mn))
@@ -627,9 +657,13 @@ def step (X : Env ρ τ) (K : Kernel) (m : State ρ) : StepM (State ρ) := do
     -- frame with its arguments: in BIR those on the instruction, in
     -- bytecode the convention's registers as they are
     let vs ← args.mapM fun r => reg X m r
-    let saved : Saved ρ := { retPc := m.pc + 1, regs := m.regs, frame := m.frame, dst }
-    let m' := { m with frames := saved :: m.frames, frame := Frame.init, args := vs }
-    jumpTo X m' t
+    let saved : Saved ρ := { retPc := m.pc + 1, regs := m.regs, frame := m.frame,
+                             id := m.frameId, dst }
+    let m' := { m with frames := saved :: m.frames, frame := Frame.init, args := vs,
+                       frameId := m.nextFrame, nextFrame := m.nextFrame + 1 }
+    -- the frame pointer names the fresh frame; the caller's comes back
+    -- with its registers
+    jumpTo X (m'.set X.conv.fp (.loc .frame 0 m.nextFrame)) t
   | .atomic op cls fetch d off s => return next (← atomic X m op cls fetch d off s)
   | .exit =>
     match m.frames with
@@ -639,7 +673,7 @@ def step (X : Env ρ τ) (K : Kernel) (m : State ρ) : StepM (State ρ) := do
       -- convention's argument registers dead
       let result := m.regs X.conv.ret
       let mut m' : State ρ := { m with regs := saved.regs, frame := saved.frame,
-                                       frames := rest, pc := saved.retPc }
+                                       frameId := saved.id, frames := rest, pc := saved.retPc }
       if let some v := result then m' := m'.set X.conv.ret v
       if let some d := saved.dst then
         if let some v := result then m' := m'.set d v
