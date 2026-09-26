@@ -186,7 +186,7 @@ partial def volatile : LIR.Expr → Bool
   | .arith _ _ _ l r => volatile l || volatile r
   | .cast _ _ _ _ e | .bswap _ e => volatile e
   | .addr a => volatileAddr a
-  | .lit .. | .var _ => false
+  | .lit .. | .var _ | .mapPtr _ => false
 
 partial def volatileAddr : LIR.Addr → Bool
   | .pktData | .pktEnd => true
@@ -525,15 +525,36 @@ value at the parameter's type, a place by its address, a moved name
 by its address. -/
 partial def lowerArgs (c : LCtx) (sp : Span) (params : List Param) (args : List Arg) :
     LM (List LIR.Stmt × List LIR.Expr) := do
+  -- a socket map's map pointer is passed as itself, and the key parameters
+  -- take the key of the map passed
+  let params := Param.resolveKeys params
+    ((Param.mapPtrArg? params args).bind fun m => (c.env.map? m).map (·.kind))
   let mut les : List LE := []
   for (p, a) in params.zip args do
+    if !p.mapPtr.isEmpty then
+      match a with
+      | .map _ m => les := les ++ [{ pre := [], e := .mapPtr m, ty := .ptr }]
+      | _ => lerr s!"`{p.name}` takes a socket map"
+      continue
     let pn ← normTy c p.ty
     match pn, a with
     | .ref .., .place q | .view .., .place q =>
       let (pre, r) ← lowerPlace c sp q
       match r with
       | .mem addr _ => les := les ++ [{ pre, e := .addr addr, ty := .ptr }]
-      | _ => lerr s!"`{q.print}` is not an aggregate place"
+      -- a scalar local or context field named by reference: a copy
+      -- on the stack, whose location the kernel reads through
+      | .local x t | .ctx x t =>
+        let n ← sizeOfTy c t
+        let lt ← lty c t
+        let (s, w) := intParts lt
+        let k ← freshName "k"
+        let v : LIR.Expr := match r with
+          | .ctx .. => .ctx x
+          | _ => .var x
+        let _ := s
+        les := les ++ [{ pre := pre ++ [.frame sp k n (some t), .store sp w (.var k) v],
+                         e := .addr (.var k), ty := .ptr }]
     | .own .., .val e => les := les ++ [← lowerExpr c sp e none]
     | _, .val e => les := les ++ [← lowerExpr c sp e (some pn)]
     | _, .place q =>
@@ -1269,7 +1290,9 @@ def foldMapDecl (env : Env) (d : MapDecl) : MapDecl :=
       | .percpu n v => .percpu (count n) (foldTy env v)
       | .hash n k v => .hash (count n) (foldTy env k) (foldTy env v)
       | .ringbuf n => .ringbuf (count n)
-      | .progArray n k => .progArray (count n) k }
+      | .progArray n k => .progArray (count n) k
+      | .sockmap n => .sockmap (count n)
+      | .sockhash n k => .sockhash (count n) (foldTy env k) }
 
 /-- Pass B on a folded unit. -/
 def lower (pre : Interface) (folded : Folded) : Except String LIR.CompUnit := do

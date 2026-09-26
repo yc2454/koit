@@ -38,7 +38,7 @@ modulo, and resolves map references before an instruction runs, so a
 concrete semantics of the submitted instructions does not exist apart
 from those rewrites. The model takes the rewritten meaning as
 primitive: a context field is an abstract value, a division by zero
-yields zero, a map reference is a handle. The correspondence between
+yields zero, a map reference is a map pointer. The correspondence between
 this model and the kernel is validated, not proved (section 9).
 
 Two consequences. The correctness theorem of `lowering.md` says that
@@ -58,11 +58,11 @@ the per-program validation speak of one object.
 v ::= scalar n          a 64-bit pattern, n < 2^64
     | loc(r, off, tok)  a region, a signed offset, the token it was
                         made under
-    | handle m          a map, made by `mapref` and accepted only as
+    | mapptr m          a map, made by `mapref` and accepted only as
                         the map argument of a builtin or a call
 ```
 
-A register holds one value. Null is `scalar 0`. A handle is what the
+A register holds one value. Null is `scalar 0`. A map pointer is what the
 kernel's `lddw` with the pseudo map source yields: it is not a
 scalar and not a location, and any use of it other than as a map
 argument is stuck (entry 29). It exists so that one BIR call is one
@@ -98,7 +98,7 @@ bytes and zero-extends; a store writes them.
 its top. A slot is `spilled v`, one value, or `bytes b_0 .. b_7`,
 each byte initialized or not. The rules are the verifier's:
 
-- a store of a location or a handle is admitted only as 8 bytes at
+- a store of a location or a map pointer is admitted only as 8 bytes at
   a slot boundary, and makes the slot `spilled`; anywhere else it is
   stuck,
   which is the rule that a pointer never leaks into a map, the
@@ -149,11 +149,11 @@ consult the kernel parameter:
 
 | builtin | arguments | meaning |
 |---|---|---|
-| `lookup` | the map's handle, the key's location | an array kind: `loc(map(m, k), 0)` when `k` is below the capacity, else null; a hash kind: the entry's location or null; per-CPU arrays as arrays |
-| `update` | the handle, the key's and the value's locations | insert or replace; a full hash map answers with the negative `E2BIG` |
-| `delete` | the handle, the key's location | remove, or the negative `ENOENT` |
+| `lookup` | the map's pointer, the key's location | an array kind: `loc(map(m, k), 0)` when `k` is below the capacity, else null; a hash kind: the entry's location or null; per-CPU arrays as arrays |
+| `update` | the map pointer, the key's and the value's locations | insert or replace; a full hash map answers with the negative `E2BIG` |
+| `delete` | the map pointer, the key's location | remove, or the negative `ENOENT` |
 | `mapval m + k` | none | `loc(map(m, 0), k)` for an `array[1]` map: direct value access |
-| `reserve n` | the ring's handle | a fresh kernel object of `n` bytes, held as a record, or null when the ring is full |
+| `reserve n` | the ring's pointer | a fresh kernel object of `n` bytes, held as a record, or null when the ring is full |
 | `submit`, `discard` | the record | pop it; `submit` appends it to the ring |
 | `lock`, `unlock` | the lock field's location in a map value | push, pop |
 | `enter R`, `leave R` | none | push, pop, for the scope declarations |
@@ -172,13 +172,19 @@ Every other declaration of the interface's calls is a kernel function or
 an inline declaration. Its implementation clause says which: a helper by
 its number in the uapi header, a kfunc by name, each with the layout of
 the kernel's arguments, or `inline`. A layout is the kernel's argument
-positions, each one of: koit's `i`-th argument, the context, a constant,
-the byte size of koit's `i`-th argument's place, or `printk`'s format;
-`bpf_sk_lookup_tcp`'s is `(ctx, arg 0, size 0, -1, 0)`, the current
-netns and no flags. A declaration whose helper differs by kind, the
-resizes in `xdp` and `tc`, carries an override per kind. Stage 1
-transcribes the clause from the uapi header; session 8's generator
-produces it (entry 38).
+positions, each one of: koit's `i`-th argument, the address of a copy
+of koit's `i`-th argument when it is a scalar the kernel reads through
+a pointer (`argPtr i`, a sockmap's index for the map-key helpers,
+whose copy the flattening makes in a frame object), the context, a
+constant, the byte size of koit's `i`-th argument's place, or
+`printk`'s format; `bpf_sk_lookup_tcp`'s is `(ctx, arg 0, size 0, -1,
+0)`, the current netns and no flags. A declaration whose helper
+differs by kind, the resizes in `xdp` and `tc`, carries an override
+per kind; one whose helper differs by the map kind of its map pointer
+argument, the redirects through a sockmap and a sockhash, carries an
+override per map kind, and `call h` names the map kind the flattening
+read off the map pointer (decision 71). Stage 1 transcribes the clause
+from the uapi header; session 8's generator produces it (entry 38).
 
 For a kernel function the machine consults the same `Kernel` as
 Core: `K.helper declaration args st` answers with a value and a state, or a
@@ -291,7 +297,7 @@ jcond(cmp, cls) a b L     cmp in {eq ne gt ge lt le sgt sge slt sle set}
 jcond_imm(cmp, cls) a k L
 lddw d k64
 lea d obj                 BIR only: the frame object's location
-mapref d m                the map's handle, `handle m`
+mapref d m                the map's pointer, `mapptr m`
 mapval d m k              direct value access
 call h                    BIR: call h (s_1 .. s_5) -> d, koit's operands;
                           bytecode: r1..r5 by the declaration's layout -> r0
@@ -318,9 +324,9 @@ Meaning, by class of instruction:
   forms; two locations of one region compare by offset, and a
   location compares with the immediate zero under `eq` and `ne`;
   anything else is stuck.
-- **`lddw`, `mapref`, `mapval`, `lea`.** Constants and handles.
-  `mapref` yields a value only a builtin or a declaration with a map
-  parameter accepts.
+- **`lddw`, `mapref`, `mapval`, `lea`.** Constants and map pointers.
+  `mapref` yields a value only a builtin or a declaration with a
+  map-pointer parameter accepts; the kernel receives it as the map.
 - **`call h`.** The builtin or kernel function of section 2.3 or
   2.4, with arguments in `r1` to `r5` and the result in `r0`; `r1` to
   `r5` are uninitialized after the call, `r6` to `r9` unchanged. In
@@ -476,7 +482,7 @@ are exactly these, and each is a check the verifier makes:
    zero, or of locations of different regions;
 7. a context access that is not a field of the kind's context, or a
    write to a read-only declaration;
-8. a call whose argument does not fit its parameter kind, a handle
+8. a call whose argument does not fit its parameter kind, a map pointer
    used other than as a map argument, or a call while a held declaration
    forbids it;
 9. a release whose argument is not the innermost held object, or a
@@ -507,7 +513,7 @@ fill's findings (entry 55).
 A BIR program is one flat program per koit program, produced from
 closed LIR: a list of frame objects with sizes and alignments, a
 list of virtual registers with a class each, scalar, location, or
-handle, and an instruction array with labels. The class is metadata
+map pointer, and an instruction array with labels. The class is metadata
 for the allocation pass, not part of the instruction. The flattening
 reuses registers by LIR's block structure: a temporary made for an
 intermediate value is free again at the end of its statement, and
@@ -584,7 +590,7 @@ kernel's `Documentation/bpf/standardization/instruction-set.rst`.
 Map references are `lddw` with the pseudo source register the
 loader recognizes, `BPF_PSEUDO_MAP_FD` for `mapref` and
 `BPF_PSEUDO_MAP_VALUE` for `mapval`, and a relocation naming the
-map. Since a handle is a value and the map is an operand of the
+map. Since a map pointer is a value and the map is an operand of the
 call, one BIR call is one bytecode call and the encoder is a word
 layout. The object it produces is the words, the relocation list,
 map file descriptors, map values, and kfuncs by name, and a note per
@@ -683,8 +689,8 @@ and is not needed for the paper.
    level, embedded by every level's state; each level extends the
    shared regions with its own; the builtins, the kernel call, and
    the protocol are one implementation every level calls (entry 30).
-2. Values are scalars, locations, or map handles; null is the
-   scalar zero; pointers never become integers; a handle is only ever
+2. Values are scalars, locations, or map pointers; null is the
+   scalar zero; pointers never become integers; a map pointer is only ever
    a map argument and spills like a location (entry 29).
 3. The verifier's safety conditions are the stuck states, listed in
    5.3, and the list is the model's trusted content; `Step` names the

@@ -68,6 +68,9 @@ inductive Expr where
   | load (signed : Bool) (w : Nat) (a : Addr)
   | ctx (f : String)
   | addr (a : Addr)
+  /-- The map pointer of a socket map, an argument of the kernel calls
+  that take one; a `ptr` the machine never dereferences. -/
+  | mapPtr (m : String)
 
 /-- Addresses: a `ptr` local, a constant or a scaled index added to
 one, the packet's bounds, or the value of a map marked for direct

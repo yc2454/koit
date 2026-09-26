@@ -1,0 +1,29 @@
+// run: --ctx op=4 --ctx family=2 --ctx local_ip4=16777226 --ctx remote_ip4=33554442 --ctx local_port=4000 --ctx remote_port=80
+// p: DEFAULT
+// map socks:
+//   { sip: 0x0a000001, dip: 0x0a000002, family: 2, sport: 4000, dport: 80 } => socket 0
+
+// kernel: verdict only
+// selftest: none; the corpus (Cilium bpf_sockops.c, entry 57)
+// The `sock_ops` half of socket acceleration: on the two established
+// callbacks, build the connection's key from the context's addresses
+// and ports and insert the socket into the sockhash. `op` is data the
+// kernel supplies, compared against the event constants; the ports
+// are stored as the kernel gives them, and the `sk_msg` half builds
+// the mirrored key the same way, so the two agree. The run is the
+// active-established callback of 10.0.0.1:4000 to 10.0.0.2:80; the
+// model's socket is a kernel object, which the kernel stage cannot
+// read back.
+type Key = { sip: be32, dip: be32, family: u32, sport: u32, dport: u32 }
+map socks : sockhash[65536] of Key
+
+program p : sock_ops {
+  if ctx.op != BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB &&
+     ctx.op != BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB {
+    return DEFAULT
+  }
+  let key = { sip: ctx.local_ip4, dip: ctx.remote_ip4, family: ctx.family,
+              sport: ctx.local_port, dport: ctx.remote_port }
+  sockhash_update(socks, key, BPF_ANY)?
+  return DEFAULT
+}

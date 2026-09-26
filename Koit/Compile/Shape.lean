@@ -263,7 +263,7 @@ def passL2 (body : List LIR.Stmt) (B : BIR) : List String × Nat := Id.run do
 
 /-- What the analysis knows of a register. -/
 inductive Val where
-  /-- A location that is not a packet pointer, or a handle; also
+  /-- A location that is not a packet pointer, or a map pointer; also
   what an unwritten register reads as. -/
   | other
   /-- A packet pointer: `data`, plus the variable part the
@@ -376,7 +376,7 @@ def L3.result (X : L3) (h : BPF.Callee) (i : Nat) : Val :=
   match h with
   | .builtin .lookup | .builtin (.reserve _) => .other
   | .builtin _ => freshSc i
-  | .kernel decl =>
+  | .kernel decl _ =>
     match X.pre.call? decl with
     | some r => if LIR.rowResult r == .ptr then .other else freshSc i
     | none => .lost
@@ -545,7 +545,7 @@ def L3.step (X : L3) (i : Nat) (st : LState) : Step :=
         | none => st)
     | .call h _ dst =>
       let resize := match h with
-        | .kernel decl =>
+        | .kernel decl _ =>
           match X.pre.call? decl with
           | some r => Machine.hasFlag r.effects .resize
           | none => false

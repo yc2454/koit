@@ -1,0 +1,11 @@
+// expect: holds sockets, not places
+// selftest: none; the rule's list (rules 08.12 and 08.01, master fe2ec83): `bpf_map_lookup_elem` on a sockmap yields an owned socket, and only the lookup kinds may call it
+// Indexing a socket map as if its entries were places. The
+// socket-yielding lookup is deferred with the `sk_lookup` kinds, so
+// in this wave a socket map has no `m[i]` and no `m[k]?`.
+map socks : sockmap[4]
+
+program p : sk_msg {
+  let s = socks[0]
+  return PASS
+}

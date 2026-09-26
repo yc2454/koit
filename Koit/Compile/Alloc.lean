@@ -130,7 +130,7 @@ def argReg (j : Nat) : Reg := ⟨(j + 1) % 11, Nat.mod_lt _ (by decide)⟩
 /-- The koit parameters of a callee, for the sizes a layout asks. -/
 def paramsOf (h : BPF.Callee) : AM (List Core.Param) := do
   match h with
-  | .kernel name =>
+  | .kernel name _ =>
     match (← read).pre.call? name with
     | some { sig := .fn params _, .. } => pure params
     | _ => pure []
@@ -161,7 +161,8 @@ def expandCall (h : BPF.Callee) (abi : List AbiArg) (args : List VReg) (dst : Op
   for (a, j) in abi.zipIdx do
     let target := argReg j
     match a with
-    | .arg i =>
+    -- a pointer argument's copy was made by the flattening
+    | .arg i | .argPtr i =>
       let some v := args[i]? | throw s!"`{h.print}`: the layout names argument {i}"
       loads := loads ++ (← fetchInto v target)
     | .ctx => loads := loads ++ [.mov .w64 target (.reg .r6)]
@@ -250,10 +251,10 @@ def expand (ins : Instr VReg Label) : AM Code := do
   | .call h args dst =>
     let c ← read
     match h with
-    | .kernel name =>
+    | .kernel name mk =>
       let some decl := c.pre.call? name | throw s!"unknown kernel function `{name}`"
       if decl.isInline then expandInline name args dst
-      else expandCall h (decl.implIn c.kind.name).abi args dst
+      else expandCall h (decl.implIn c.kind.name mk).abi args dst
     | .builtin b => expandCall h b.abi args dst
   | .atomic op cls f d off s =>
     let (rd, ld) ← fetch d r1

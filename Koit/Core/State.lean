@@ -86,6 +86,9 @@ inductive Val where
   | be (w : Nat) (v : Nat)
   | bool (b : Bool)
   | loc (l : Loc)
+  /-- The map pointer of a socket map, the argument of the calls that take
+  one; never bound to a name. -/
+  | mapPtr (m : String)
   deriving Repr, Inhabited
 
 namespace Val
@@ -106,20 +109,21 @@ def print : Val → String
     s!"be{w}(0x{String.ofList ((Nat.toDigits 16 n).map Char.toUpper)})"
   | .bool b => toString b
   | .loc l => s!"place at {repr l.region} + {l.off}"
+  | .mapPtr m => s!"map {m}"
 
 /-- The integer a value denotes, for comparisons and indexes. -/
 def toInt? : Val → Option Int
   | .int _ _ v _ => some v
   | .be _ v => some v
   | .bool b => some (if b then 1 else 0)
-  | .loc _ => none
+  | .loc _ | .mapPtr _ => none
 
 /-- Whether the value is true, for conditions. -/
 def truthy : Val → Bool
   | .bool b => b
   | .int _ _ v _ => v != 0
   | .be _ v => v != 0
-  | .loc _ => true
+  | .loc _ | .mapPtr _ => true
 
 /-- The value as the kernel and the trace see it: an integer, a
 byte-order value as its pattern, a boolean as 0 or 1, and an object
@@ -132,6 +136,7 @@ def observe : Val → Machine.Val
     match l.region with
     | .shared (.kernel id) => .object id
     | _ => .scalar 0
+  | .mapPtr m => .map m
 
 end Val
 
@@ -308,7 +313,12 @@ def initState (env : Env) (decl : KindDecl) (packet : ByteArray)
   { env := { env with kind := some decl }, kind := decl, fuel,
     machine := { maps, packet },
     ctx := decl.ctx.map fun f =>
-      (f.name, Val.mkInt false 32 ((ctx.lookup f.name).getD 0)) }
+      -- each field at its declared type, a byte-order field as a pattern
+      let v := (ctx.lookup f.name).getD 0
+      (f.name, match f.ty with
+        | .be _ w => Val.be w (v % 2 ^ w)
+        | .int _ s w => Val.mkInt s w v
+        | _ => Val.mkInt false 32 v) }
 
 /-! ### The evaluation monad and its primitives -/
 
@@ -478,6 +488,11 @@ def siblingFrame (l : Loc) (fields : List Field) (f : String) (v : Val) :
 scalar reduced to the parameter's type, a `ref` or `view` place as
 its bytes, an owned reference as its object. -/
 def kernelArg (p : Param) (v : Val) : M Machine.Val := do
+  -- a socket map's map pointer is the map itself
+  if !p.mapPtr.isEmpty then
+    match v with
+    | .mapPtr m => return .map m
+    | _ => fail s!"`{p.name}` takes a socket map"
   match ← norm p.ty, v with
   | .own .., .loc l =>
     match l.region with
@@ -487,7 +502,12 @@ def kernelArg (p : Param) (v : Val) : M Machine.Val := do
     let n ← sizeOf t
     unless (← get).admits l n do fail s!"`{p.name}` reads outside its region"
     return .bytes ((← get).bytesAt l n)
-  | .ref .., _ | .view .., _ | .own .., _ => fail s!"`{p.name}` takes a place"
+  -- a scalar local named by reference: the kernel reads its bytes
+  | .ref _ t, v =>
+    match ← coerceTo t v with
+    | .loc _ => fail s!"`{p.name}` takes a place"
+    | v' => return .bytes (Machine.leBytes (Machine.toNatMod (v'.observe.toInt) (8 * (← sizeOf t))) (← sizeOf t))
+  | .view .., _ | .own .., _ => fail s!"`{p.name}` takes a place"
   | t, v =>
     match ← coerceTo t v with
     | .loc _ => fail s!"`{p.name}` takes a scalar"
@@ -520,6 +540,12 @@ failure, with `errno` set to its negative return. -/
 def kernelCall (K : Kernel) (decl : CallDecl) (params : List Param) (ret : Option Ty)
     (args : List Val) : M (Option (Option Val)) := do
   let st ← get
+  -- the key parameters of a declaration over a socket map take the
+  -- key of the map passed
+  let mk := args.findSome? fun
+    | .mapPtr m => (st.maps.lookup m).map (·.decl.kind)
+    | _ => none
+  let params := Param.resolveKeys params mk
   let vs ← (params.zip args).mapM fun (p, v) => kernelArg p v
   match ← op (Machine.call st.env.interface K st.kind decl vs) with
   | .ok v =>

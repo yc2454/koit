@@ -187,7 +187,11 @@ partial def Stmt.printBlock (ss : List Stmt) (ind : Nat) : String :=
 end
 
 def Param.print (p : Param) : String :=
-  p.name ++ ": " ++ p.ty.print ++
+  p.name ++ ": " ++
+    (if !p.mapPtr.isEmpty then " | ".intercalate p.mapPtr
+     else match p.keyOf with
+       | some m => "key of " ++ m
+       | none => p.ty.print) ++
     (match p.pred with | some q => " where " ++ q.print | none => "")
 
 def Fn.print (f : Fn) : String :=
@@ -203,6 +207,8 @@ def MapKind.print : MapKind → String
     "hash[" ++ n.print ++ "] of " ++ k.print ++ " -> " ++ v.print
   | .ringbuf n => "ringbuf[" ++ n.print ++ "]"
   | .progArray n k => "prog_array[" ++ n.print ++ "] of " ++ k
+  | .sockmap n => "sockmap[" ++ n.print ++ "]"
+  | .sockhash n k => "sockhash[" ++ n.print ++ "] of " ++ k.print
 
 def Region.print : Region → String
   | .pkt _ none => "pkt"

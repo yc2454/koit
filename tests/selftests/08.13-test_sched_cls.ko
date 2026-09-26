@@ -1,0 +1,17 @@
+// expect: is not available in a `tc` program
+// selftest: progs/verifier_sockmap_mutate.c test_sched_cls (T2399; T2398 test_sched_act; T2400 test_flow_dissector_delete, T2403 test_raw_tp_delete, T2407 test_socket_filter, written as tc; rule 08.13, master fe2ec83)
+// Deleting from a socket map outside the kinds the kernel admits:
+// "cannot update sockmap in this context". A socket map has no
+// `delete` builtin; the operation is a call declared `in sock_ops`
+// (and the lookup kinds, when they exist), so from tc the call is not
+// available. The C tests continue with an update through `skb->sk`,
+// which koit does not declare.
+map socks : sockmap[1]
+map hsocks : sockhash[1] of u32
+
+program p : tc {
+  let k: u32 = 0
+  sockmap_delete(socks, 0)?
+  sockhash_delete(hsocks, k)?
+  drop
+}

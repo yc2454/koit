@@ -70,6 +70,9 @@ structure FState where
   cpu        : Cpu := .v3
   kind       : KindDecl := default
   pre        : Interface := default
+  /-- The unit's maps, for the map kind a map-pointer argument selects a
+  kernel function by. -/
+  maps       : List Core.MapDecl := []
   deriving Inhabited
 
 abbrev FM := StateT FState (Except String)
@@ -235,7 +238,7 @@ def typeOf (e : LIR.Expr) : FM LIR.Ty := do
       | .be _ w => return .int false w
       | _ => ferr s!"the context field `{f}` is not an integer"
     | none => ferr s!"the context has no field `{f}`"
-  | .addr _ => return .ptr
+  | .addr _ | .mapPtr _ => return .ptr
 
 /-- The offset and width of a context field. -/
 def ctxField (f : String) : FM (Nat × Nat) := do
@@ -333,6 +336,7 @@ partial def expr (e : LIR.Expr) (t : LIR.Ty) (d : VReg) : FM Unit := do
     let (b, off) ← addr a
     unless b == d do emit (.mov .w64 d (.reg b))
     if off != 0 then emit (.alu .add .w64 d (.imm off))
+  | .mapPtr m => emit (.mapref d m)
 
 /-- An operand: a literal that fits as an immediate, a local's
 register, or a temporary holding the value. -/
@@ -398,6 +402,10 @@ end
 def exprTemp (e : LIR.Expr) (t : LIR.Ty) : FM VReg := do
   match e with
   | .var x => return (← lookup x).1
+  | .mapPtr m =>
+    let h ← temp .mapPtr
+    emit (.mapref h m)
+    return h
   | e =>
     let r ← temp (classOf t)
     expr e t r
@@ -452,6 +460,23 @@ def terminates : List LIR.Stmt → Bool
     | _ => false
 
 def roundUp8 (n : Nat) : Nat := (n + 7) / 8 * 8
+
+/-- A zeroed frame object of `n` bytes, 8-aligned, its location in
+the register given or in a fresh one. -/
+def frameObject (x : String) (n : Nat) (into : Option VReg := none) : FM VReg := do
+  let s ← get
+  let size := roundUp8 (max n 1)
+  let base := s.top - size
+  let obj : FrameObj := { name := x, size := n, base }
+  set { s with objects := s.objects ++ [obj], top := base }
+  let r ← match into with
+    | some r => pure r
+    | none => temp .location
+  emit (.lea r x)
+  for i in [0:size / 8] do
+    emit (.stx 64 r (8 * i) (.imm 0))
+  return r
+
 
 /-- The store of `n` bytes at `[b + off]` from `[s + soff]`, by 8, 4,
 2, and 1. -/
@@ -560,15 +585,8 @@ partial def stmt (s : LIR.Stmt) : FM Unit := do
     let v ← operand e (.int false w) (clsOf w)
     emit (.stx w .ctx off v)
   | .frame _ x n _ =>
-    let s ← get
-    let size := roundUp8 (max n 1)
-    let base := s.top - size
-    let obj : FrameObj := { name := x, size := n, base }
-    set { s with objects := s.objects ++ [obj], top := base }
     let r ← bind x .ptr
-    emit (.lea r x)
-    for i in [0:size / 8] do
-      emit (.stx 64 r (8 * i) (.imm 0))
+    let _ ← frameObject x n (some r)
   | .ite _ c t e =>
     if e.isEmpty then
       let lEnd ← newLabel
@@ -631,12 +649,27 @@ partial def stmt (s : LIR.Stmt) : FM Unit := do
     emit (.callSub l regs dst)
   | .builtin _ x b args => builtin x b args
   | .kernel _ x h args =>
-    let some decl := (← get).pre.call? h | ferr s!"unknown kernel function `{h}`"
-    let regs ← args.mapM fun a => do exprTemp a (← typeOf a)
+    let s ← get
+    let some decl := s.pre.call? h | ferr s!"unknown kernel function `{h}`"
+    -- the map kind of the map-pointer argument, which resolves the kernel
+    -- function of a declaration over both socket map kinds
+    let mk := args.findSome? fun
+      | .mapPtr m => (s.maps.find? (·.name == m)).map (·.kind.spelling)
+      | _ => none
+    let mut regs ← args.mapM fun a => do exprTemp a (← typeOf a)
+    -- a scalar the kernel reads through a pointer: a copy in a frame
+    -- object, its location passed in the scalar's place
+    for a in (decl.implIn s.kind.name mk).abi do
+      if let .argPtr i := a then
+        let some r := regs[i]? | ferr s!"`{h}`: the layout names argument {i}"
+        let name := s!"{h}_arg{i}_{(← get).objects.length}"
+        let p ← frameObject name 8
+        emit (.stx 64 p 0 (.reg r))
+        regs := regs.set i p
     let dst ← match x with
       | some x => some <$> bind x (LIR.rowResult decl)
       | none => pure none
-    emit (.call (.kernel h) regs dst)
+    emit (.call (.kernel h mk) regs dst)
 
 partial def builtin (x : Option String) (b : LIR.Builtin) (args : List LIR.Expr) : FM Unit := do
   let argRegs : FM (List VReg) := args.mapM fun a => do exprTemp a (← typeOf a)
@@ -644,31 +677,31 @@ partial def builtin (x : Option String) (b : LIR.Builtin) (args : List LIR.Expr)
     match x with
     | some x => some <$> bind x t
     | none => pure none
-  let mapHandle (m : String) : FM VReg := do
-    let h ← temp .handle
+  let mapPtrOf (m : String) : FM VReg := do
+    let h ← temp .mapPtr
     emit (.mapref h m)
     return h
   match b, args with
   | .lookup m, [k] =>
-    let h ← mapHandle m
+    let h ← mapPtrOf m
     let rk ← exprTemp k .ptr
     emit (.call (.builtin .lookup) [h, rk] (← bindResult .ptr))
   | .tail m, [i] =>
-    -- the array's handle and the index; the context is the layout's
-    let h ← mapHandle m
+    -- the array's pointer and the index; the context is the layout's
+    let h ← mapPtrOf m
     let ri ← exprTemp i .u32
     emit (.call (.builtin (.tail m)) [h, ri] none)
   | .update m, [k, v] =>
-    let h ← mapHandle m
+    let h ← mapPtrOf m
     let rk ← exprTemp k .ptr
     let rv ← exprTemp v .ptr
     emit (.call (.builtin .update) [h, rk, rv] (← bindResult .i64))
   | .delete m, [k] =>
-    let h ← mapHandle m
+    let h ← mapPtrOf m
     let rk ← exprTemp k .ptr
     emit (.call (.builtin .delete) [h, rk] (← bindResult .i64))
   | .reserve m n, [] =>
-    let h ← mapHandle m
+    let h ← mapPtrOf m
     emit (.call (.builtin (.reserve n)) [h] (← bindResult .ptr))
   | .submit, [r] => emit (.call (.builtin .submit) [← exprTemp r .ptr] none)
   | .discard, [r] => emit (.call (.builtin .discard) [← exprTemp r .ptr] none)
@@ -737,7 +770,7 @@ def fallOffVerdict (kind : KindDecl) : Nat :=
   else 0
 
 /-- One LIR program flattened. -/
-def flattenProgram (pre : Interface) (cpu : Cpu) (fns : List LIR.Fn)
+def flattenProgram (pre : Interface) (cpu : Cpu) (fns : List LIR.Fn) (maps : List Core.MapDecl)
     (fmts : List (String × Nat) × List UInt8) (p : LIR.Program) : Except String (BIR × (List (String × Nat) × List UInt8)) := do
   let some kind := pre.kind? p.kind | throw s!"unknown kind `{p.kind}`"
   let translate : FM Unit := do
@@ -787,7 +820,7 @@ def flattenProgram (pre : Interface) (cpu : Cpu) (fns : List LIR.Fn)
         place fexit
         emit .exit
         modify fun s => { s with exitLabel := saved.1, retTy := saved.2.1, inFn := saved.2.2 }
-  let init : FState := { cpu, kind, pre, formats := fmts.1, fmtBytes := fmts.2, fns }
+  let init : FState := { cpu, kind, pre, maps, formats := fmts.1, fmtBytes := fmts.2, fns }
   let ((), s) ← translate.run init |>.mapError (s!"in `{p.name}`: " ++ ·)
   let objBytes := (-s.top).toNat
   if objBytes > BPF.Frame.size then
@@ -817,7 +850,7 @@ def flatten (pre : Interface) (cpu : Cpu) (u : LIR.CompUnit) :
   let mut birs : List BIR := []
   let mut fmts : List (String × Nat) × List UInt8 := ([], [])
   for p in u.programs do
-    let (B, f) ← flattenProgram pre cpu u.fns fmts p
+    let (B, f) ← flattenProgram pre cpu u.fns u.maps fmts p
     birs := birs ++ [B]
     fmts := f
   return (birs, formatMapDecl fmts.2)

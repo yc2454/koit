@@ -219,7 +219,13 @@ the three things that section leaves implicit:
   An action for a name in `μ` emits nothing.
 - **Calls.** A call to a `fails` function carries `unwind s`, with `s`
   the abnormal releases of every action in `ρ`, innermost first, for
-  names not in `μ`.
+  names not in `μ`. A kernel call's arguments follow its parameters:
+  a scalar by value at the parameter's type, a `ref` or `view` place
+  by its address, a scalar local or context field named by a `ref`
+  parameter through a copy in a `frame` the kernel reads, a socket
+  map as `mapptr m`, and a key parameter of such a call at the key of
+  the map passed, the `u32` index of a sockmap or the key type of a
+  sockhash (decision 71).
 - **Moves.** `move x` emits nothing and adds `x` to `μ` for the rest
   of the sequence; at an `if`, both branches yield the same `μ` and
   it continues; a loop body yields the `μ` it started with, except on
@@ -342,7 +348,11 @@ there; `bswap` by `end`. Addresses become `alu` on a location
 register. `frame x : n` becomes a declared object and `lea`, with
 the object zero-filled by `st` instructions; `copy n` and `fill n`
 become runs of loads and stores by 8, 4, 2, and 1 bytes. Builtins and
-kernel functions become `call` with explicit operands. `ctx f`
+kernel functions become `call` with explicit operands; `mapptr m`
+becomes `mapref`, a kernel function over a socket map names the map
+kind of its map pointer in the callee, and a scalar its layout passes
+through a pointer (`argPtr`, `bir.md` 2.4) is copied into a frame
+object whose location takes its operand's place. `ctx f`
 becomes `ldx` from `v_ctx` at the field's offset and width, and
 `pkt_data`, `pkt_end` the two location-yielding declarations. A `for` loop's
 annotation from pass A selects its form; in stage 1 every loop is the
@@ -687,7 +697,7 @@ host with the kernel, and never builds Lean there.
    regions in the frame.
 6a. Pass C reuses virtual registers by block structure and `R_C`
    speaks of the locals in scope; pass D stays naive (entry 28).
-6b. A map is a value, the handle `mapref` yields, so that one BIR
+6b. A map is a value, the map pointer `mapref` yields, so that one BIR
    call is one bytecode call and `encode_decode` holds as stated
    (entry 29).
 7. Pass D is the naive allocation, proved as a plus simulation; a

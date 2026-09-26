@@ -104,6 +104,7 @@ partial def typeOf (K : WfCtx) (Γ : Γ) (expected : Option Ty) : Expr → W Ty
   | .addr a => do
     typeOfAddr K Γ a
     return .ptr
+  | .mapPtr _ => return .ptr
 
 partial def typeOfAddr (K : WfCtx) (Γ : Γ) : Addr → W Unit
   | .var x =>

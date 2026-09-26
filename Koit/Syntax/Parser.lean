@@ -732,7 +732,8 @@ partial def parseItem : M Item := do
 
 partial def parseMapType : M MapType := do
   let (kind, ks) ← expectIdent
-    "a map kind: `array`, `percpu_array`, `hash`, or `ringbuf`"
+    "a map kind: `array`, `percpu_array`, `hash`, `ringbuf`, `prog_array`, \
+      `sockmap`, or `sockhash`"
   let _ ← expectPunct .lbrack
   let n ← withNl false parseExpr
   let close ← expectPunct .rbrack
@@ -756,8 +757,13 @@ partial def parseMapType : M MapType := do
     let _ ← expectKw .«of»
     let (k, kspan) ← expectIdent "a program kind"
     return .progArray (ks.merge kspan) n k
+  | "sockmap" => return .sockmap (ks.merge close) n
+  | "sockhash" =>
+    let _ ← expectKw .«of»
+    let k ← parseType
+    return .sockhash (ks.merge k.span) n k
   | _ => failAt ks s!"unknown map kind `{kind}`; expected `array`, \
-      `percpu_array`, `hash`, or `ringbuf`"
+      `percpu_array`, `hash`, `ringbuf`, `prog_array`, `sockmap`, or `sockhash`"
 
 partial def parseFn : M FnDecl := do
   let l ← cur

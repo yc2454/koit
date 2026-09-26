@@ -373,6 +373,17 @@ structure Param where
   ty   : Ty
   pred : Option Expr
   isConst : Bool := false
+  /-- Interface signatures only: the parameter takes the map pointer of a
+  socket map, `sockmap[n]` or `sockhash[n] of K`, of one of the map
+  kinds named here; `ty` then names them for messages. The kernel
+  function behind the call is chosen by the map pointer's map kind where
+  the declaration lists one per kind. -/
+  mapPtr : List String := []
+  /-- Interface signatures only: the parameter is the key of the
+  socket map parameter named here: its `u32` index for a sockmap, a
+  place of its key type for a sockhash. `ty` is a placeholder for
+  messages; the checker and the lowering substitute the map's. -/
+  keyOf : Option String := none
   deriving Repr, Inhabited
 
 /-- A function, kept in Core with its signature, since it is checked
@@ -396,7 +407,44 @@ inductive MapKind where
   | ringbuf (n : Expr)
   /-- A program array: `n` slots of programs of the kind. -/
   | progArray (n : Expr) (kind : String)
+  /-- A socket map: `n` sockets by index, or by a key of the type.
+  Its entries are sockets and not places, so it has no slot, no
+  lookup, no `insert` or `delete`, and no initializer; its operations
+  are the interface's calls that take the map as a map pointer. -/
+  | sockmap (n : Expr)
+  | sockhash (n : Expr) (key : Ty)
   deriving Repr, Inhabited
+
+/-- Whether the kind holds sockets rather than places. -/
+def MapKind.isSocket : MapKind → Bool
+  | .sockmap _ | .sockhash .. => true
+  | _ => false
+
+/-- The name of a map kind as a declaration spells it. -/
+def MapKind.spelling : MapKind → String
+  | .array .. => "array" | .percpu .. => "percpu_array" | .hash .. => "hash"
+  | .ringbuf _ => "ringbuf" | .progArray .. => "prog_array"
+  | .sockmap _ => "sockmap" | .sockhash .. => "sockhash"
+
+/-- The parameters of a declaration over a socket map at a call with
+a map pointer of the map kind given: every key parameter takes that map's
+key, a `u32` index for a sockmap, a place of the key type for a
+sockhash. -/
+def Param.resolveKeys (params : List Param) (mk : Option MapKind) : List Param :=
+  params.map fun p =>
+    if p.keyOf.isNone then p else
+    match mk with
+    | some (.sockhash _ k) => { p with ty := .ref p.span k }
+    | _ => { p with ty := .int p.span false 32 }
+
+/-- The map a call passes for the map-pointer parameter, when the
+declaration has one. -/
+def Param.mapPtrArg? (params : List Param) (args : List Arg) : Option String :=
+  (params.zip args).findSome? fun (p, a) =>
+    match a with
+    | .map _ m => if p.mapPtr.isEmpty then none else some m
+    | _ => none
+
 
 structure MapDecl where
   span : Span

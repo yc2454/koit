@@ -1,0 +1,9 @@
+// expect: is not writable in a `sk_msg` program
+// selftest: none; the rule's trigger (rule 04.11, master fe2ec83): every store into `sk_msg_md` is rejected
+// The kernel's `sk_msg_is_valid_access` refuses every store; the
+// selftests have no rejecting case, so this is the trigger. In koit
+// no field of the `sk_msg` context is declared writable.
+program p : sk_msg {
+  ctx.size = 0
+  return PASS
+}

@@ -1,0 +1,13 @@
+// selftest: progs/verifier_sockmap_mutate.c test_sockops_delete (T2408, rule 08.13, master fe2ec83)
+// `sock_ops` is the one non-lookup kind that may delete from a socket
+// map. The delete declarations carry `in sock_ops`; a failed delete
+// is a failed call, here sent to the default exit.
+map socks : sockmap[1]
+map hsocks : sockhash[1] of u32
+
+program p : sock_ops {
+  let k: u32 = 0
+  sockmap_delete(socks, 0)?
+  sockhash_delete(hsocks, k)?
+  return DEFAULT
+}

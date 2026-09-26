@@ -1,0 +1,20 @@
+// run: --ctx family=2 --ctx local_ip4=33554442 --ctx remote_ip4=16777226 --ctx local_port=80 --ctx remote_port=4000
+// p: DROP
+// map socks: no sockets
+
+// kernel: verdict only
+// selftest: none; the corpus (Cilium bpf_redir.c, entry 57)
+// The `sk_msg` half of socket acceleration: on every send, build the
+// peer's key, the connection seen from the other end, and redirect
+// the message to the peer's socket in the sockhash. The redirect's
+// result is the verdict: the message passes to the peer, or is
+// dropped when no peer is in the map, as here, where nothing has
+// inserted one.
+type Key = { sip: be32, dip: be32, family: u32, sport: u32, dport: u32 }
+map socks : sockhash[65536] of Key
+
+program p : sk_msg {
+  let key = { sip: ctx.remote_ip4, dip: ctx.local_ip4, family: ctx.family,
+              sport: ctx.remote_port, dport: ctx.local_port }
+  return msg_redirect(socks, key, 0)
+}

@@ -165,7 +165,7 @@ def verdictPattern : Val → Nat
   | .int _ w x _ => Machine.toNatMod x w
   | .be w x => Machine.toNatMod x w
   | .bool b => if b then 1 else 0
-  | .loc _ => 0
+  | .loc _ | .mapPtr _ => 0
 
 /-- The context values of an LIR state, as the machine loads them. -/
 def ctxValues (st : LIR.Sem.State) : List (String × Nat) :=
@@ -178,8 +178,9 @@ state agreeing. `R_C`, the relation the induction carries, holds the
 locals in scope in their registers in normal form and LIR's stack
 regions in the frame at the objects' bases. -/
 theorem flatten_correct (pre : Interface) (cpu : BPF.Cpu) (P : LIR.Program) (B : BPF.BIR)
-    (K : Kernel) (fns : List LIR.Fn) (fmts fmts' : List (String × Nat) × List UInt8) :
-    flattenProgram pre cpu fns fmts P = .ok (B, fmts') →
+    (K : Kernel) (fns : List LIR.Fn) (maps : List Core.MapDecl)
+    (fmts fmts' : List (String × Nat) × List UInt8) :
+    flattenProgram pre cpu fns maps fmts P = .ok (B, fmts') →
     ∀ st v st', LIR.Sem.ExecProgram K [] st P (.halt v) st' →
       ∀ X, birEnv pre st.env B = .ok X →
         ∃ m, BPF.Star X K (BPF.load X st.machine (ctxValues st)) m ∧

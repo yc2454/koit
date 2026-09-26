@@ -1,0 +1,14 @@
+// selftest: progs/verifier_sockmap_mutate.c test_sockops_update_dedicated (T2410, rule 08.13, master fe2ec83)
+// The dedicated insertion helpers, `bpf_sock_map_update` and
+// `bpf_sock_hash_update`, take the context and insert its socket. In
+// koit the socket is implicit: the declarations take the map, the
+// key, and the flags, and are available in `sock_ops` only.
+map socks : sockmap[1]
+map hsocks : sockhash[1] of u32
+
+program p : sock_ops {
+  let k: u32 = 0
+  sockmap_update(socks, 0, BPF_ANY)?
+  sockhash_update(hsocks, k, BPF_ANY)?
+  return DEFAULT
+}

@@ -7,7 +7,7 @@ program counter, a register file over the level's register type, the
 frame of 64 slots with the verifier's spill rules, the context's
 fields, and the shared state of `Koit.Machine`, the same field
 Core's and LIR's states hold. Values are scalars, locations, or map
-handles, never integers standing for addresses: a location's region
+map pointers, never integers standing for addresses: a location's region
 is one of the machine's, the frame, or the context, and its offset
 may leave the region between the arithmetic that moves it and the
 access that uses it, since only the access is checked.
@@ -44,18 +44,18 @@ def Region.print : Region → String
   | .ctx => "ctx"
 
 /-- A value in a register or a frame slot: a 64-bit pattern, a
-location with the token it was made under, or a map's handle. Null
+location with the token it was made under, or a map's pointer. Null
 is the scalar zero. -/
 inductive Val where
   | scalar (n : Nat)
   | loc (r : Region) (off : Int) (tok : Nat)
-  | handle (m : String)
+  | mapPtr (m : String)
   deriving BEq, DecidableEq, Repr, Inhabited
 
 def Val.print : Val → String
   | .scalar n => toString n
   | .loc r off _ => s!"{r.print} + {off}"
-  | .handle m => s!"map {m}"
+  | .mapPtr m => s!"map {m}"
 
 /-- The object a location names on the held stack. -/
 def Val.heldObj : Val → Option HeldObj
@@ -220,7 +220,7 @@ def readBytes (fr : Frame) (off : Int) (n : Nat) : Except Cause (List UInt8) := 
       | none => throw (.uninitFrame (off + k))
   return bs
 
-/-- A store of `v` as `n` bytes at `off`: a location or a handle only
+/-- A store of `v` as `n` bytes at `off`: a location or a map pointer only
 as 8 bytes at a slot boundary, which spills it; a scalar as bytes,
 which unspills the slot it touches, its other bytes becoming
 uninitialized. -/

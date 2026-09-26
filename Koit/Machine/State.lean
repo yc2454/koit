@@ -46,17 +46,21 @@ inductive Val where
   | scalar (v : Int)
   | bytes (bs : List UInt8)
   | object (id : Nat)
+  /-- A map by its name: the map pointer a socket map's calls take. -/
+  | map (name : String)
   deriving BEq, DecidableEq, Repr, Inhabited
 
 def Val.toInt : Val → Int
   | .scalar v => v
   | .bytes bs => ofLe bs
   | .object id => id
+  | .map _ => 0
 
 def Val.print : Val → String
   | .scalar v => toString v
   | .bytes bs => "0x" ++ hexOf bs
   | .object id => s!"object {id}"
+  | .map name => s!"map {name}"
 
 /-! ### Maps -/
 

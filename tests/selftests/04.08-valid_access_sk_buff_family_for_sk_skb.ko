@@ -1,0 +1,19 @@
+// selftest: verifier/ctx_skb.c valid access __sk_buff family (T3103; T3104 remote_ip4, T3105 local_ip4, T3106 remote_ip6, T3107 local_ip6, T3108 T3109 local_port; rule 04.08, master fe2ec83)
+// The socket half of `__sk_buff`, `family` through `local_port`, is
+// visible to an sk_skb program as it is to a cgroup skb program; the
+// hidden fields are the two units beside this one.
+program p : sk_skb_stream_verdict {
+  let fam = ctx.family
+  let rip = ctx.remote_ip4
+  let lip = ctx.local_ip4
+  let r6 = ctx.remote_ip6[0]
+  let r7 = ctx.remote_ip6[3]
+  let l6 = ctx.local_ip6[0]
+  let l7 = ctx.local_ip6[3]
+  let rp = ctx.remote_port
+  let lp = ctx.local_port
+  if fam == 2 && rp == lp && rip == lip && r6 == l6 && r7 == l7 {
+    return DROP
+  }
+  return PASS
+}

@@ -1,0 +1,11 @@
+// selftest: progs/verifier_ctx_sk_msg.c packet_write_for_sk_msg (T1372, rule 04.24, master fe2ec83)
+// A store into the message of an sk_msg program: its packet is the
+// message being sent, and the kind's `pkt` clause is `rw`. The C
+// tests eight bytes and writes the first.
+type Head = { b: u8, rest: u8[7] }
+
+program p : sk_msg {
+  let h = pkt.view<Head>(0)?
+  h.b = 1
+  return PASS
+}

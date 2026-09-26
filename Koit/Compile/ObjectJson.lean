@@ -106,6 +106,8 @@ def mapJson (pre : Interface) (env : Check.Env) (direct : List String) (d : MapD
     | .hash n k v => pure ("hash", some k, some v, n)
     | .ringbuf n => pure ("ringbuf", none, none, n)
     | .progArray n _ => pure ("prog_array", some u32, some u32, n)
+    | .sockmap n => pure ("sockmap", some u32, some u32, n)
+    | .sockhash n k => pure ("sockhash", some k, some u32, n)
   let keyJson ← match key with
     | some k => pure (← typeJson env k)
     | none => pure Json.null
@@ -125,7 +127,8 @@ def mapJson (pre : Interface) (env : Check.Env) (direct : List String) (d : MapD
     ("data", ← do
       if !d.bytes.isEmpty then
         pure (Json.str (String.join (d.bytes.map fun b => hex2 b.toNat)))
-      else if d.init.isEmpty || (match d.kind with | .progArray .. => true | _ => false) then
+      else if d.init.isEmpty || (match d.kind with | .progArray .. => true | _ => false) ||
+          d.kind.isSocket then
         pure Json.null
       else
         let size ← match value with

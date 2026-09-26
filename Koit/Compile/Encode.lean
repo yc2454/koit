@@ -130,10 +130,10 @@ def calleeTarget (pre : Interface) (kind : String) : Callee → Except String (N
       | some decl => pure (.inr decl.normalExit)
       | none => throw s!"no declaration for `{r}`"
     | b, none => throw s!"`{b.print}` has no helper"
-  | .kernel name =>
+  | .kernel name mk =>
     match pre.call? name with
     | some decl =>
-      match decl.implIn kind with
+      match decl.implIn kind mk with
       | .helper id _ => pure (.inl id)
       | .kfunc kname _ => pure (.inr kname)
       | .inline => throw s!"`{name}` is inline and reaches the encoder as a call"

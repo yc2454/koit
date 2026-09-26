@@ -1,0 +1,14 @@
+// expect: holds sockets, not places
+// selftest: progs/verifier_sockmap_mutate.c test_sockops_update (T2409, rule 08.13, master fe2ec83)
+// The generic update helper on a socket map from `sock_ops`, refused
+// where the dedicated `bpf_sock_map_update` is accepted. In koit the
+// map kind has no `insert`: its entries are sockets and not places,
+// so there is no value to write, and the dedicated call is the only
+// insertion.
+map socks : sockmap[1]
+
+program p : sock_ops {
+  let z = 0
+  socks.insert(z, z)?
+  return DEFAULT
+}

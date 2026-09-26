@@ -208,7 +208,10 @@ partial def evalArgs (K : Kernel) (args : List Arg) (params : List Param := []) 
         if scalarRef (← get) r then vs := vs ++ [← loadPlace r]
         else vs := vs ++ [.loc l]
       | r => vs := vs ++ [← loadPlace r]
-    | .map .. => pure ()
+    | .map _ m =>
+      -- the map pointer of a socket map is an argument; the map of a
+      -- builtin is not
+      if (params[i]?).any (!·.mapPtr.isEmpty) then vs := vs ++ [.mapPtr m]
     i := i + 1
   return vs
 
@@ -226,11 +229,19 @@ partial def callAny (K : Kernel) (s : Span) (f : String) (args : List Arg) :
     match decl.sig with
     | .builtin => builtin K s f args
     | .fn params ret =>
+      let params ← socketParams params args
       let vs ← evalArgs K args params
       match ← kernelCall K decl params ret vs with
       | some v => return v
       | none => fail s!"`{f}` failed with {(← get).errno} at a call the program did not mark"
   | none => fail s!"unknown function `{f}`"
+
+/-- The parameters of a declaration over a socket map at a call: the
+key parameters at the type of the key of the map passed. -/
+partial def socketParams (params : List Param) (args : List Arg) : M (List Param) := do
+  let st ← get
+  return Param.resolveKeys params
+    ((Param.mapPtrArg? params args).bind fun m => (st.maps.lookup m).map (·.decl.kind))
 
 /-- A function of the unit: its parameters bound in a fresh frame, the
 body run, its `return` the value. -/
@@ -372,6 +383,7 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
           | .raise .failed_call r => helperFailed (wrap true 32 r); return none
           | e => throw e
       | .fn params ret =>
+        let params ← socketParams params args
         let vs ← evalArgs K args params
         match ← kernelCall K decl params ret vs with
         | some v => return some (v.map bindingOf)
@@ -671,6 +683,14 @@ def initMaps (env : Env) (u : CompUnit) :
         pure { decl := d, valueTy := .int d.span false 32, valueSize := 4,
                keyTy := some (.int d.span false 32), keySize := 4,
                capacity := ← cap n, progs }
+      -- a socket map's entries are sockets, kept as the kernel
+      -- object's number under the index or the key
+      | .sockmap n =>
+        pure { decl := d, valueTy := .int d.span false 32, valueSize := 4,
+               keyTy := some (.int d.span false 32), keySize := 4, capacity := ← cap n }
+      | .sockhash n k =>
+        pure { decl := d, valueTy := .int d.span false 32, valueSize := 4,
+               keyTy := some k, keySize := ← lay k, capacity := ← cap n }
     ms := ms ++ [(d.name, m)]
   return ms
 
@@ -737,6 +757,12 @@ def printMaps (env : Env) (maps : List (String × Machine.MapState)) : List Stri
       s!"map {name}:" ++ String.join (sorted.map fun (_, k, v) =>
         s!"\n  {printBytes env (ms.keyTy.getD ms.valueTy) k} => \
           {printBytes env ms.valueTy v.toList}")
+    | .sockmap _ | .sockhash .. =>
+      -- the sockets held, each the kernel object the model gave it
+      if ms.entries.isEmpty then s!"map {name}: no sockets" else
+      let sorted := ms.entries.toArray.qsort (fun a b => a.2.1 < b.2.1) |>.toList
+      s!"map {name}:" ++ String.join (sorted.map fun (_, k, v) =>
+        s!"\n  {printBytes env (ms.keyTy.getD ms.valueTy) k} => socket {Machine.ofLe v.toList}")
     | _ =>
       let live := (ms.slots.filter fun (_, b) => b.toList.any (· != 0))
         |>.toArray.qsort (fun a b => a.1 < b.1) |>.toList

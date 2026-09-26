@@ -803,6 +803,8 @@ def dItem (info : Info) (u : CompUnit) : Syntax.Item → M CompUnit
         pure (MapKind.hash (← dExpr c e) (← dTy c k) (← dTy c v))
       | .ringbuf _ e => pure (MapKind.ringbuf (← dExpr c e))
       | .progArray _ e k => pure (MapKind.progArray (← dExpr c e) k)
+      | .sockmap _ e => pure (MapKind.sockmap (← dExpr c e))
+      | .sockhash _ e k => pure (MapKind.sockhash (← dExpr c e) (← dTy c k))
     let init ← match init with
       | some es => es.mapM (dExpr c)
       | none => pure []

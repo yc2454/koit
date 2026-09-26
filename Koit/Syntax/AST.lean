@@ -221,6 +221,10 @@ inductive MapType where
   | ringbuf (span : Span) (n : Expr)
   /-- `prog_array[n] of K`: slots for programs of the kind. -/
   | progArray (span : Span) (n : Expr) (kind : String)
+  /-- `sockmap[n]` and `sockhash[n] of K`: sockets by index or by
+  key, never places. -/
+  | sockmap (span : Span) (n : Expr)
+  | sockhash (span : Span) (n : Expr) (key : Ty)
   deriving Repr, Inhabited
 
 /-- A region of a `preserve` clause. -/

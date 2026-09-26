@@ -156,3 +156,31 @@ private def has (pre : Interface) (s frag : String) : Bool :=
   "is not writable in an `xdp` program; none of its fields is"
 #guard has v6_8 "program p : tc default { pass } {\n  ctx.priority = 1\n  pass\n}\n"
   "the writable fields are mark"
+
+-- the socket kinds over socket maps: the verifier's tables for
+-- `sock_ops`, `sk_msg`, and `sk_skb`, and the kernel function a
+-- declaration reaches through each socket map kind
+#guard hasLine (verdict { koitSide with kinds := koitSide.kinds.map (fun k =>
+  if k.name == "sock_ops" then { k with verdicts := k.verdicts ++ [("BOTH", .value 2)] }
+  else k) }) "outside the range [0, 1]"
+#guard hasLine (verdict { koitSide with kinds := koitSide.kinds.map (fun k =>
+  if k.name == "sk_msg" then
+    { k with ctx := k.ctx.map fun f => if f.name == "size" then { f with writable := true } else f }
+  else k) }) "admits no store to `ctx.size`"
+#guard hasLine (verdict { koitSide with kinds := koitSide.kinds.map (fun k =>
+  if k.name == "sk_skb_stream_verdict" then
+    { k with ctx := k.ctx ++ [{ name := "mark", ty := tU32, writable := false }] }
+  else k) }) "admits no access to `ctx.mark`"
+#guard (v6_8.call? "msg_redirect").map (·.implIn "sk_msg" (some "sockmap")) |>.any fun i => match i with
+  | .helper 60 _ => true | _ => false
+#guard (v6_8.call? "msg_redirect").map (·.implIn "sk_msg" (some "sockhash")) |>.any fun i => match i with
+  | .helper 71 _ => true | _ => false
+#guard (v6_8.call? "sockmap_update").map (·.implIn "sock_ops") |>.any fun i => match i with
+  | .helper 53 [.ctx, .arg 0, .argPtr 1, .arg 2] => true | _ => false
+#guard (v6_8.call? "msg_redirect").map (·.isInline) == some false
+#guard hasDoc "fn msg_redirect(m: sockmap | sockhash, key: key of m, flags: u64) -> SkAction"
+#guard hasDoc "kind sock_ops : section \"sockops\", pkt none, verdicts { REPLY DEFAULT },"
+#guard has v6_8 "map s : sockmap[1]\nprogram p : sk_msg {\n  let x = s[0]\n  pass\n}\n"
+  "holds sockets, not places"
+#guard has v6_8 "map t : hash[1] of u32 -> u32\nprogram p : sk_msg {\n  let k: u32 = 0\n  return msg_redirect(t, k, 0)\n}\n"
+  "is not a socket map"

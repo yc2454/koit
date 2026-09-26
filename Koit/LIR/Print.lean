@@ -26,10 +26,11 @@ partial def Expr.print : Expr → String
   | .load s w a => s!"load({Ty.print (.int s w)}) {a.operand}"
   | .ctx f => s!"ctx {f}"
   | .addr a => a.print
+  | .mapPtr m => s!"mapptr {m}"
 
 partial def Expr.operand (e : Expr) : String :=
   match e with
-  | .lit .. | .var .. => e.print
+  | .lit .. | .var .. | .mapPtr _ => e.print
   | .addr a => a.operand
   | _ => "(" ++ e.print ++ ")"
 

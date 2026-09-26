@@ -518,6 +518,11 @@ partial def placeTy (env : Env) (K : Ctx) (p : Place) : M PlaceInfo := do
       | .ringbuf _ =>
         err s s!"`{m}` is a ring buffer, which has no slots; reserve a record \
           with `hold ev = {m}.reserve<T>()`"
+      | .sockmap _ | .sockhash .. =>
+        err s s!"`{m}` holds sockets, not places; a socket map is used by the \
+          calls that take it, `sockmap_update`, `sockhash_update`, \
+          `sockmap_delete`, `sockhash_delete`, `msg_redirect`, and \
+          `sk_redirect`"
     | none => err s s!"unknown map `{m}`"
   | .deref s e =>
     match e with
@@ -701,10 +706,44 @@ partial def interfaceFn (env : Env) (K : Ctx) (span : Span) (decl : CallDecl)
     unless args.length == params.length do
       err span s!"`{decl.name}` takes {params.length} arguments, {args.length} \
         given"
+    let params ← socketParams env decl.name params args
     for (p, a) in params.zip args do
-      checkArg env K decl.name p a
+      -- a map pointer was checked when the parameters were resolved
+      if p.mapPtr.isEmpty then checkArg env K decl.name p a
     return ret
   | .builtin => builtinCall env K span decl.name args
+
+/-- The parameters of a declaration over a socket map, resolved at a
+call: a map-pointer parameter takes the map argument, which must be a
+socket map of one of the kinds it names, and a key parameter takes
+the type of that map's key, a `u32` index for a sockmap and a place
+of the key type for a sockhash. -/
+partial def socketParams (env : Env) (fname : String) (params : List Param)
+    (args : List Arg) : M (List Param) := do
+  let mut kinds : List (String × MapKind) := []
+  for (p, a) in params.zip args do
+    if p.mapPtr.isEmpty then continue
+    let want := " or ".intercalate (p.mapPtr.map fun k => s!"`{k}`")
+    match a with
+    | .map s m =>
+      match env.map? m with
+      | some d =>
+        unless d.kind.isSocket do
+          err s s!"`{fname}` takes `{p.name}`, a socket map ({want}); `{m}` \
+            is not a socket map"
+        unless p.mapPtr.contains d.kind.spelling do
+          err s s!"`{fname}` takes `{p.name}: {want}`; `{m}` is a \
+            `{d.kind.spelling}`"
+        kinds := kinds ++ [(p.name, d.kind)]
+      | none => err s s!"unknown map `{m}`"
+    | _ =>
+      err a.span s!"`{fname}` takes `{p.name}`, a socket map ({want}); \
+        `{a.print}` is not a map"
+  return params.map fun p =>
+    match p.keyOf.bind fun m => kinds.lookup m with
+    | some (.sockhash _ k) => { p with ty := .ref p.span k }
+    | some _ => { p with ty := .int p.span false 32 }
+    | none => p
 
 /-- The generic builtins, typed by their arguments. -/
 partial def builtinCall (env : Env) (K : Ctx) (span : Span) (f : String)
@@ -788,6 +827,9 @@ partial def hashTypes (env : Env) (span : Span) (m : String) :
   | some d =>
     match d.kind with
     | .hash _ kt vt => return (kt, vt)
+    | .sockmap _ | .sockhash .. =>
+      err span s!"`{m}` holds sockets, not places; it has no `insert`, \
+        `delete`, or lookup, and its operations are the calls that take it"
     | _ =>
       err span s!"`insert`, `delete`, and `m[k]` are the operations of a hash \
         map; `{m}` is not one"

@@ -1,0 +1,12 @@
+// selftest: verifier/ctx_skb.c direct packet write for SK_SKB (T3116, rule 04.24, master fe2ec83)
+// The same store from a stream verdict program, whose packet is the
+// stream segment and whose `pkt` clause is `rw`. The stream parser
+// kind is the same over the packet; the corpus reaches only the
+// verdict hook.
+type Head = { b: u8, rest: u8[7] }
+
+program p : sk_skb_stream_verdict {
+  let h = pkt.view<Head>(0)?
+  h.b = 1
+  return PASS
+}

@@ -1,0 +1,10 @@
+// pending: sk_lookup kinds
+// selftest: progs/verifier_sockmap_mutate.c test_sk_lookup (T2405; T2402 test_trace_iter, T2406 test_sk_reuseport; rule 08.13, master fe2ec83)
+// The kinds that may both insert into and delete from a socket map
+// with the generic helpers, given a socket they hold: `sk_lookup`,
+// `sk_reuseport`, and the sockmap iterator. None is a koit kind yet,
+// and the socket-yielding lookup on a socket map (08.01) waits for
+// them. In C:
+//
+//   bpf_map_update_elem(&sockmap, &zero, ctx->sk, BPF_ANY);
+//   bpf_map_delete_elem(&sockhash, &zero);

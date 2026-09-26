@@ -54,7 +54,7 @@ def pattern (w : Nat) : Val → Option Nat
   | .int _ _ x _ => some (toNatMod x w)
   | .bool b => some (if b then 1 else 0)
   | .be _ x => some (toNatMod x w)
-  | .loc _ => none
+  | .loc _ | .mapPtr _ => none
 
 /-- A pattern read at a signedness and width. -/
 def ofPattern (s : Bool) (w : Nat) (n : Nat) : Int := wrap s w n
@@ -104,6 +104,7 @@ partial def evalExpr (st : State) : Expr → Res Val
     | some v => return v
     | none => throw s!"the context has no field `{f}`"
   | .addr a => do return .loc (← evalAddr st a)
+  | .mapPtr m => return .mapPtr m
 
 partial def evalAddr (st : State) : Addr → Res Loc
   | .var x =>
@@ -267,8 +268,19 @@ def execBuiltin (b : Builtin) (args : List Val) : M (Option Val) := do
 scalar reduced to its parameter's type, a `ref` or `view` place as
 its bytes, an owned reference as its object. -/
 def fitArgs (params : List Core.Param) (args : List Val) : M (List Machine.Val) := do
+  -- the key parameters of a declaration over a socket map take the
+  -- key of the map passed
+  let st ← get
+  let mk := args.findSome? fun
+    | .mapPtr m => (st.maps.lookup m).map (·.decl.kind)
+    | _ => none
+  let params := Core.Param.resolveKeys params mk
   let mut out : List Machine.Val := []
   for (p, v) in params.zip args do
+    if !p.mapPtr.isEmpty then
+      match v with
+      | .mapPtr m => out := out ++ [.map m]; continue
+      | _ => fail s!"`{p.name}` takes a socket map"
     match ← norm p.ty, v with
     | .own .., .loc l =>
       match l.region with
@@ -276,6 +288,10 @@ def fitArgs (params : List Core.Param) (args : List Val) : M (List Machine.Val) 
       | _ => fail s!"`{p.name}` takes an owned reference"
     | .ref _ t, .loc l | .view _ t, .loc l =>
       out := out ++ [.bytes (← argBytes l (← sizeOf t))]
+    -- a scalar local named by reference: the kernel reads its bytes
+    | .ref _ t, .int .. | .ref _ t, .be .. =>
+      let n ← sizeOf t
+      out := out ++ [.bytes (leBytes (toNatMod ((fitCore t v).observe.toInt) (8 * n)) n)]
     | .ref .., _ | .view .., _ | .own .., _ =>
       fail s!"`{p.name}` takes a location"
     | t, .int .. => out := out ++ [(fitCore t v).observe]
@@ -302,6 +318,7 @@ def execKernel (K : Kernel) (h : String) (args : List Val) : M Val := do
     | some (.scalar x) => return Val.mkInt true 64 x
     | some (.object id) => return .loc { region := .kernel id, off := 0, ty := anyTy }
     | some (.bytes _) => fail s!"`{h}` answers with bytes"
+    | some (.map _) => fail s!"`{h}` answers with a map"
     | none => return Val.mkInt true 64 0
   | .failed n =>
     return match rowResult decl with

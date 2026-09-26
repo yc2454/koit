@@ -12,7 +12,7 @@ operands are on the instruction or in `r1` to `r5`, and whether
 once, in `Semantics.lean`, and pass E prints the bytecode instance to
 the kernel's words.
 
-The map builtins take the map's handle as their first operand, the
+The map builtins take the map's pointer as their first operand, the
 value `mapref` yields, so that one call here is one call in the
 kernel's stream; `copy` and `fill` of LIR do not exist here, the
 flattening expands them into loads and stores.
@@ -93,7 +93,10 @@ inductive Builtin where
 of its declaration. -/
 inductive Callee where
   | builtin (b : Builtin)
-  | kernel (decl : String)
+  /-- A kernel function by the name of its declaration, resolved
+  through the map kind of its map-pointer argument where the declaration
+  lists one kernel function per kind. -/
+  | kernel (decl : String) (mapKind : Option String := none)
   deriving Repr, BEq, Inhabited
 
 /-- A source operand: a register, or the immediate of the `_imm`
@@ -133,7 +136,7 @@ inductive Instr (ρ τ : Type) where
   `r5` and the result in `r0`; the callee runs on a fresh frame and
   returns at its `exit`. -/
   | callSub (t : τ) (args : List ρ) (dst : Option ρ)
-  /-- The map's handle. -/
+  /-- The map's map pointer. -/
   | mapref (d : ρ) (m : String)
   /-- Direct value access: `k` bytes into the value of an `array[1]`
   map. -/
@@ -151,7 +154,7 @@ inductive Instr (ρ τ : Type) where
 inductive RegClass where
   | scalar
   | location
-  | handle
+  | mapPtr
   deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- The cpu version a program is compiled for. -/
@@ -299,7 +302,8 @@ def Builtin.print : Builtin → String
 
 def Callee.print : Callee → String
   | .builtin b => b.print
-  | .kernel decl => decl
+  | .kernel decl none => decl
+  | .kernel decl (some mk) => s!"{decl}[{mk}]"
 
 /-- The registers an instruction reads, a call its explicit operands;
 under the fixed convention the well-formedness check adds the

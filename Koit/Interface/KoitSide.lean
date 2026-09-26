@@ -199,6 +199,130 @@ def cgroupKinds : List KindSpec :=
   [cgroupSkbIngressKind, cgroupSkbEgressKind, cgroupSockCreateKind, cgroupSockReleaseKind,
    cgroupPostBind4Kind, cgroupPostBind6Kind] ++ sockAddrKinds
 
+/-! ### The socket kinds over socket maps
+
+Wave two of the socket kinds (decision 71): the three program types
+that work with a sockmap or a sockhash. `sock_ops` runs at TCP events
+on the sockets of a cgroup and may insert the event's socket into a
+socket map; `sk_msg` runs on every send of a socket held in one and
+passes, drops, or redirects the message; `sk_skb` has two hooks over
+the stream of such a socket, the parser returning the length of the
+next message and the verdict passing, dropping, or redirecting it. -/
+
+/-- `struct bpf_sock_ops` per `sock_ops_is_valid_access`: the event,
+its arguments, the reply the program may set, the addresses and
+ports, and the TCP statistics, valid when `is_fullsock` is set. The
+ports are stored as the kernel gives them, `remote_port` in network
+order and `local_port` in host order. The union's other member,
+`replylong`, and the header fields `skb_data`, `skb_len`, and
+`skb_tcp_flags` are left out. -/
+def sockOpsCtx : List CtxSpec :=
+  [{ name := "op", ty := tU32, writable := false },
+   { name := "args", ty := .array noSpan tU32 (.lit noSpan 4 "4"), writable := false },
+   { name := "reply", ty := tU32, writable := true },
+   { name := "family", ty := tU32, writable := false },
+   { name := "remote_ip4", ty := tBe32, writable := false },
+   { name := "local_ip4", ty := tBe32, writable := false },
+   { name := "remote_ip6", ty := .array noSpan tBe32 (.lit noSpan 4 "4"), writable := false },
+   { name := "local_ip6", ty := .array noSpan tBe32 (.lit noSpan 4 "4"), writable := false },
+   { name := "remote_port", ty := tU32, writable := false },
+   { name := "local_port", ty := tU32, writable := false },
+   { name := "is_fullsock", ty := tU32, writable := false },
+   { name := "state", ty := tU32, writable := false },
+   { name := "snd_cwnd", ty := tU32, writable := false },
+   { name := "srtt_us", ty := tU32, writable := false },
+   { name := "rtt_min", ty := tU32, writable := false },
+   { name := "snd_ssthresh", ty := tU32, writable := false },
+   { name := "rcv_nxt", ty := tU32, writable := false },
+   { name := "snd_nxt", ty := tU32, writable := false },
+   { name := "snd_una", ty := tU32, writable := false },
+   { name := "mss_cache", ty := tU32, writable := false },
+   { name := "ecn_flags", ty := tU32, writable := false },
+   { name := "rate_delivered", ty := tU32, writable := false },
+   { name := "rate_interval_us", ty := tU32, writable := false },
+   { name := "packets_out", ty := tU32, writable := false },
+   { name := "retrans_out", ty := tU32, writable := false },
+   { name := "total_retrans", ty := tU32, writable := false },
+   { name := "segs_in", ty := tU32, writable := false },
+   { name := "data_segs_in", ty := tU32, writable := false },
+   { name := "segs_out", ty := tU32, writable := false },
+   { name := "data_segs_out", ty := tU32, writable := false },
+   { name := "lost_out", ty := tU32, writable := false },
+   { name := "sacked_out", ty := tU32, writable := false },
+   { name := "sk_txhash", ty := tU32, writable := true }]
+
+/-- `sock_ops`: [0, 1], where 0 says the `reply` field stands and any
+other value that TCP uses its default; the kernel names neither. No
+packet in this draft: `skb_data` covers the TCP header in a few
+callbacks only. -/
+def sockOpsKind : KindSpec :=
+  { name := "sock_ops", progType := "BPF_PROG_TYPE_SOCK_OPS", section_ := "sockops",
+    hasPkt := false, verdictTy := .named noSpan "SockOpsVerdict",
+    verdictEnum := some { name := "SockOpsVerdict", kernel := "the range [0, 1]", width := 32 },
+    verdicts := [("REPLY", .value 0), ("DEFAULT", .value 1)],
+    sugar := [], defaultExit := .verdict "DEFAULT", sleep := false, ctx := sockOpsCtx }
+
+/-- `enum sk_action`, the verdicts of `sk_msg` and the stream verdict:
+a message or a segment passes or is dropped, so the packet sugar fits. -/
+def skActionEnum : EnumSpec := { name := "SkAction", kernel := "enum sk_action", width := 32 }
+def skActionVerdicts : List (String × VerdictRef) :=
+  [("DROP", .kernel "SK_DROP"), ("PASS", .kernel "SK_PASS")]
+
+/-- The socket half shared by `sk_msg_md` and the sk_skb view of
+`__sk_buff`: the addresses and ports as the kernel stores them. -/
+def sockHalfCtx : List CtxSpec :=
+  [{ name := "family", ty := tU32, writable := false },
+   { name := "remote_ip4", ty := tBe32, writable := false },
+   { name := "local_ip4", ty := tBe32, writable := false },
+   { name := "remote_ip6", ty := .array noSpan tBe32 (.lit noSpan 4 "4"), writable := false },
+   { name := "local_ip6", ty := .array noSpan tBe32 (.lit noSpan 4 "4"), writable := false },
+   { name := "remote_port", ty := tU32, writable := false },
+   { name := "local_port", ty := tU32, writable := false }]
+
+/-- `sk_msg`: the message being sent is the packet, writable; the
+context `struct sk_msg_md` is read-only, with the message's size. -/
+def skMsgKind : KindSpec :=
+  { name := "sk_msg", progType := "BPF_PROG_TYPE_SK_MSG", section_ := "sk_msg",
+    hasPkt := true, pktWritable := true, verdictTy := .named noSpan "SkAction",
+    verdictEnum := some skActionEnum, verdicts := skActionVerdicts,
+    sugar := [("pass", "PASS"), ("drop", "DROP")],
+    defaultExit := .verdict "DROP", sleep := false,
+    ctx := sockHalfCtx ++ [{ name := "size", ty := tU32, writable := false }],
+    ctxBounds := [("data", false), ("data_end", true)] }
+
+/-- `struct __sk_buff` in an sk_skb program per `sk_skb_is_valid_access`:
+`priority` and `tc_index` writable, `mark` hidden, the socket half
+readable; the segment is the packet, writable. -/
+def skSkbCtx : List CtxSpec :=
+  [{ name := "len", ty := tU32, writable := false },
+   { name := "priority", ty := tU32, writable := true },
+   { name := "tc_index", ty := tU32, writable := true },
+   { name := "protocol", ty := tU32, writable := false },
+   { name := "ifindex", ty := tU32, writable := false }] ++ sockHalfCtx
+
+/-- The stream verdict: `SkAction`, or a redirect whose result is the
+verdict. -/
+def skSkbVerdictKind : KindSpec :=
+  { name := "sk_skb_stream_verdict", progType := "BPF_PROG_TYPE_SK_SKB",
+    section_ := "sk_skb/stream_verdict", hasPkt := true, pktWritable := true,
+    verdictTy := .named noSpan "SkAction", verdictEnum := some skActionEnum,
+    verdicts := skActionVerdicts, sugar := [("pass", "PASS"), ("drop", "DROP")],
+    defaultExit := .verdict "DROP", sleep := false, ctx := skSkbCtx,
+    ctxBounds := [("data", false), ("data_end", true)] }
+
+/-- The stream parser: the length of the next message, a bare `u32`
+with no named verdict, so a body may fall off its end as a `syscall`
+body may; 0 asks for more data. -/
+def skSkbParserKind : KindSpec :=
+  { name := "sk_skb_stream_parser", progType := "BPF_PROG_TYPE_SK_SKB",
+    section_ := "sk_skb/stream_parser", hasPkt := true, pktWritable := true,
+    verdictTy := tU32, verdicts := [], sugar := [],
+    defaultExit := .value 0, sleep := false, ctx := skSkbCtx,
+    ctxBounds := [("data", false), ("data_end", true)] }
+
+def socketMapKinds : List KindSpec :=
+  [sockOpsKind, skMsgKind, skSkbVerdictKind, skSkbParserKind]
+
 /-! ### Calls -/
 
 /-- `redirect(ifindex)` yields `{v: verdict | v == REDIRECT}`: the
@@ -262,6 +386,34 @@ def callSpecs : List CallSpec := [
   { name := "tcp_sock", sig := .fn [param "sk" refSock] (some refTcpSock),
     effects := [.call, .fail], fails := some .not_found, derivedFrom := some "sk",
     kinds := ["tc"], link := .helper "tcp_sock" [.arg 0] },
+  -- the socket maps, whose entries are sockets and not places: the
+  -- context's own socket inserted under a key, an entry deleted, and
+  -- a message or a stream segment redirected to the socket under a
+  -- key, the redirect's result being the verdict. A sockmap's key is
+  -- its `u32` index, which the map-key helpers read through a pointer
+  -- (`argPtr`) and the redirects take by value; a sockhash's is a
+  -- place of its key type. The flags are `BPF_ANY`, `BPF_NOEXIST`,
+  -- `BPF_EXIST` for the updates and `BPF_F_INGRESS` for the redirects.
+  { name := "sockmap_update", sig := .fn [mapPtrParam "m" ["sockmap"], keyParam "i" "m", param "flags" tU64] none,
+    effects := [.call, .fail], fails := some .failed_call, kinds := ["sock_ops"],
+    link := .helper "sock_map_update" [.ctx, .arg 0, .argPtr 1, .arg 2] },
+  { name := "sockhash_update", sig := .fn [mapPtrParam "m" ["sockhash"], keyParam "key" "m", param "flags" tU64] none,
+    effects := [.call, .fail], fails := some .failed_call, kinds := ["sock_ops"],
+    link := .helper "sock_hash_update" [.ctx, .arg 0, .arg 1, .arg 2] },
+  { name := "sockmap_delete", sig := .fn [mapPtrParam "m" ["sockmap"], keyParam "i" "m"] none,
+    effects := [.call, .fail], fails := some .failed_call, kinds := ["sock_ops"],
+    link := .helper "map_delete_elem" [.arg 0, .argPtr 1] },
+  { name := "sockhash_delete", sig := .fn [mapPtrParam "m" ["sockhash"], keyParam "key" "m"] none,
+    effects := [.call, .fail], fails := some .failed_call, kinds := ["sock_ops"],
+    link := .helper "map_delete_elem" [.arg 0, .arg 1] },
+  { name := "msg_redirect", sig := .fn [mapPtrParam "m" ["sockmap", "sockhash"], keyParam "key" "m", param "flags" tU64] (some (.named noSpan "SkAction")),
+    effects := [.call], kinds := ["sk_msg"],
+    linkByMapKind := [("sockmap", .helper "msg_redirect_map" [.ctx, .arg 0, .arg 1, .arg 2]),
+                      ("sockhash", .helper "msg_redirect_hash" [.ctx, .arg 0, .arg 1, .arg 2])] },
+  { name := "sk_redirect", sig := .fn [mapPtrParam "m" ["sockmap", "sockhash"], keyParam "key" "m", param "flags" tU64] (some (.named noSpan "SkAction")),
+    effects := [.call], kinds := ["sk_skb_stream_verdict"],
+    linkByMapKind := [("sockmap", .helper "sk_redirect_map" [.ctx, .arg 0, .arg 1, .arg 2]),
+                      ("sockhash", .helper "sk_redirect_hash" [.ctx, .arg 0, .arg 1, .arg 2])] },
   -- a format string and at most three scalar arguments
   { name := "printk", sig := .builtin, effects := [.call], note := "bpf_trace_printk" },
   { name := "ktime", sig := .fn [] (some tU64), effects := [.call],
@@ -360,8 +512,21 @@ def constSpecs : List ConstSpec := [
   { name := "ETH_P_IP", kernel := "ETH_P_IP", hton := true },
   { name := "ETH_P_IPV6", kernel := "ETH_P_IPV6", hton := true },
   { name := "ETH_P_VLAN", kernel := "ETH_P_8021Q", hton := true },
-  { name := "ETH_ALEN", kernel := "ETH_ALEN" }
-]
+  { name := "ETH_ALEN", kernel := "ETH_ALEN" },
+  -- the map-update flags and the redirect flag
+  { name := "BPF_ANY", kernel := "BPF_ANY" },
+  { name := "BPF_NOEXIST", kernel := "BPF_NOEXIST" },
+  { name := "BPF_EXIST", kernel := "BPF_EXIST" },
+  { name := "BPF_F_INGRESS", kernel := "BPF_F_INGRESS" }
+] ++
+  -- the sock_ops events, which `ctx.op` is compared against: a
+  -- context field is data the kernel supplies, so the events are
+  -- constants and not an enumeration type
+  ["VOID", "TIMEOUT_INIT", "RWND_INIT", "TCP_CONNECT_CB", "ACTIVE_ESTABLISHED_CB",
+   "PASSIVE_ESTABLISHED_CB", "NEEDS_ECN", "BASE_RTT", "RTO_CB", "RETRANS_CB",
+   "STATE_CB", "TCP_LISTEN_CB", "RTT_CB", "PARSE_HDR_OPT_CB", "HDR_OPT_LEN_CB",
+   "WRITE_HDR_OPT_CB"].map fun e =>
+    { name := "BPF_SOCK_OPS_" ++ e, kernel := "BPF_SOCK_OPS_" ++ e }
 
 /-- `Sock` is opaque; `SockTuple` is `struct bpf_sock_tuple`'s IPv4
 member, the argument of the socket lookups. -/
@@ -375,6 +540,8 @@ def typeDecls : List TypeDecl := [
   { span := noSpan, name := "CgroupVerdict", ty := .enum noSpan "CgroupVerdict" },
   { span := noSpan, name := "BindVerdict", ty := .enum noSpan "BindVerdict" },
   { span := noSpan, name := "AllowOnly", ty := .enum noSpan "AllowOnly" },
+  { span := noSpan, name := "SockOpsVerdict", ty := .enum noSpan "SockOpsVerdict" },
+  { span := noSpan, name := "SkAction", ty := .enum noSpan "SkAction" },
   { span := noSpan, name := "Sock", ty := .struct noSpan [] },
   -- `struct bpf_tcp_sock`, read through `tcp_sock`; the kernel admits
   -- loads from its fields and no store
@@ -396,7 +563,7 @@ def typeDecls : List TypeDecl := [
 
 /-- The koit side, for every kernel tag. -/
 def koitSide : Spec :=
-  { kinds := [xdpKind, tcKind, syscallKind] ++ cgroupKinds, calls := callSpecs,
+  { kinds := [xdpKind, tcKind, syscallKind] ++ cgroupKinds ++ socketMapKinds, calls := callSpecs,
     resources := resourceDecls, regions := regionDecls, slots := slotDecls,
     enums := [], consts := constSpecs, types := typeDecls }
 

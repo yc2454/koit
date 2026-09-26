@@ -270,8 +270,19 @@ inductive EvalArgs (K : Kernel) : State → List Param → List Arg → Res (Lis
       EvalArgs K st ps (.place p :: rest) (.ok (v :: vs)) st2
   | placeAbort {st ps p a rest st1} :
       EvalPlace K st p (.error a) st1 → EvalArgs K st ps (.place p :: rest) (.error a) st1
+  /-- The map of a builtin is no argument; the map pointer of a socket map
+  is one, `mapptr m`, where the parameter takes a map pointer. -/
   | map {st ps s m rest r st1} :
+      (ps.head?.map fun p => !p.mapPtr.isEmpty) ≠ some true →
       EvalArgs K st ps.tail rest r st1 → EvalArgs K st ps (.map s m :: rest) r st1
+  | mapPtrOf {st ps s m rest vs st1} :
+      (ps.head?.map fun p => !p.mapPtr.isEmpty) = some true →
+      EvalArgs K st ps.tail rest (.ok vs) st1 →
+      EvalArgs K st ps (.map s m :: rest) (.ok (.mapPtr m :: vs)) st1
+  | mapPtrAbort {st ps s m rest a st1} :
+      (ps.head?.map fun p => !p.mapPtr.isEmpty) = some true →
+      EvalArgs K st ps.tail rest (.error a) st1 →
+      EvalArgs K st ps (.map s m :: rest) (.error a) st1
 
 /-- A call by name: a function of the unit, a builtin, or a kernel
 function through the kernel. -/

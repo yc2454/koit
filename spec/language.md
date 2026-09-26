@@ -398,6 +398,8 @@ MapType   ::= 'array' '[' Expr ']' 'of' Type
             | 'percpu_array' '[' Expr ']' 'of' Type
             | 'hash' '[' Expr ']' 'of' Type '->' Type
             | 'ringbuf' '[' Expr ']'
+            | 'sockmap' '[' Expr ']'
+            | 'sockhash' '[' Expr ']' 'of' Type
 FnDecl    ::= 'global'? 'fn' Ident '(' Params? ')' ('->' RetType)? 'fails'? Block
 Params    ::= Param (',' Param)*
 Param     ::= Ident ':' Type ('where' Pred)?
@@ -414,7 +416,7 @@ Handler   ::= 'on' KindList Block
 KindList  ::= Kind (',' Kind)* | '_'
 Kind      ::= 'short_packet' | 'missing' | 'invariant' | 'bound'
             | 'helper' | 'program'
-ProgKind  ::= 'xdp' | 'tc' | 'syscall'
+ProgKind  ::= Ident                       -- a kind of the interface
 ```
 
 `license "GPL"` declares the unit's license; kernel functions the
@@ -597,6 +599,24 @@ An array without an initializer is filled by the loader, and its
 entries are then any program of `K`. The kind is what the kernel
 checks agreement on among the programs sharing an array, and their
 sleepability follows from it.
+
+`sockmap[n]` and `sockhash[n] of K` are socket maps: their entries
+are sockets, by index in a sockmap and by a key of type `K` in a
+sockhash, and a socket is not a place, so a socket map has no value
+type, no `m[i]`, no `m[k]?`, no `insert`, no `delete`, no access
+word, and no initializer. Its operations are the interface's calls
+that take the map as a map pointer: `sockmap_update(m, i, flags)` and
+`sockhash_update(m, key, flags)` insert the socket of a `sock_ops`
+program's context, `sockmap_delete(m, i)` and `sockhash_delete(m,
+key)` remove an entry, and `msg_redirect(m, key, flags)` in `sk_msg`
+and `sk_redirect(m, key, flags)` in `sk_skb_stream_verdict` send the
+message or the segment to the socket under the key, the call's result
+being the verdict. A sockmap's key is its `u32` index, a sockhash's a
+place of `K`, and a declaration over both map kinds resolves to the
+kernel function of the kind the map pointer has (decision 71). The flags
+are the interface's constants `BPF_ANY`, `BPF_NOEXIST`, `BPF_EXIST`,
+and `BPF_F_INGRESS`. The lookup that yields a socket waits for the
+`sk_lookup` kinds.
 
 A map declaration may end in an access word. `readonly` says the
 program never writes the map: its places are immutable, so a store,
@@ -1218,6 +1238,10 @@ and writability are their koit side, offsets their kernel side
 | `cgroup_bind4`, `cgroup_bind6` | none | `user_family`, `user_ip4: be32` or `user_ip6: be32[4]` writable, `user_port` writable, `family`, `type`, `protocol` | `REJECT ALLOW ALLOW_PRIVILEGED_PORT` | none | `REJECT` | no |
 | `cgroup_connect4`, `cgroup_connect6`, `cgroup_sendmsg4`, `cgroup_sendmsg6` | none | as `bind`; `sendmsg` also `msg_src_ip4: be32` or `msg_src_ip6: be32[4]` writable | `REJECT ALLOW` | none | `REJECT` | no |
 | `cgroup_recvmsg4`, `cgroup_recvmsg6`, `cgroup_getpeername4`, `cgroup_getpeername6`, `cgroup_getsockname4`, `cgroup_getsockname6` | none | as `bind` | `ALLOW` | none | `ALLOW` | no |
+| `sock_ops` | none | `op`, `args: u32[4]`, `reply` writable, `family`, the addresses and ports as `cgroup_skb`, `is_fullsock`, `state`, the TCP statistics, `sk_txhash` writable | `REPLY DEFAULT` | none | `DEFAULT` | no |
+| `sk_msg` | `rw` | `family`, the addresses and ports, `size` | `DROP PASS` | `pass drop` | `drop` | no |
+| `sk_skb_stream_verdict` | `rw` | `len`, `priority` writable, `tc_index` writable, `protocol`, `ifindex`, the addresses and ports | `DROP PASS` | `pass drop` | `drop` | no |
+| `sk_skb_stream_parser` | `rw` | as `sk_skb_stream_verdict` | `u32` | none | `0` | no |
 
 The cgroup kinds are one kind per hook (decision 70). The kernel fixes
 the result's range and the context table by the expected attach type,
@@ -1237,6 +1261,23 @@ write `return ALLOW` and `return REJECT`. The `recvmsg`, `getpeername`,
 and `getsockname` hooks run after the operation and cannot reject it:
 their only verdict is `ALLOW`, and a failure there leaves the address
 as the kernel had it, which is what the C programs do too.
+
+The socket kinds over socket maps are the same shape (decision 71).
+`sock_ops` runs at TCP events on the sockets of a cgroup: `ctx.op`
+names the event, compared against the interface's `BPF_SOCK_OPS_*`
+constants, since a context field is data the kernel supplies and not
+a value of an enumeration type; the program may insert the event's
+socket into a socket map, and its verdict says whether the `reply`
+field stands (`REPLY`, the kernel's 0) or TCP uses its default
+(`DEFAULT`, any other value). `sk_msg` runs on every send of a socket
+held in a socket map, the message being its packet, writable, its
+context read-only; it passes or drops the message or redirects it to
+another socket of the map, the redirect's result being the verdict.
+`sk_skb_stream_verdict` does the same for a segment of the stream,
+and `sk_skb_stream_parser` returns the length of the next message, a
+bare `u32` whose body may fall off its end as a `syscall` body may.
+`ctx.sk`, `sock_ops`'s `skb_data`, and the socket-yielding lookup
+are deferred.
 
 A context field's declaration carries, besides its name, type, and
 writability, its offset in the kernel's layout, which the lowering and
@@ -1285,7 +1326,9 @@ with named verdicts must end in an exit, as a handler must, since 0 is no
 verdict of the allow-only hooks. The verdict type of a kind is an
 enumeration type (section 7) whose constants are the kind's verdicts:
 `XdpAction` for `xdp`, `TcAction` for `tc`, `SkbVerdict`, `EgressVerdict`,
-`CgroupVerdict`, `BindVerdict`, and `AllowOnly` for the cgroup kinds. Inside a program the alias
+`CgroupVerdict`, `BindVerdict`, and `AllowOnly` for the cgroup kinds,
+`SockOpsVerdict` for `sock_ops`, and `SkAction`, the kernel's `enum
+sk_action`, for `sk_msg` and the stream verdict. Inside a program the alias
 `verdict` names the enclosing kind's type, so in an `xdp` body `verdict` and
 `XdpAction` are one type; a function has no kind and names the declaration. A
 `syscall` program has no such declaration, since its result is `i32` with no
@@ -1557,7 +1600,10 @@ implementation (`ISSUES.md`, entry 11):
   keeps `call` in Core.
 - An argument of a call is a value, a place, or, for `insert`,
   `delete`, and `reserve`, the map; whether a place argument is read
-  or passed by reference depends on the parameter.
+  or passed by reference depends on the parameter. A call over a
+  socket map takes the map as its map-pointer argument, a parameter of the
+  map kind, and its key parameters take the key of that map, a `u32`
+  index for a sockmap and a place of `K` for a sockhash.
 - `try` records whether its `else` came from a tail, which must exit,
   or from `if let`, which need not; both elaborate to the same form.
 - A call used for its effect is `let _ = call f(a...)`: `_` binds
@@ -2658,6 +2704,27 @@ session 8:
     and `sk_skb` wait for the sockhash and sockmap kinds; `ctx.sk`,
     `cb`, `tstamp`, the Unix hooks, and cgroup storage are deferred
     (ISSUES entry 56).
+71. Socket kinds over socket maps (2026-09-26). `sock_ops`, `sk_msg`,
+    `sk_skb_stream_verdict`, and `sk_skb_stream_parser` are kinds as
+    decision 70 makes them, with `SockOpsVerdict { REPLY, DEFAULT }`
+    for the range the kernel never names and `SkAction`, the kernel's
+    enumeration, with the `pass` and `drop` sugar, since a message or
+    a segment is dropped. `sockmap[n]` and `sockhash[n] of K` are map
+    kinds whose entries are sockets and not places: no slot, lookup,
+    `insert`, `delete`, access word, or initializer; their operations
+    are call declarations taking the map as a map-pointer parameter of the
+    map kind, the updates and deletes `in sock_ops`, one `msg_redirect`
+    and one `sk_redirect` over both kinds resolved to the kernel
+    function by the map pointer's kind. A sockmap's key is its `u32` index,
+    which the map-key helpers read through a pointer, so the layout
+    has an entry for a scalar passed by address; the update and
+    redirect flags are interface constants. The sock_ops events are
+    constants compared against `ctx.op`. The transcriber lays out
+    anonymous unions at one offset and reads anonymous enumerations by
+    a member they declare. Deferred: `ctx.sk`, `skb_data` and the
+    header options, `setsockopt`/`getsockopt`, `msg_apply_bytes`,
+    `msg_cork_bytes`, `sock_ops_cb_flags_set`, the socket-yielding
+    lookup and the `sk_lookup` kinds, `sk_reuseport` (ISSUES entry 57).
 
 Open questions, with the default the checker implements until decided:
 

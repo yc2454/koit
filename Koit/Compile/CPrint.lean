@@ -117,6 +117,7 @@ partial def cexpr (inFn : Bool) : LIR.Expr → String
   | .load s w a => s!"(*({ity s w} *)({caddr inFn a}))"
   | .ctx f => s!"ctx->{f}"
   | .addr a => caddr inFn a
+  | .mapPtr m => s!"&{cname m}"
 
 partial def caddr (inFn : Bool) : LIR.Addr → String
   | .var x => cname x
@@ -129,7 +130,7 @@ partial def caddr (inFn : Bool) : LIR.Addr → String
 end
 
 def isPtrExpr : LIR.Expr → Bool
-  | .addr _ => true
+  | .addr _ | .mapPtr _ => true
   | _ => false
 
 def ccond (inFn : Bool) (Γ : List (String × LIR.Ty)) (c : LIR.Cond) : String :=
@@ -158,7 +159,7 @@ def exprTy (Γ : List (String × LIR.Ty)) : LIR.Expr → LIR.Ty
   | .bswap w _ => .int false w
   | .load s w _ => .int s w
   | .ctx _ => .u32
-  | .addr _ => .ptr
+  | .addr _ | .mapPtr _ => .ptr
 
 /-- The status protocol of a `fails` or `T ?` function: 0 for a value,
 1 for absence, `2 + k` for a failure of kind `k`. -/
@@ -190,14 +191,19 @@ the kind: the kernel's arguments laid out from koit's, the context,
 the constants the source does not name, and the size of a place
 argument as `sizeof` of its C type. An inline declaration prints its C form. -/
 def kernelCall (pre : Interface) (types : List Core.TypeDecl) (kind : String) (decl : CallDecl)
-    (args : List String) : String :=
+    (args : List String) (mapKind : Option Core.MapKind := none) : String :=
   let a (i : Nat) := (args[i]?).getD "0"
   let byLayout (name : String) (abi : List AbiArg) : String :=
     let params := match decl.sig with
-      | .fn ps _ => ps
+      | .fn ps _ => Core.Param.resolveKeys ps mapKind
       | .builtin => []
     let one : AbiArg → String
       | .arg i => a i
+      -- a scalar the kernel reads through a pointer: a compound literal
+      | .argPtr i =>
+        match params[i]? with
+        | some p => s!"&({(cdecl types p.ty "").trimAsciiEnd})\{{a i}}"
+        | none => a i
       | .ctx => "ctx"
       | .const k => if k < 0 then s!"({k})" else toString k
       | .fmt => "0"
@@ -210,7 +216,7 @@ def kernelCall (pre : Interface) (types : List Core.TypeDecl) (kind : String) (d
           s!"sizeof({(cdecl types pointee "").trimAsciiEnd})"
         | none => "0"
     s!"{name}({", ".intercalate (abi.map one)})"
-  match decl.implIn kind with
+  match decl.implIn kind (mapKind.map (·.spelling)) with
   | .helper id abi =>
     match pre.side.helpers.find? (·.id == id) with
     | some h => byLayout s!"bpf_{h.name}" abi
@@ -240,6 +246,9 @@ structure PCtx where
   pre    : Interface
   types  : List Core.TypeDecl
   fns    : List LIR.Fn
+  /-- The unit's maps, for the map kind a map-pointer argument selects a
+  kernel function by. -/
+  maps   : List Core.MapDecl := []
   /-- The program's kind, or empty in a function, whose calls take
   each declaration's default correspondence. -/
   kind   : String
@@ -409,7 +418,10 @@ partial def cstmt (c : PCtx) (n : Nat) (s : LIR.Stmt) : PM (List String × PCtx)
   | .kernel _ x h args =>
     let some decl := c.pre.call? h
       | return (line s!"/* unknown kernel function {h} */", c)
-    let call := kernelCall c.pre c.types c.kind decl (args.map (cexpr (!c.program)))
+    let mk := args.findSome? fun
+      | .mapPtr m => (c.maps.find? (·.name == m)).map (·.kind)
+      | _ => none
+    let call := kernelCall c.pre c.types c.kind decl (args.map (cexpr (!c.program))) mk
     match x with
     | some x =>
       -- a declaration yielding a reference or an owned object yields a pointer
@@ -470,7 +482,8 @@ partial def boundedFns (fns : List LIR.Fn) (acc : List String := []) : List Stri
     else if mentionsBounds acc f.body then some f.name else none
   if acc'.isEmpty then acc else boundedFns fns (acc ++ acc')
 
-def cfn (pre : Interface) (types : List Core.TypeDecl) (fns : List LIR.Fn) (bounded : List String)
+def cfn (pre : Interface) (types : List Core.TypeDecl) (fns : List LIR.Fn) (maps : List Core.MapDecl)
+    (bounded : List String)
     (direct : List String) (f : LIR.Fn) : PM String := do
   let params := f.params.map fun p =>
     if p.ty == .ptr then s!"void *{cname p.name}" else s!"{cty p.ty} {cname p.name}"
@@ -481,7 +494,7 @@ def cfn (pre : Interface) (types : List Core.TypeDecl) (fns : List LIR.Fn) (boun
   let ret := if statusFn f then "int" else match f.ret with
     | some t => cty t
     | none => "void"
-  let c : PCtx := { pre, types, fns, kind := "", status := statusFn f, program := false,
+  let c : PCtx := { pre, types, fns, maps, kind := "", status := statusFn f, program := false,
                     defaultVerdict := "0", bounded,
                     Γ := f.params.map fun p => (p.name, p.ty) }
   let (body, _) ← cstmts c 4 f.body
@@ -510,7 +523,7 @@ def cprogram (pre : Interface) (u : LIR.CompUnit) (p : LIR.Program) : PM String 
       | .value v => Machine.toNatMod v (LIR.Ty.width vt)
     | none => 0
   let dv := clit (LIR.Ty.width vt) dflt
-  let c : PCtx := { pre, types := u.types, fns := u.fns, kind := p.kind, status := false,
+  let c : PCtx := { pre, types := u.types, fns := u.fns, maps := u.maps, kind := p.kind, status := false,
                     program := true, defaultVerdict := dv, bounded := boundedFns u.fns,
                     Γ := [("reason", .u32)] }
   let ctxTy := ctxType pre p.kind
@@ -569,6 +582,8 @@ def mapTypeName : Core.MapKind → String
   | .hash .. => "BPF_MAP_TYPE_HASH"
   | .ringbuf .. => "BPF_MAP_TYPE_RINGBUF"
   | .progArray .. => "BPF_MAP_TYPE_PROG_ARRAY"
+  | .sockmap .. => "BPF_MAP_TYPE_SOCKMAP"
+  | .sockhash .. => "BPF_MAP_TYPE_SOCKHASH"
 
 def cmap (types : List Core.TypeDecl) (d : Core.MapDecl) : String :=
   let count (n : Core.Expr) : String := match n with
@@ -611,6 +626,15 @@ def cmap (types : List Core.TypeDecl) (d : Core.MapDecl) : String :=
   | .progArray n _ =>
     s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); \
       __uint(key_size, 4); __uint(value_size, 4); } {mname} SEC(\".maps\");\n"
+  -- the sockets are the kernel's; the value is the socket's word
+  | .sockmap n =>
+    s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); \
+      __uint(key_size, 4); __uint(value_size, 4); } {mname} SEC(\".maps\");\n"
+  | .sockhash n k =>
+    typeDef keyName k ++
+    s!"struct \{ __uint(type, {mapTypeName d.kind}); __uint(max_entries, {count n}); \
+      __type(key, {typeRef keyName k}); __uint(value_size, 4); } {mname} \
+      SEC(\".maps\");\n"
 
 /-- Whether the text calls a C function by name. -/
 def calls (text name : String) : Bool := (text.splitOn s!"{name}(").length > 1
@@ -638,8 +662,18 @@ def kernelDecls (pre : Interface) (u : LIR.CompUnit) (body : String) : String :=
       s!"\t{decl};\n"
     let asserts := s.fields.filter (·.name != "") |>.map fun f =>
       s!"_Static_assert(__builtin_offsetof({s.name}, {f.name}) == {f.offset}, \"{s.name}.{f.name}\");\n"
+    -- fields at one offset are the members of an anonymous union
+    let groups := s.fields.zipIdx.foldl (fun (gs : List (List (CtxField × Nat))) fi =>
+      match gs with
+      | g :: rest =>
+        if g.any (·.1.offset == fi.1.offset) then (g ++ [fi]) :: rest else [fi] :: g :: rest
+      | [] => [[fi]]) [] |>.reverse
+    let group (g : List (CtxField × Nat)) : String :=
+      match g with
+      | [(f, i)] => field f i
+      | _ => "\tunion {\n" ++ String.join (g.map fun (f, i) => "\t" ++ field f i) ++ "\t};\n"
     s!"/* {s.name}, include/uapi/linux/bpf.h of {pre.kernel} */\n{s.name} \{\n" ++
-      String.join (s.fields.zipIdx.map fun (f, i) => field f i) ++ "};\n" ++
+      String.join (groups.map group) ++ "};\n" ++
       s!"_Static_assert(sizeof({s.name}) == {s.size}, \"{s.name}\");\n" ++ String.join asserts
   let helperDecl (h : Helper) : String :=
     let args := h.args.map fun (t, n) => if t == "..." then "..." else s!"{kernelCTy t} {n}"
@@ -681,7 +715,7 @@ def emitC (pre : Interface) (u : LIR.CompUnit) : String :=
     | _ => ""
   let go : C.PM (List String × List String) := do
     let bounded := C.boundedFns u.fns
-    let fns ← u.fns.mapM (C.cfn pre u.types u.fns bounded u.direct)
+    let fns ← u.fns.mapM (C.cfn pre u.types u.fns u.maps bounded u.direct)
     let progs ← u.programs.mapM (C.cprogram pre u)
     return (fns, progs)
   let ((fns, progs), _) := go.run 0

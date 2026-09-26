@@ -27,9 +27,11 @@ What is read, and from where:
                  register_btf_kfunc_id_set for the kfunc sets
   mapTypes       the uapi enum
   kfuncs         the BTF_ID_FLAGS sets and the __bpf_kfunc definitions
-  ctx            the uapi context structs, laid out by C's rules
-  values         xdp_action, TC_ACT_*, IPPROTO_*, ETH_P_*, ETH_ALEN,
-                 and the map-update and netns flags
+  ctx            the uapi context structs, laid out by C's rules,
+                 an anonymous union's members at the union's offset
+  values         xdp_action, sk_action, bpf_attach_type, the sock_ops
+                 events, TC_ACT_*, IPPROTO_*, ETH_P_*, ETH_ALEN, and
+                 the map-update, redirect, and netns flags
   changesPkt     bpf_helper_changes_pkt_data, as helper names
   spinLockSize   struct bpf_spin_lock
 """
@@ -212,11 +214,20 @@ def parse_proto_fns(tree):
 
 # ---------------------------------------------------------- enums etc.
 
-def parse_enum(src, enum_name):
-    m = re.search(r"^enum " + enum_name + r" \{(.*?)^\};", src, re.M | re.S)
-    if not m:
-        raise SystemExit(f"enum {enum_name} not found")
-    body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+def enum_value(val, known):
+    """An enumerator's value: a number, an earlier enumerator, or a
+    shift `(1 << n)` as the flag enumerations write it."""
+    val = val.strip()
+    if val in known:
+        return known[val]
+    m = re.match(r"^\(?\s*(\d+)\s*U?L*\s*<<\s*(\d+)\s*\)?$", val)
+    if m:
+        return int(m.group(1)) << int(m.group(2))
+    return int(val, 0)
+
+
+def parse_enum_body(body):
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
     body = re.sub(r"^\s*#.*$", "", body, flags=re.M)
     values, nxt = [], 0
     for item in body.split(","):
@@ -225,16 +236,29 @@ def parse_enum(src, enum_name):
             continue
         if "=" in item:
             name, val = [s.strip() for s in item.split("=", 1)]
-            known = dict(values)
-            if val in known:
-                v = known[val]
-            else:
-                v = int(val, 0)
+            v = enum_value(val, dict(values))
         else:
             name, v = item, nxt
         values.append((name, v))
         nxt = v + 1
     return values
+
+
+def parse_enum(src, enum_name):
+    m = re.search(r"^enum " + enum_name + r" \{(.*?)^\};", src, re.M | re.S)
+    if not m:
+        raise SystemExit(f"enum {enum_name} not found")
+    return parse_enum_body(m.group(1))
+
+
+def parse_anon_enum(src, member):
+    """The anonymous enumeration that declares `member`, which is how
+    the uapi header spells the sock_ops events and the flag sets: the
+    enumeration has no name, so a member names it."""
+    for m in re.finditer(r"^enum \{(.*?)^\};", src, re.M | re.S):
+        if re.search(r"\b" + re.escape(member) + r"\b", m.group(1)):
+            return parse_enum_body(m.group(1))
+    raise SystemExit(f"no anonymous enum declares {member}")
 
 
 def parse_prog_types(tree):
@@ -330,33 +354,57 @@ SIZES = {"__u8": 1, "__s8": 1, "__u16": 2, "__s16": 2, "__u32": 4, "__s32": 4,
          "__u64": 8, "__s64": 8, "__be16": 2, "__be32": 4, "__be64": 8}
 
 
+def layout_member(name, line):
+    """One member line of a uapi struct: its size, alignment, and
+    name; an unnamed bit-field is padding of its bits."""
+    mm = re.match(r"__bpf_md_ptr\([^,]+,\s*(\w+)\);", line)
+    if mm:
+        return 8, 8, mm.group(1)
+    mm = re.match(r"(__(?:u|s|be)(?:8|16|32|64))\s+(\w+)?(?:\[(\d+)\])?\s*(?::\s*(\d+))?;", line)
+    if not mm:
+        raise SystemExit(f"{name}: cannot lay out `{line}`")
+    base = SIZES[mm.group(1)]
+    fname = mm.group(2) or ""
+    if mm.group(4):
+        if fname:
+            raise SystemExit(f"{name}: a named bit-field `{line}`")
+        # an unnamed bit-field: padding of its bits, unaligned
+        return (int(mm.group(4)) + 7) // 8, 1, fname
+    return base * (int(mm.group(3)) if mm.group(3) else 1), base, fname
+
+
 def layout_struct(bpf_h, name):
+    """The struct laid out by C's rules. An anonymous union inside it
+    puts every member at the union's offset; the union is as large as
+    its largest member and as aligned as its widest, and its members
+    are fields of the struct like any other, at one offset."""
     m = re.search(r"^" + re.escape(name) + r" \{(.*?)^\};", bpf_h, re.M | re.S)
     if not m:
         raise SystemExit(f"{name} not found")
     body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
     fields, off, align_max = [], 0, 1
+    union = None  # the members of the open union, (size, align, name)
     for line in body.splitlines():
         line = line.strip()
         if not line:
             continue
-        mm = re.match(r"__bpf_md_ptr\([^,]+,\s*(\w+)\);", line)
-        if mm:
-            size, align, fname = 8, 8, mm.group(1)
-        else:
-            mm = re.match(r"(__(?:u|s|be)(?:8|16|32|64))\s+(\w+)?(?:\[(\d+)\])?\s*(?::\s*(\d+))?;", line)
-            if not mm:
-                raise SystemExit(f"{name}: cannot lay out `{line}`")
-            base = SIZES[mm.group(1)]
-            fname = mm.group(2) or ""
-            if mm.group(4):
-                if fname:
-                    raise SystemExit(f"{name}: a named bit-field `{line}`")
-                # an unnamed bit-field: padding of its bits, unaligned
-                size, align = (int(mm.group(4)) + 7) // 8, 1
-            else:
-                size = base * (int(mm.group(3)) if mm.group(3) else 1)
-                align = base
+        if line == "union {":
+            union = []
+            continue
+        if line == "};" and union is not None:
+            size = max(sz for sz, _, _ in union)
+            align = max(al for _, al, _ in union)
+            off = (off + align - 1) // align * align
+            for sz, _, fname in union:
+                fields.append({"name": fname, "offset": off, "size": sz})
+            off += size
+            align_max = max(align_max, align)
+            union = None
+            continue
+        size, align, fname = layout_member(name, line)
+        if union is not None:
+            union.append((size, align, fname))
+            continue
         off = (off + align - 1) // align * align
         fields.append({"name": fname, "offset": off, "size": size})
         off += size
@@ -380,6 +428,10 @@ def parse_values(tree, bpf_h):
     values += parse_enum(bpf_h, "xdp_action")
     # the attach types, which the sections name and the loader passes
     values += parse_enum(bpf_h, "bpf_attach_type")
+    # the socket verdicts, the sock_ops events, and the redirect flag
+    values += parse_enum(bpf_h, "sk_action")
+    values += parse_anon_enum(bpf_h, "BPF_SOCK_OPS_VOID")
+    values += parse_anon_enum(bpf_h, "BPF_F_INGRESS")
     values += parse_defines(tree.show("include/uapi/linux/pkt_cls.h"), r"TC_ACT_\w+")
     in_h = tree.show("include/uapi/linux/in.h")
     for m in re.finditer(r"^\s*(IPPROTO_\w+)\s*=\s*(\d+)", in_h, re.M):

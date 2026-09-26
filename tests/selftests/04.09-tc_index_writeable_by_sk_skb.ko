@@ -1,0 +1,8 @@
+// selftest: verifier/ctx_skb.c check skb->tc_index is writeable by SK_SKB (T3113; T3114 priority; rule 04.09, master fe2ec83)
+// The two fields an sk_skb program may write. `mark`, writable in a
+// cgroup skb program, is hidden here (04.08).
+program p : sk_skb_stream_verdict {
+  ctx.tc_index = 0
+  ctx.priority = 0
+  return PASS
+}

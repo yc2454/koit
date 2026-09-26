@@ -1,0 +1,8 @@
+// expect: has no field `tc_classid`
+// selftest: verifier/ctx_skb.c invalid access of tc_classid for SK_SKB (T3110, rule 04.08, master fe2ec83)
+// `tc_classid` belongs to the tc kinds; it is not a field of the
+// sk_skb context.
+program p : sk_skb_stream_verdict {
+  let c = ctx.tc_classid
+  return PASS
+}

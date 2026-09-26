@@ -1,0 +1,13 @@
+// expect: is not a socket map
+// selftest: none; the rule's trigger (rule 08.12, master fe2ec83): a socket helper given a map of another type; the tests (T2332 sk_storage lookup, T2333 xskmap, T2338 to T2340 sk_select_reuseport) are on maps and kinds outside this wave
+// "cannot pass map_type into func": the redirect helpers accept a
+// sockmap or a sockhash and nothing else. In koit the map pointer is
+// a parameter of the declaration, typed by map kind, so a `hash` map
+// there is a type error on the map pointer.
+type Key = { ip: be32, port: u32 }
+map tab : hash[16] of Key -> u32
+
+program p : sk_msg {
+  let key = { ip: ctx.remote_ip4, port: ctx.remote_port }
+  return msg_redirect(tab, key, 0)
+}

@@ -1,0 +1,9 @@
+// expect: has no field `mark`
+// selftest: verifier/ctx_skb.c invalid access of skb->mark for SK_SKB (T3111; T3112 the store, rule 04.09; master fe2ec83)
+// `mark` is the one field of the shared prefix that sk_skb hides, for
+// reading and so for writing: the store of 04.09 fails at the same
+// missing field.
+program p : sk_skb_stream_verdict {
+  let m = ctx.mark
+  return PASS
+}

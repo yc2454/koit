@@ -216,6 +216,8 @@ def MapType.print : MapType → String
     "hash[" ++ n.print ++ "] of " ++ k.print ++ " -> " ++ v.print
   | .ringbuf _ n => "ringbuf[" ++ n.print ++ "]"
   | .progArray _ n k => "prog_array[" ++ n.print ++ "] of " ++ k
+  | .sockmap _ n => "sockmap[" ++ n.print ++ "]"
+  | .sockhash _ n k => "sockhash[" ++ n.print ++ "] of " ++ k.print
 
 def Region.print : Region → String
   | .pkt _ none => "pkt"

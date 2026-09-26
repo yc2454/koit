@@ -70,12 +70,24 @@ def entryFits (params : Option (List Param)) : AbiArg → ArgShape → Bool
   | .argSize _, s => s == .size
   | .const _, s => s == .scalar || s == .size
   | .fmt, s => s == .ptr
+  | .argPtr i, s =>
+    match params with
+    | none => s == .ptr
+    | some ps =>
+      match ps[i]? with
+      | some p => s == .ptr && (scalarTy p.ty || p.keyOf.isSome)
+      | none => false
   | .arg i, s =>
     match params with
     | none => s != .ctx && s != .size
     | some ps =>
       match ps[i]? with
-      | some p => if scalarTy p.ty then s == .scalar else s == .ptr || s == .map
+      | some p =>
+        -- a map pointer is the map; a socket map's key is a scalar index or
+        -- a place by the map kind, which the checker fixes per call
+        if !p.mapPtr.isEmpty then s == .map
+        else if p.keyOf.isSome then s == .scalar || s == .ptr
+        else if scalarTy p.ty then s == .scalar else s == .ptr || s == .map
       | none => false
 
 /-- The disagreements between a layout and the kernel's prototype. -/
@@ -230,6 +242,7 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
     let mut avail : List String := []
     let mut gpl := false
     let mut implBy : List (String × Impl) := []
+    let mut implByMap : List (String × Impl) := []
     let mut reasons : List String := []
     let mut kernelName := cs.note
     for kind in wanted do
@@ -244,60 +257,83 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
           else .inline
         | l, _ => l
       let pt := progTypeOf kind
-      match link with
-      | .inline => avail := avail ++ [kind]
-      | .kfunc name abi =>
-        kernelName := name
-        match k.kfunc? name with
-        | none => reasons := reasons ++ [s!"{k.tag} has no kfunc {name}"]
-        | some kf =>
-          if !(k.kfuncsFor pt).any (·.name == name) then
-            reasons := reasons ++ [s!"{name} is not registered for {kind} on {k.tag}"]
-          else
-            if kf.ret != "" && abi.length != kf.args.length then
-              problems := problems ++ problem
-                s!"`{cs.name}` in {kind}: the layout has {abi.length} arguments; {name} takes {kf.args.length}"
-            -- the clauses the kernel marks with a flag: a required RCU
-            -- section on every tag, lock safety only where the flag
-            -- exists
-            let rcu := kf.flags.contains "KF_RCU_PROTECTED"
-            let needsRcu := cs.requires.any (·.name == "rcu")
-            if rcu && !needsRcu then
-              problems := problems ++ problem
-                s!"`{cs.name}`: {k.tag} marks {name} KF_RCU_PROTECTED, but the declaration does not require `rcu`"
-            if needsRcu && !rcu then
-              problems := problems ++ problem
-                s!"`{cs.name}`: the declaration requires `rcu`, but {k.tag} does not mark {name} KF_RCU_PROTECTED"
-            if k.hasFlag "KF_SPINLOCK_SAFE" then
-              let safe := kf.flags.contains "KF_SPINLOCK_SAFE"
-              if safe != cs.lockSafe then
+      -- the link of the kind, and one per map kind for a declaration
+      -- resolved by its map pointer; every one must resolve for the kind
+      -- to be available
+      let links : List (Option String × Link) :=
+        (if cs.linkByMapKind.isEmpty then [(none, link)] else []) ++
+        cs.linkByMapKind.map fun (mkind, l) => (some mkind, l)
+      let mut ok := true
+      let mut impls : List (Option String × Impl) := []
+      for (mkind, link) in links do
+        let what := match mkind with
+          | some mkind => s!"`{cs.name}` through a {mkind} in {kind}"
+          | none => s!"`{cs.name}` in {kind}"
+        match link with
+        | .inline => pure ()
+        | .kfunc name abi =>
+          kernelName := name
+          match k.kfunc? name with
+          | none => reasons := reasons ++ [s!"{k.tag} has no kfunc {name}"]; ok := false
+          | some kf =>
+            if !(k.kfuncsFor pt).any (·.name == name) then
+              reasons := reasons ++ [s!"{name} is not registered for {kind} on {k.tag}"]
+              ok := false
+            else
+              if kf.ret != "" && abi.length != kf.args.length then
                 problems := problems ++ problem
-                  s!"`{cs.name}`: {k.tag} {if safe then "marks" else "does not mark"} {name} KF_SPINLOCK_SAFE, but the declaration {if cs.lockSafe then "is" else "is not"} lock-safe"
-            avail := avail ++ [kind]
-            implBy := implBy ++ [(kind, .kfunc name abi)]
-      | .helper name abi =>
-        kernelName := "bpf_" ++ name
-        match k.helper? name with
-        | none => reasons := reasons ++ [s!"{k.tag} has no helper bpf_{name}"]
-        | some h =>
-          match k.protoFor pt name with
-          | none =>
-            -- the helper exists, so a claim of availability is koit's error
-            problems := problems ++ problem
-              s!"`{cs.name}`: bpf_{name} is not available to {kind} ({pt}) on {k.tag}"
-          | some proto =>
-            let variadic := h.args.any (·.1 == "...")
-            problems := problems ++ checkLayout s!"`{cs.name}` in {kind}" params abi proto variadic
-            gpl := gpl || proto.gplOnly
-            let changes := k.changesPkt.contains name
-            if changes && !hasResize cs.effects then
+                  s!"{what}: the layout has {abi.length} arguments; {name} takes {kf.args.length}"
+              -- the clauses the kernel marks with a flag: a required RCU
+              -- section on every tag, lock safety only where the flag
+              -- exists
+              let rcu := kf.flags.contains "KF_RCU_PROTECTED"
+              let needsRcu := cs.requires.any (·.name == "rcu")
+              if rcu && !needsRcu then
+                problems := problems ++ problem
+                  s!"`{cs.name}`: {k.tag} marks {name} KF_RCU_PROTECTED, but the declaration does not require `rcu`"
+              if needsRcu && !rcu then
+                problems := problems ++ problem
+                  s!"`{cs.name}`: the declaration requires `rcu`, but {k.tag} does not mark {name} KF_RCU_PROTECTED"
+              if k.hasFlag "KF_SPINLOCK_SAFE" then
+                let safe := kf.flags.contains "KF_SPINLOCK_SAFE"
+                if safe != cs.lockSafe then
+                  problems := problems ++ problem
+                    s!"`{cs.name}`: {k.tag} {if safe then "marks" else "does not mark"} {name} KF_SPINLOCK_SAFE, but the declaration {if cs.lockSafe then "is" else "is not"} lock-safe"
+              impls := impls ++ [(mkind, .kfunc name abi)]
+        | .helper name abi =>
+          kernelName := match mkind with
+            | some mkind => (if cs.linkByMapKind.head?.any (·.1 == mkind) then "" else kernelName ++ ", ") ++
+                s!"bpf_{name} through a {mkind}"
+            | none => "bpf_" ++ name
+          match k.helper? name with
+          | none => reasons := reasons ++ [s!"{k.tag} has no helper bpf_{name}"]; ok := false
+          | some h =>
+            match k.protoFor pt name with
+            | none =>
+              -- the helper exists, so a claim of availability is koit's error
               problems := problems ++ problem
-                s!"`{cs.name}`: {k.tag} lists bpf_{name} as changing the packet, but the declaration has no `resize` effect"
-            if !changes && hasResize cs.effects then
-              problems := problems ++ problem
-                s!"`{cs.name}`: the declaration has the `resize` effect, but {k.tag} does not list bpf_{name} as changing the packet"
-            avail := avail ++ [kind]
-            implBy := implBy ++ [(kind, .helper h.id abi)]
+                s!"`{cs.name}`: bpf_{name} is not available to {kind} ({pt}) on {k.tag}"
+              ok := false
+            | some proto =>
+              let variadic := h.args.any (·.1 == "...")
+              problems := problems ++ checkLayout what params abi proto variadic
+              gpl := gpl || proto.gplOnly
+              let changes := k.changesPkt.contains name
+              if changes && !hasResize cs.effects then
+                problems := problems ++ problem
+                  s!"`{cs.name}`: {k.tag} lists bpf_{name} as changing the packet, but the declaration has no `resize` effect"
+              if !changes && hasResize cs.effects then
+                problems := problems ++ problem
+                  s!"`{cs.name}`: the declaration has the `resize` effect, but {k.tag} does not list bpf_{name} as changing the packet"
+              impls := impls ++ [(mkind, .helper h.id abi)]
+      if ok then
+        avail := avail ++ [kind]
+        for (mkind, impl) in impls do
+          match mkind with
+          | none => implBy := implBy ++ [(kind, impl)]
+          | some mkind =>
+            -- one implementation per map kind, the same in every kind
+            unless implByMap.any (·.1 == mkind) do implByMap := implByMap ++ [(mkind, impl)]
     if avail.isEmpty then
       missing := missing ++ [(cs.name, "; ".intercalate reasons.eraseDups)]
     else
@@ -307,12 +343,15 @@ def join (spec : Spec) (k : Kernel.Side) (builtins : List (String × List AbiArg
                            gplOnly := gpl, kernel := kernelName,
                            lockSafe := cs.lockSafe, requires := cs.requires,
                            derivedFrom := cs.derivedFrom,
+                           -- a declaration resolved by map kind is never
+                           -- inline: its default is the first kind's
                            impl := match cs.sig with
                              | .builtin => .inline
-                             | .fn .. => ((implBy.head?).map (·.2)).getD .inline,
+                             | .fn .. => (((implBy ++ implByMap).head?).map (·.2)).getD .inline,
                            implByKind := match cs.sig with
                              | .builtin => []
-                             | .fn .. => implBy }]
+                             | .fn .. => implBy,
+                           implByMapKind := implByMap }]
 
   -- the machine's builtins, in every kind
   for (name, abi) in builtins do

@@ -917,7 +917,9 @@ def callEffects (env : Env) (K : Ctx) (f : String) (args : List Arg) :
     match f, args with
     | "copy", .place dst :: _ | "fill", .place dst :: _ =>
       R := R.union (← writesOf env K dst)
-    | "insert", .map _ m :: _ | "delete", .map _ m :: _ =>
+    | "insert", .map _ m :: _ | "delete", .map _ m :: _
+    | "sockmap_update", .map _ m :: _ | "sockhash_update", .map _ m :: _
+    | "sockmap_delete", .map _ m :: _ | "sockhash_delete", .map _ m :: _ =>
       R := R.add (.map m)
     | _, _ => pure ()
     return R

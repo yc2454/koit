@@ -60,7 +60,7 @@ def Program.print (pr : ρ → String) (pt : τ → String) (p : Program ρ τ) 
     (if p.regs.isEmpty then [] else
       [s!"  regs " ++ ", ".intercalate (p.regs.map fun (r, c) =>
         s!"{pr r} : {match c with
-          | .scalar => "scalar" | .location => "location" | .handle => "handle"}")])
+          | .scalar => "scalar" | .location => "location" | .mapPtr => "map pointer"}")])
   let labelsAt (i : Nat) : List String :=
     p.labels.filterMap fun (l, at_) => if at_ == i then some s!"L{l}:" else none
   let body := (List.range p.code.size).flatMap fun i =>

@@ -87,7 +87,12 @@ def initState (env : Env) (decl : KindDecl) (packet : ByteArray)
   { env, kind := decl, fuel,
     machine := { maps, packet },
     ctx := decl.ctx.map fun f =>
-      (f.name, Val.mkInt false 32 ((ctx.lookup f.name).getD 0)) }
+      -- each field at its declared type, a byte-order field as a pattern
+      let v := (ctx.lookup f.name).getD 0
+      (f.name, match f.ty with
+        | .be _ w => Val.be w (v % 2 ^ w)
+        | .int _ s w => Val.mkInt s w v
+        | _ => Val.mkInt false 32 v) }
 
 /-- The LIR state a Core state lowers to: the same shared state,
 context, and fuel, and an empty frame. -/

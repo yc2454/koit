@@ -186,7 +186,7 @@ def loadAt (X : Env ρ τ) (m : State ρ) (base : Val) (off : Int) (w : Nat) : S
   | v => throw (.noRegion v)
 
 /-- A store of `v` as `w` bits through `base + off`: a location or a
-handle only into an aligned frame slot, a scalar into any writable
+map pointer only into an aligned frame slot, a scalar into any writable
 declaration or region. -/
 def storeAt (X : Env ρ τ) (m : State ρ) (base : Val) (off : Int) (w : Nat) (v : Val) :
     StepM (State ρ) := do
@@ -359,7 +359,7 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
     | some obj => pure obj
     | none => throw (.badArgument name s!"{v.print} is not a lock's field or a kernel object")
   match b, args with
-  | .tail m', [.handle mn, idx] =>
+  | .tail m', [.mapPtr mn, idx] =>
     -- taken, the machine records the entry and the run stops here;
     -- not taken, nothing happens
     unless mn == m' do throw (.badArgument name s!"`tail` through `{mn}`, declared for `{m'}`")
@@ -368,27 +368,27 @@ def callBuiltin (X : Env ρ τ) (m : State ρ) (b : Builtin) (args : List Val) :
       | v => throw (.badArgument name s!"`tail` takes an index, not {v.print}")
     let (_, st') ← machineOp st (Machine.tailCall mn i)
     return (none, st')
-  | .lookup, [.handle mn, key] =>
+  | .lookup, [.mapPtr mn, key] =>
     let some ms := st.map? mn | throw (.malformed s!"unknown map `{mn}`")
     let kb ← readBytes X m key (keySize ms)
     let (r, st') ← machineOp st (Machine.lookup mn kb)
     return (some (match r with
       | some r => .loc (.shared r) 0 tok
       | none => .scalar 0), st')
-  | .update, [.handle mn, key, val] =>
+  | .update, [.mapPtr mn, key, val] =>
     let some ms := st.map? mn | throw (.malformed s!"unknown map `{mn}`")
     if ms.decl.access == .ro then throw (.readOnlyMap mn name)
     let kb ← readBytes X m key ms.keySize
     let vb ← readBytes X m val ms.valueSize
     let (rc, st') ← machineOp st (Machine.update mn kb vb)
     return (some (.scalar (toNatMod rc 64)), st')
-  | .delete, [.handle mn, key] =>
+  | .delete, [.mapPtr mn, key] =>
     let some ms := st.map? mn | throw (.malformed s!"unknown map `{mn}`")
     if ms.decl.access == .ro then throw (.readOnlyMap mn name)
     let kb ← readBytes X m key ms.keySize
     let (rc, st') ← machineOp st (Machine.delete mn kb)
     return (some (.scalar (toNatMod rc 64)), st')
-  | .reserve n, [.handle mn] =>
+  | .reserve n, [.mapPtr mn] =>
     let decl ← resourceDecl X ⟨"ringbuf"⟩
     let (r, st') ← machineOp st (Machine.reserve decl mn n)
     return (some (match r with
@@ -444,15 +444,25 @@ machine, which appends the trace event and pushes or pops the held
 stack per the declaration; and the answer as `r0`, a location for an object
 handed out, the 64-bit pattern otherwise, the failure signal by the
 declaration's result type. -/
-def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args : List Val) :
-    StepM (Option Val × Machine.State) := do
+def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args : List Val)
+    (byPtr : List Nat := []) : StepM (Option Val × Machine.State) := do
   let some decl := X.pre.call? name | throw (.malformed s!"unknown kernel function `{name}`")
   let .fn params ret := decl.sig | throw (.malformed s!"`{name}` is a builtin")
   unless args.length == params.length do
     throw (.malformed s!"`{name}` takes {params.length} arguments")
   let st := m.machine
+  -- the key parameters of a declaration over a socket map take the
+  -- key of the map passed
+  let mk := args.findSome? fun
+    | .mapPtr h => (st.maps.lookup h).map (·.decl.kind)
+    | _ => none
+  let params := Core.Param.resolveKeys params mk
   let mut vs : List Machine.Val := []
-  for (p, v) in params.zip args do
+  for ((p, v), i) in (params.zip args).zipIdx do
+    if !p.mapPtr.isEmpty then
+      match v with
+      | .mapPtr h => vs := vs ++ [.map h]; continue
+      | _ => throw (.badArgument name s!"`{p.name}` takes a socket map, not {v.print}")
     match p.ty with
     | .own .. =>
       match v with
@@ -462,10 +472,14 @@ def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args
       let some n := X.sizeOf t | throw (.malformed s!"no layout for `{t.print}`")
       vs := vs ++ [.bytes (← readBytes X m v n)]
     | t =>
+      let (s, w) := scalarType t
       match v with
-      | .scalar x =>
-        let (s, w) := scalarType t
-        vs := vs ++ [.scalar (wrap s w x)]
+      | .scalar x => vs := vs ++ [.scalar (wrap s w x)]
+      -- a scalar the layout passes through a pointer is read back
+      | .loc .. =>
+        unless byPtr.contains i do
+          throw (.badArgument name s!"`{p.name}` takes a scalar, not {v.print}")
+        vs := vs ++ [.scalar (wrap s w (ofLe (← readBytes X m v (w / 8))))]
       | _ => throw (.badArgument name s!"`{p.name}` takes a scalar, not {v.print}")
   let releases := Machine.releasesOf X.pre decl
   if let some h := Machine.forbidsCall st releases then
@@ -483,6 +497,7 @@ def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args
       | some (.scalar x) => pure (Val.scalar (toNatMod x 64))
       | some (.object id) => pure (Val.loc (.kernel id) 0 st'.layout)
       | some (.bytes _) => throw (.malformed s!"`{name}` answers with bytes")
+      | some (.map _) => throw (.malformed s!"`{name}` answers with a map")
     return (some r0, st')
   | .failed n =>
     return (some (if yieldsLocation decl then .scalar 0 else .scalar (toNatMod n 64)), st')
@@ -491,7 +506,7 @@ def callKernel (X : Env ρ τ) (K : Kernel) (m : State ρ) (name : String) (args
 explicit convention. -/
 def arity (X : Env ρ τ) : Callee → StepM Nat
   | .builtin b => pure b.arity
-  | .kernel name =>
+  | .kernel name _ =>
     match X.pre.call? name with
     | some { sig := .fn params _, .. } => pure params.length
     | _ => throw (.malformed s!"unknown kernel function `{name}`")
@@ -501,10 +516,10 @@ convention reads: a builtin's own, a kernel declaration's in the kind, and
 for an inline declaration koit's arguments in order. -/
 def layout (X : Env ρ τ) : Callee → StepM (List Interface.AbiArg)
   | .builtin b => pure b.abi
-  | .kernel name =>
+  | .kernel name mk =>
     match X.pre.call? name with
     | some decl =>
-      match decl.implIn X.kind.name, decl.sig with
+      match decl.implIn X.kind.name mk, decl.sig with
       | .inline, .fn params _ => pure ((List.range params.length).map .arg)
       | impl, _ => pure impl.abi
     | none => throw (.malformed s!"unknown kernel function `{name}`")
@@ -519,7 +534,7 @@ def argsByLayout (X : Env ρ τ) (m : State ρ) (h : Callee) (abi : List Interfa
     -- every position is read, as the verifier requires it initialized
     let v ← reg X m r
     match a with
-    | .arg i => found := found ++ [(i, v)]
+    | .arg i | .argPtr i => found := found ++ [(i, v)]
     -- the format's location is the call's first operand
     | .fmt => found := found ++ [(0, v)]
     | .ctx =>
@@ -539,6 +554,11 @@ result into the instruction's register or the convention's, and the
 convention's registers dead after. -/
 def call (X : Env ρ τ) (K : Kernel) (m : State ρ) (h : Callee) (args : List ρ) (dst : Option ρ) :
     StepM (State ρ) := do
+  -- the scalars the layout passes through a pointer, whose copies the
+  -- flattening made under either convention
+  let byPtr := (← layout X h).filterMap fun
+    | .argPtr i => some i
+    | _ => none
   let (vs, dstReg, dead) ← match X.conv.fixedCall with
     | some (regs, dead) => do
       let abi ← layout X h
@@ -548,7 +568,7 @@ def call (X : Env ρ τ) (K : Kernel) (m : State ρ) (h : Callee) (args : List �
     | none => pure (← args.mapM (reg X m), dst, [])
   let (res, st') ← match h with
     | .builtin b => callBuiltin X m b vs
-    | .kernel name => callKernel X K m name vs
+    | .kernel name _ => callKernel X K m name vs byPtr
   let m := { m with machine := st' }
   let m := m.clear dead
   match dstReg, res with
@@ -639,7 +659,7 @@ def step (X : Env ρ τ) (K : Kernel) (m : State ρ) : StepM (State ρ) := do
     return next (m.set d (.loc .frame o.base m.frameId))
   | .mapref d mn =>
     unless (m.machine.map? mn).isSome do throw (.malformed s!"unknown map `{mn}`")
-    return next (m.set d (.handle mn))
+    return next (m.set d (.mapPtr mn))
   | .mapval d mn k =>
     match m.machine.map? mn with
     | some ms =>

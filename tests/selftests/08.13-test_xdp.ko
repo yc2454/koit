@@ -1,0 +1,13 @@
+// expect: is not available in an `xdp` program
+// selftest: progs/verifier_sockmap_mutate.c test_xdp (T2411; T2401 test_flow_dissector_update, T2404 test_raw_tp_update, written as xdp; rule 08.13, master fe2ec83)
+// The update side from a kind the kernel refuses. The C tests look a
+// socket up in the map and put it back; koit's update declarations
+// insert the context's own socket and exist in `sock_ops` only, so
+// the call is not available here, and no socket-yielding lookup
+// exists in this wave.
+map socks : sockmap[1]
+
+program p : xdp {
+  sockmap_update(socks, 0, BPF_ANY)?
+  pass
+}

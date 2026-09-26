@@ -215,7 +215,7 @@ private def v (n : Nat) : VReg := .v n
    .mov .w64 .ret (.imm 7), .exit]
   [(1, 10), (2, 12)]
   [{ name := "k", size := 8, base := -8 }, { name := "val", size := 8, base := -16 }]) == .ok 99
--- a handle in arithmetic is refused
+-- a map pointer in arithmetic is refused
 #guard (verdictB (birEnv
   [.mapref (v 1) "table", .alu .add .w64 (v 1) (.imm 1), .exit])).isOk == false
 

@@ -44,6 +44,15 @@ def field (name : String) (ty : Ty) : Field := .mk noSpan name ty none
 def param (name : String) (ty : Ty) (pred : Option Expr := none) : Param :=
   { span := noSpan, name, ty, pred }
 
+/-- A parameter taking the map pointer of a socket map of one of the kinds. -/
+def mapPtrParam (name : String) (kinds : List String) : Param :=
+  { span := noSpan, name, ty := .named noSpan (" | ".intercalate kinds), pred := none,
+    mapPtr := kinds }
+
+/-- A parameter taking the key of the socket map parameter `m`. -/
+def keyParam (name m : String) : Param :=
+  { span := noSpan, name, ty := .named noSpan "key", pred := none, keyOf := some m }
+
 /-! ### The program kinds -/
 
 /-- What a program returns on a failure of a kind it has no handler
@@ -124,6 +133,10 @@ the byte size of the `i`-th argument's place, or the format of
 `printk`. -/
 inductive AbiArg where
   | arg (i : Nat)
+  /-- The address of a copy of the `i`-th argument, a scalar the
+  kernel reads through a pointer, as a sockmap's index reaches the
+  map-key argument of its helpers. -/
+  | argPtr (i : Nat)
   | ctx
   | const (k : Int)
   | argSize (i : Nat)
@@ -178,6 +191,11 @@ structure CallDecl where
   /-- The implementation in a kind where it differs from `impl`, as
   the resizes' helpers do between `xdp` and `tc`. -/
   implByKind : List (String × Impl) := []
+  /-- The implementation by the map kind of the map-pointer argument, for
+  a declaration over both socket map kinds: `msg_redirect` reaches
+  `bpf_msg_redirect_map` through a sockmap and `bpf_msg_redirect_hash`
+  through a sockhash. -/
+  implByMapKind : List (String × Impl) := []
   deriving Repr, Inhabited
 
 def callDecl (name : String) (sig : Sig) (effects : List Effect)
@@ -187,9 +205,19 @@ def callDecl (name : String) (sig : Sig) (effects : List Effect)
     (implByKind : List (String × Impl) := []) : CallDecl :=
   { name, sig, effects, fails, acquires, kinds, gplOnly, kernel, impl, implByKind }
 
-/-- The implementation of a declaration in a kind. -/
-def CallDecl.implIn (decl : CallDecl) (kind : String) : Impl :=
-  (decl.implByKind.lookup kind).getD decl.impl
+/-- The implementation of a declaration in a kind, and through a
+socket map of the kind given, when the declaration resolves by one. -/
+def CallDecl.implIn (decl : CallDecl) (kind : String) (mapKind : Option String := none) : Impl :=
+  match mapKind.bind fun mk => decl.implByMapKind.lookup mk with
+  | some impl => impl
+  | none => (decl.implByKind.lookup kind).getD decl.impl
+
+/-- The position of the socket map pointer among the parameters, for
+a declaration that takes one. -/
+def CallDecl.mapPtrParam? (decl : CallDecl) : Option Nat :=
+  match decl.sig with
+  | .fn params _ => params.findIdx? fun p => !p.mapPtr.isEmpty
+  | .builtin => none
 
 /-- Whether the declaration is computed inline, with no kernel call. -/
 def CallDecl.isInline (decl : CallDecl) : Bool :=
@@ -466,6 +494,9 @@ structure CallSpec where
   note     : String := ""
   link     : Link := .inline
   linkByKind : List (String × Link) := []
+  /-- The kernel function by the map kind of the map-pointer argument,
+  `sockmap` or `sockhash`, for a declaration over both. -/
+  linkByMapKind : List (String × Link) := []
   /-- The two clauses the kernel marks with a flag where it has one:
   admitted under a spin lock, and the resources it requires held. -/
   lockSafe : Bool := false

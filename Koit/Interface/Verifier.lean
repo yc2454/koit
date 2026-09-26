@@ -10,7 +10,9 @@ checks every kind declaration of the koit side against these: each
 verdict value inside the range, each context field readable, each
 writable field admitted. A program type these tables do not cover is
 not checked, which is how the packet kinds, whose result the kernel
-leaves free, pass through. The tables hold for `v6.8` and `v7.0-rc1`
+leaves free, pass through; a covered type whose result the kernel
+leaves free, `sk_msg` and `sk_skb`, carries an unconstrained range
+and the table of its context alone. The tables hold for `v6.8` and `v7.0-rc1`
 alike; a tag that differs gets a table of its own.
 -/
 
@@ -80,10 +82,58 @@ private def sockAddrRange (attach : String) : Int × Int :=
           attach.endsWith "_GETSOCKNAME" then (1, 1)
   else (0, 1)
 
+/-- A result the kernel leaves free: `check_return_code` constrains
+none of the socket-map program types. -/
+private def unconstrained : Int × Int := (-(2 ^ 63), 2 ^ 63 - 1)
+
+/-- `struct bpf_sock_ops`: `sock_ops_is_valid_access` (net/core/filter.c)
+admits every field for reading, `bytes_received`, `bytes_acked`, `sk`,
+`skb_data`, `skb_data_end`, and `skb_hwtstamp` as 8-byte loads and the
+rest as 4-byte ones, and admits stores to `reply` and `sk_txhash`
+alone, which through the union also reaches `replylong`; the result
+range is [0, 1] (`return_retval_range`). -/
+private def sockOpsFields : List (String × Bool × Bool) :=
+  ["op", "args", "family", "remote_ip4", "local_ip4", "remote_ip6", "local_ip6",
+   "remote_port", "local_port", "is_fullsock", "snd_cwnd", "srtt_us",
+   "bpf_sock_ops_cb_flags", "state", "rtt_min", "snd_ssthresh", "rcv_nxt",
+   "snd_nxt", "snd_una", "mss_cache", "ecn_flags", "rate_delivered",
+   "rate_interval_us", "packets_out", "retrans_out", "total_retrans", "segs_in",
+   "data_segs_in", "segs_out", "data_segs_out", "lost_out", "sacked_out",
+   "bytes_received", "bytes_acked", "sk", "skb_data", "skb_data_end", "skb_len",
+   "skb_tcp_flags", "skb_hwtstamp"].map r ++
+  ["reply", "replylong", "sk_txhash"].map rw
+
+/-- `struct sk_msg_md`: `sk_msg_is_valid_access` (net/core/filter.c)
+refuses every store and admits the message's bounds, the socket, the
+addresses, the ports, and the size for reading. -/
+private def skMsgFields : List (String × Bool × Bool) :=
+  ["data", "data_end", "sk", "family", "remote_ip4", "local_ip4", "remote_ip6",
+   "local_ip6", "remote_port", "local_port", "size"].map r
+
+/-- `struct __sk_buff` in an sk_skb program: `sk_skb_is_valid_access`
+(net/core/filter.c) hides `tc_classid`, `data_meta`, `tstamp`,
+`wire_len`, `hwtstamp`, and `mark`, admits stores to `tc_index` and
+`priority` alone, and leaves the rest to `bpf_skb_is_valid_access`,
+which hides `flow_keys` and `tstamp_type` and admits the socket half
+of the struct. -/
+private def skSkbFields : List (String × Bool × Bool) :=
+  ["len", "pkt_type", "queue_mapping", "protocol", "vlan_present", "vlan_tci",
+   "vlan_proto", "ingress_ifindex", "ifindex", "cb", "hash", "napi_id", "data",
+   "data_end", "family", "remote_ip4", "local_ip4", "remote_ip6", "local_ip6",
+   "remote_port", "local_port", "gso_segs", "gso_size", "sk"].map r ++
+  ["tc_index", "priority"].map rw
+
 /-- The rules for a program type and attach type, when the tables
 cover it. -/
 def rules? (progType : String) (attach : Option String) : Option Rules :=
   match progType, attach with
+  | "BPF_PROG_TYPE_SOCK_OPS", some "BPF_CGROUP_SOCK_OPS" =>
+    some { range := (0, 1), fields := sockOpsFields }
+  | "BPF_PROG_TYPE_SK_MSG", some "BPF_SK_MSG_VERDICT" =>
+    some { range := unconstrained, fields := skMsgFields }
+  | "BPF_PROG_TYPE_SK_SKB", some "BPF_SK_SKB_STREAM_PARSER"
+  | "BPF_PROG_TYPE_SK_SKB", some "BPF_SK_SKB_STREAM_VERDICT" =>
+    some { range := unconstrained, fields := skSkbFields }
   | "BPF_PROG_TYPE_CGROUP_SKB", some "BPF_CGROUP_INET_INGRESS" =>
     some { range := (0, 1), fields := cgSkbFields }
   | "BPF_PROG_TYPE_CGROUP_SKB", some "BPF_CGROUP_INET_EGRESS" =>

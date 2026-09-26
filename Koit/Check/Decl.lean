@@ -170,10 +170,12 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
         slot types per their declarations"
     let _ ← env.layout v
   -- the access word applies to maps the program reads or writes as
-  -- values; a ring buffer is neither
+  -- values; a ring buffer is neither, and a socket map holds sockets
   if d.access != .rw then
     if let .ringbuf _ := d.kind then
       err d.span s!"`{d.name}` is a ring buffer, which has no access word"
+    if d.kind.isSocket then
+      err d.span s!"`{d.name}` holds sockets, not places, and has no access word"
   -- the initializer: one constant of the value type per entry of an
   -- array map, scalars in this draft
   unless d.init.isEmpty do
@@ -230,6 +232,14 @@ def checkMap (env : Env) (d : MapDecl) : M Unit := do
     let _ ← env.layout k
     value v
   | .ringbuf n => capacity n
+  | .sockmap n => capacity n
+  | .sockhash n k =>
+    capacity n
+    checkDataTy env k
+    if let some why ← env.notRepresentable k false then
+      err k.span s!"the key type of map `{d.name}` may not contain {why}: map \
+        keys and values are packet-representable"
+    let _ ← env.layout k
 
 /-- A function against its signature: the caps of its loops. -/
 def checkFn (env : Env) (f : Fn) : M (Caps × Effs) := do

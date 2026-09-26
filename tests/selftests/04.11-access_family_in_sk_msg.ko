@@ -1,0 +1,21 @@
+// selftest: progs/verifier_ctx_sk_msg.c access_family_in_sk_msg (T1360; T1361 remote_ip4, T1362 local_ip4, T1363 remote_port, T1364 local_port, T1367 size, rule 04.11; T1365 remote_ip6, T1366 local_ip6, filed under 04.08; master fe2ec83)
+// The read-only fields of an sk_msg context, each read at its own
+// width: the addresses as byte-order integers, the IPv6 ones by
+// element, the ports and the message size as host integers. The
+// socket field `sk` is not declared in this wave.
+program p : sk_msg {
+  let fam = ctx.family
+  let rip = ctx.remote_ip4
+  let lip = ctx.local_ip4
+  let r6 = ctx.remote_ip6[0]
+  let r7 = ctx.remote_ip6[3]
+  let l6 = ctx.local_ip6[0]
+  let l7 = ctx.local_ip6[3]
+  let rp = ctx.remote_port
+  let lp = ctx.local_port
+  let n = ctx.size
+  if fam == 2 && rp == lp && n == 0 && rip == lip && r6 == l6 && r7 == l7 {
+    return DROP
+  }
+  return PASS
+}

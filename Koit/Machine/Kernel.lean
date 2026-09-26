@@ -1,4 +1,4 @@
-import Koit.Machine.State
+import Koit.Machine.Maps
 
 /-!
 The kernel parameter: what each kernel function the interface declares
@@ -75,6 +75,36 @@ def KernelOk (K : Kernel) : Prop :=
 
 /-! ### The synthetic kernel -/
 
+/-- A socket map's key as bytes: a sockmap's index as four bytes, a
+sockhash's key as the bytes the kernel received. -/
+def keyBytes : Val → List UInt8
+  | .bytes bs => bs
+  | v => leBytes (toNatMod v.toInt 32) 4
+
+/-- The socket maps in the synthetic kernel: an update inserts the
+context's socket, a fresh kernel object, under the key; a delete
+removes the entry; a redirect passes when the key has a socket and
+drops otherwise. -/
+def socketMaps (kind : KindDecl) (name : String) (args : List Val) (st : State) :
+    Option HelperOut :=
+  let ofRc : Except String (Int × State) → HelperOut
+    | .ok (0, st') => .ok none st'
+    | .ok (rc, st') => .failed rc st'
+    | .error e => .err e
+  match name, args with
+  | "sockmap_update", [.map m, key, _] | "sockhash_update", [.map m, key, _] =>
+    let (id, st) := st.fresh
+    let st := st.setRegion (.kernel id) ByteArray.empty
+    some (ofRc ((update m (keyBytes key) (leBytes id 4)).exec st))
+  | "sockmap_delete", [.map m, key] | "sockhash_delete", [.map m, key] =>
+    some (ofRc ((delete m (keyBytes key)).exec st))
+  | "msg_redirect", [.map m, key, _] | "sk_redirect", [.map m, key, _] =>
+    let found := match st.maps.lookup m with
+      | some ms => ms.entries.any (·.2.1 == keyBytes key)
+      | none => false
+    some (.ok (some (.scalar ((kind.verdicts.lookup (if found then "PASS" else "DROP")).getD 0))) st)
+  | _, _ => none
+
 /-- One behavior each helper of the stage-1 interface may have: a redirect
 succeeds with the kind's `REDIRECT`; the resizes grow with zero bytes
 and fail past the packet's end; a socket lookup finds a socket, and
@@ -83,6 +113,9 @@ clock advances a microsecond per call. The inline declarations never reach a
 kernel. -/
 def synthetic : Kernel where
   helper kind decl args st :=
+    match socketMaps kind decl.name args st with
+    | some out => out
+    | none =>
     let ints := args.map Val.toInt
     match decl.name, ints with
     | "redirect", _ =>
