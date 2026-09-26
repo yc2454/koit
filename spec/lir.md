@@ -86,7 +86,7 @@ types         T ::= int(s,w) | ptr
 literals      k ::= an integer constant
 
 expressions   e ::= k(w) | x | e op(s,w) e | cast(s,w -> s',w') e
-                  | bswap(w) e | load(w) a | ctx f | a | mapptr m
+                  | bswap(w) e | load(w) a | ctx f | a
 addresses     a ::= x | a + k | a + e * k
                   | pkt_data | pkt_end | mapval m + k
 conditions    c ::= e cmp(s,w) e
@@ -104,7 +104,7 @@ statements    s ::= skip | s ; s
                   | [x =] call f(arg, ...) [unwind s] [absent s]
                   | [x =] b(arg, ...)              a builtin
                   | [x =] h(arg, ...)              a kernel function
-arguments   arg ::= e
+arguments   arg ::= e | mapptr m                  a socket map, for h
 builtins      b ::= lookup m | update m | delete m
                   | reserve m n | submit | discard
                   | lock | unlock | enter R | leave R
@@ -139,10 +139,12 @@ Reading notes.
 - `mapval m + k` is the location `k` bytes into the value of a map
   that pass A marked for direct access: an `array[1]` map. Every
   other map is reached through `lookup`.
-- `mapptr m` is the socket map `m` itself, a `ptr` the machine never
-  dereferences: the argument of the kernel calls that take a socket
-  map, which the flattening turns into `mapref` and the kernel
-  receives as the map (decision 71).
+- `mapptr m` names the socket map `m` as an argument of a kernel
+  function, the one position it may stand in: it is not an expression
+  and evaluates to nothing, as Core's map argument does not; the
+  machine reads the name off the statement and hands the kernel the
+  map, and the flattening turns it into `mapref`, where the target
+  machine has the map as a register value (decision 71).
 - `frame x : n` allocates `n` bytes of zeroed stack, aligned to 8, and
   binds `x` to its location; `as S` names the source struct type, for
   the printer only.

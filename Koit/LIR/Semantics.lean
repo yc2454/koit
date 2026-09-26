@@ -54,7 +54,7 @@ def pattern (w : Nat) : Val → Option Nat
   | .int _ _ x _ => some (toNatMod x w)
   | .bool b => some (if b then 1 else 0)
   | .be _ x => some (toNatMod x w)
-  | .loc _ | .mapPtr _ => none
+  | .loc _ => none
 
 /-- A pattern read at a signedness and width. -/
 def ofPattern (s : Bool) (w : Nat) (n : Nat) : Int := wrap s w n
@@ -104,7 +104,7 @@ partial def evalExpr (st : State) : Expr → Res Val
     | some v => return v
     | none => throw s!"the context has no field `{f}`"
   | .addr a => do return .loc (← evalAddr st a)
-  | .mapPtr m => return .mapPtr m
+  | .mapPtr m => throw s!"the map `{m}` is an argument of a kernel statement, not a value"
 
 partial def evalAddr (st : State) : Addr → Res Loc
   | .var x =>
@@ -267,20 +267,22 @@ def execBuiltin (b : Builtin) (args : List Val) : M (Option Val) := do
 /-- The arguments of a kernel function as the kernel sees them: a
 scalar reduced to its parameter's type, a `ref` or `view` place as
 its bytes, an owned reference as its object. -/
-def fitArgs (params : List Core.Param) (args : List Val) : M (List Machine.Val) := do
-  -- the key parameters of a declaration over a socket map take the
-  -- key of the map passed
+def fitArgs (params : List Core.Param) (mapArg : Option String) (args : List Val) :
+    M (List Machine.Val) := do
+  -- a socket map is named by the statement, never a value: its name is
+  -- the kernel's map argument, and the key parameters take its key
   let st ← get
-  let mk := args.findSome? fun
-    | .mapPtr m => (st.maps.lookup m).map (·.decl.kind)
-    | _ => none
-  let params := Core.Param.resolveKeys params mk
+  let params := Core.Param.resolveKeys params
+    (mapArg.bind fun m => (st.maps.lookup m).map (·.decl.kind))
   let mut out : List Machine.Val := []
-  for (p, v) in params.zip args do
+  let mut rest := args
+  for p in params do
     if !p.mapPtr.isEmpty then
-      match v with
-      | .mapPtr m => out := out ++ [.map m]; continue
-      | _ => fail s!"`{p.name}` takes a socket map"
+      let some m := mapArg | fail s!"`{p.name}` takes a socket map"
+      out := out ++ [.map m]
+      continue
+    let v :: rest' := rest | fail s!"`{p.name}` has no argument"
+    rest := rest'
     match ← norm p.ty, v with
     | .own .., .loc l =>
       match l.region with
@@ -304,14 +306,15 @@ event, and pushes or pops the held stack per the declaration, and the answer
 as `r0` by the declaration's convention: a location for an owned or
 referenced result, the 64-bit signed return otherwise, which carries
 the failure signal of a scalar-result declaration. -/
-def execKernel (K : Kernel) (h : String) (args : List Val) : M Val := do
+def execKernel (K : Kernel) (h : String) (mapArg : Option String) (args : List Val) : M Val := do
   let st ← get
   let some decl := st.env.interface.call? h | fail s!"unknown kernel function `{h}`"
   let params ← match decl.sig with
     | .fn params _ => pure params
     | .builtin => fail s!"`{h}` is a builtin"
-  unless args.length == params.length do fail s!"`{h}` takes {params.length} arguments"
-  let vs ← fitArgs params args
+  let valued := params.filter (·.mapPtr.isEmpty)
+  unless args.length == valued.length do fail s!"`{h}` takes {valued.length} arguments"
+  let vs ← fitArgs params mapArg args
   match ← op (Machine.call st.env.interface K st.kind decl vs) with
   | .ok v =>
     match v with
@@ -372,6 +375,9 @@ def prim (f : M α) (st : State) : Except Abort (α × State) := f.exec st
 /-- The arguments of a call, evaluated left to right. -/
 inductive EvalArgs : State → List Expr → Res (List Val) → Prop
   | nil {st} : EvalArgs st [] (.ok [])
+  /-- A map named as an argument is not evaluated. -/
+  | mapPtr {st m rest r} :
+      EvalArgs st rest r → EvalArgs st (.mapPtr m :: rest) r
   | cons {st e rest v vs} :
       evalExpr st e = .ok v → EvalArgs st rest (.ok vs) →
       EvalArgs st (e :: rest) (.ok (v :: vs))
@@ -511,13 +517,13 @@ inductive ExecStmt (K : Kernel) (fns : Fns) : State → Stmt → Outcome → Sta
       ExecStmt K fns st (.builtin sp x b args) (.err m) st
   /-- (Kernel): the declaration's kernel function through `K`. -/
   | kernel {st sp x h args vs v st'} :
-      EvalArgs st args (.ok vs) → prim (execKernel K h vs) st = .ok (v, st') →
+      EvalArgs st args (.ok vs) → prim (execKernel K h (mapPtrArg? args) vs) st = .ok (v, st') →
       ExecStmt K fns st (.kernel sp x h args) .normal
         (match x with
          | some x => st'.bind x v
          | none => st')
   | kernelErr {st sp x h args vs m} :
-      EvalArgs st args (.ok vs) → prim (execKernel K h vs) st = .error (.err m) →
+      EvalArgs st args (.ok vs) → prim (execKernel K h (mapPtrArg? args) vs) st = .error (.err m) →
       ExecStmt K fns st (.kernel sp x h args) (.err m) st
   | argsErr {st s m} :
       (∃ args, stmtArgs s = some args ∧ EvalArgs st args (.error m)) →

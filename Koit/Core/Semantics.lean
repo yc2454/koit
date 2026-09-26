@@ -270,19 +270,10 @@ inductive EvalArgs (K : Kernel) : State → List Param → List Arg → Res (Lis
       EvalArgs K st ps (.place p :: rest) (.ok (v :: vs)) st2
   | placeAbort {st ps p a rest st1} :
       EvalPlace K st p (.error a) st1 → EvalArgs K st ps (.place p :: rest) (.error a) st1
-  /-- The map of a builtin is no argument; the map pointer of a socket map
-  is one, `mapptr m`, where the parameter takes a map pointer. -/
+  /-- A map is named, never evaluated: the builtins and the kernel
+  call read its name from the argument. -/
   | map {st ps s m rest r st1} :
-      (ps.head?.map fun p => !p.mapPtr.isEmpty) ≠ some true →
       EvalArgs K st ps.tail rest r st1 → EvalArgs K st ps (.map s m :: rest) r st1
-  | mapPtrOf {st ps s m rest vs st1} :
-      (ps.head?.map fun p => !p.mapPtr.isEmpty) = some true →
-      EvalArgs K st ps.tail rest (.ok vs) st1 →
-      EvalArgs K st ps (.map s m :: rest) (.ok (.mapPtr m :: vs)) st1
-  | mapPtrAbort {st ps s m rest a st1} :
-      (ps.head?.map fun p => !p.mapPtr.isEmpty) = some true →
-      EvalArgs K st ps.tail rest (.error a) st1 →
-      EvalArgs K st ps (.map s m :: rest) (.error a) st1
 
 /-- A call by name: a function of the unit, a builtin, or a kernel
 function through the kernel. -/
@@ -298,7 +289,7 @@ inductive Call (K : Kernel) : State → Span → String → List Arg → Res (Op
   | helper {st s f args decl params ret vs v st1 st2} :
       st.env.fn? f = none → st.env.interface.call? f = some decl → decl.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 →
-      prim (kernelCall K decl params ret vs) st1 = .ok (some v, st2) →
+      prim (kernelCall K decl params ret (Param.mapPtrArg? params args) vs) st1 = .ok (some v, st2) →
       Call K st s f args (.ok v) st2
   | helperArgsAbort {st s f args decl params ret a st1} :
       st.env.fn? f = none → st.env.interface.call? f = some decl → decl.sig = .fn params ret →
@@ -443,12 +434,12 @@ inductive ExecFall (K : Kernel) :
   | callOk {st s f args decl params ret vs v st1 st2} :
       st.env.interface.call? f = some decl → decl.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 →
-      prim (kernelCall K decl params ret vs) st1 = .ok (some v, st2) →
+      prim (kernelCall K decl params ret (Param.mapPtrArg? params args) vs) st1 = .ok (some v, st2) →
       ExecFall K st (.call s f args) (.ok (some (v.map bindingOf))) st2
   | callFailed {st s f args decl params ret vs st1 st2} :
       st.env.interface.call? f = some decl → decl.sig = .fn params ret →
       EvalArgs K st params args (.ok vs) st1 →
-      prim (kernelCall K decl params ret vs) st1 = .ok (none, st2) →
+      prim (kernelCall K decl params ret (Param.mapPtrArg? params args) vs) st1 = .ok (none, st2) →
       ExecFall K st (.call s f args) (.ok none) st2
   | callBuiltinOk {st s f args decl v st1} :
       st.env.interface.call? f = some decl → decl.sig = .builtin →

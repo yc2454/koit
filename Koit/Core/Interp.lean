@@ -208,10 +208,9 @@ partial def evalArgs (K : Kernel) (args : List Arg) (params : List Param := []) 
         if scalarRef (← get) r then vs := vs ++ [← loadPlace r]
         else vs := vs ++ [.loc l]
       | r => vs := vs ++ [← loadPlace r]
-    | .map _ m =>
-      -- the map pointer of a socket map is an argument; the map of a
-      -- builtin is not
-      if (params[i]?).any (!·.mapPtr.isEmpty) then vs := vs ++ [.mapPtr m]
+    -- a map is named, never evaluated: the builtins and the kernel
+    -- call read its name from the argument
+    | .map .. => pure ()
     i := i + 1
   return vs
 
@@ -231,7 +230,7 @@ partial def callAny (K : Kernel) (s : Span) (f : String) (args : List Arg) :
     | .fn params ret =>
       let params ← socketParams params args
       let vs ← evalArgs K args params
-      match ← kernelCall K decl params ret vs with
+      match ← kernelCall K decl params ret (Param.mapPtrArg? params args) vs with
       | some v => return v
       | none => fail s!"`{f}` failed with {(← get).errno} at a call the program did not mark"
   | none => fail s!"unknown function `{f}`"
@@ -385,7 +384,7 @@ partial def execFallible (K : Kernel) : Fallible → M (Option (Option Binding))
       | .fn params ret =>
         let params ← socketParams params args
         let vs ← evalArgs K args params
-        match ← kernelCall K decl params ret vs with
+        match ← kernelCall K decl params ret (Param.mapPtrArg? params args) vs with
         | some v => return some (v.map bindingOf)
         | none => return none
     | none => fail s!"unknown function `{f}`"

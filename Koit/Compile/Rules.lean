@@ -165,7 +165,7 @@ def verdictPattern : Val → Nat
   | .int _ w x _ => Machine.toNatMod x w
   | .be w x => Machine.toNatMod x w
   | .bool b => if b then 1 else 0
-  | .loc _ | .mapPtr _ => 0
+  | .loc _ => 0
 
 /-- The context values of an LIR state, as the machine loads them. -/
 def ctxValues (st : LIR.Sem.State) : List (String × Nat) :=

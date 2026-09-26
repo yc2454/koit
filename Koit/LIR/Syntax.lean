@@ -68,8 +68,10 @@ inductive Expr where
   | load (signed : Bool) (w : Nat) (a : Addr)
   | ctx (f : String)
   | addr (a : Addr)
-  /-- The map pointer of a socket map, an argument of the kernel calls
-  that take one; a `ptr` the machine never dereferences. -/
+  /-- A socket map named as an argument of a `kernel` statement, the
+  one position it may stand in: not an expression that evaluates,
+  since a map is never a value above the target machine, where it
+  becomes the `mapref` register value the helper receives. -/
   | mapPtr (m : String)
 
 /-- Addresses: a `ptr` local, a constant or a scaled index added to
@@ -147,6 +149,12 @@ inductive Stmt where
   /-- A kernel function, by the name of its declaration. -/
   | kernel (span : Span) (x : Option String) (h : String) (args : List Expr)
   deriving Repr, Inhabited
+
+/-- The socket map a kernel statement names among its arguments. -/
+def mapPtrArg? (args : List Expr) : Option String :=
+  args.findSome? fun
+    | .mapPtr m => some m
+    | _ => none
 
 def Stmt.span : Stmt → Span
   | .«let» s .. | .assign s .. | .store s .. | .ctxStore s .. | .frame s ..

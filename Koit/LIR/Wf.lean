@@ -104,7 +104,7 @@ partial def typeOf (K : WfCtx) (Γ : Γ) (expected : Option Ty) : Expr → W Ty
   | .addr a => do
     typeOfAddr K Γ a
     return .ptr
-  | .mapPtr _ => return .ptr
+  | .mapPtr m => wfErr s!"the map `{m}` is an argument of a kernel statement, not an expression"
 
 partial def typeOfAddr (K : WfCtx) (Γ : Γ) : Addr → W Unit
   | .var x =>
@@ -287,7 +287,9 @@ partial def wfStmt (K : WfCtx) (Γ : Γ) (s : Stmt) : W Koit.LIR.Γ := do
   | .kernel _ x h args =>
     let some decl := K.pre.call? h | wfErr s!"unknown kernel function `{h}`"
     for e in args do
-      let _ ← typeOf K Γ none e
+      match e with
+      | .mapPtr _ => pure ()
+      | e => let _ ← typeOf K Γ none e
     match x with
     | some x => return (x, rowResult decl) :: Γ
     | none => return Γ

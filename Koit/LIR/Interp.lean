@@ -30,9 +30,11 @@ inductive LOut where
 def heldEq (a b : List HeldRes) : Bool :=
   a.length == b.length && (a.zip b).all fun (h, h') => h.same h'
 
+/-- The arguments' values; a map named among them is not evaluated. -/
 def evalArgs (args : List Expr) : M (List Val) := do
   let st ← get
-  args.mapM fun e => liftRes (evalExpr st e)
+  (args.filter fun e => match e with | .mapPtr _ => false | _ => true).mapM
+    fun e => liftRes (evalExpr st e)
 
 def bindOpt (x : Option String) (v : Option Val) : M Unit := do
   match x, v with
@@ -110,7 +112,7 @@ partial def execStmt (K : Kernel) (fns : Fns) (s : Stmt) : M LOut := do
     return .normal
   | .kernel _ x h args =>
     let vs ← evalArgs args
-    let v ← execKernel K h vs
+    let v ← execKernel K h (mapPtrArg? args) vs
     bindOpt x (some v)
     return .normal
 

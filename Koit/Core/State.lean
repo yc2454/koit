@@ -86,9 +86,6 @@ inductive Val where
   | be (w : Nat) (v : Nat)
   | bool (b : Bool)
   | loc (l : Loc)
-  /-- The map pointer of a socket map, the argument of the calls that take
-  one; never bound to a name. -/
-  | mapPtr (m : String)
   deriving Repr, Inhabited
 
 namespace Val
@@ -109,21 +106,20 @@ def print : Val → String
     s!"be{w}(0x{String.ofList ((Nat.toDigits 16 n).map Char.toUpper)})"
   | .bool b => toString b
   | .loc l => s!"place at {repr l.region} + {l.off}"
-  | .mapPtr m => s!"map {m}"
 
 /-- The integer a value denotes, for comparisons and indexes. -/
 def toInt? : Val → Option Int
   | .int _ _ v _ => some v
   | .be _ v => some v
   | .bool b => some (if b then 1 else 0)
-  | .loc _ | .mapPtr _ => none
+  | .loc _ => none
 
 /-- Whether the value is true, for conditions. -/
 def truthy : Val → Bool
   | .bool b => b
   | .int _ _ v _ => v != 0
   | .be _ v => v != 0
-  | .loc _ | .mapPtr _ => true
+  | .loc _ => true
 
 /-- The value as the kernel and the trace see it: an integer, a
 byte-order value as its pattern, a boolean as 0 or 1, and an object
@@ -136,7 +132,6 @@ def observe : Val → Machine.Val
     match l.region with
     | .shared (.kernel id) => .object id
     | _ => .scalar 0
-  | .mapPtr m => .map m
 
 end Val
 
@@ -488,11 +483,6 @@ def siblingFrame (l : Loc) (fields : List Field) (f : String) (v : Val) :
 scalar reduced to the parameter's type, a `ref` or `view` place as
 its bytes, an owned reference as its object. -/
 def kernelArg (p : Param) (v : Val) : M Machine.Val := do
-  -- a socket map's map pointer is the map itself
-  if !p.mapPtr.isEmpty then
-    match v with
-    | .mapPtr m => return .map m
-    | _ => fail s!"`{p.name}` takes a socket map"
   match ← norm p.ty, v with
   | .own .., .loc l =>
     match l.region with
@@ -538,15 +528,22 @@ the kernel sees them, the call with its trace event and its effect
 on the held stack, and the result at the declaration's type; `none` on a
 failure, with `errno` set to its negative return. -/
 def kernelCall (K : Kernel) (decl : CallDecl) (params : List Param) (ret : Option Ty)
-    (args : List Val) : M (Option (Option Val)) := do
+    (mapArg : Option String) (args : List Val) : M (Option (Option Val)) := do
   let st ← get
-  -- the key parameters of a declaration over a socket map take the
-  -- key of the map passed
-  let mk := args.findSome? fun
-    | .mapPtr m => (st.maps.lookup m).map (·.decl.kind)
-    | _ => none
-  let params := Param.resolveKeys params mk
-  let vs ← (params.zip args).mapM fun (p, v) => kernelArg p v
+  -- a socket map is named by the call, never a value: its name is the
+  -- kernel's map argument, and the key parameters take its key
+  let params := Param.resolveKeys params
+    (mapArg.bind fun m => (st.maps.lookup m).map (·.decl.kind))
+  let mut vs : List Machine.Val := []
+  let mut rest := args
+  for p in params do
+    if !p.mapPtr.isEmpty then
+      let some m := mapArg | fail s!"`{p.name}` takes a socket map"
+      vs := vs ++ [.map m]
+    else
+      let v :: rest' := rest | fail s!"`{p.name}` has no argument"
+      vs := vs ++ [← kernelArg p v]
+      rest := rest'
   match ← op (Machine.call st.env.interface K st.kind decl vs) with
   | .ok v =>
     match v with
